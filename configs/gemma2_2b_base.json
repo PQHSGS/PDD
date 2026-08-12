@@ -1,0 +1,49 @@
+{
+  "name": "gemma2_2b_dolci",
+  "seed": 0,
+  "output_dir": "runs/gemma2_2b_dolci",
+  "checkpoint_dir": "checkpoints",
+  "use_checkpoint": true,
+  "model": {
+    "path": "google/gemma-2-2b",
+    "dtype": "bfloat16",
+    "device": "cuda"
+  },
+  "sae": {
+    "type": "auto",
+    "repo": "gemma-scope-2b-pt-res-canonical",
+    "sae_id": "layer_12/width_16k/canonical",
+    "layer": 12,
+    "d_in": 2048,
+    "d_sae": 16384,
+    "k": null,
+    "device": "cuda"
+  },
+  "data": {
+    "path": "allenai/Dolci-Instruct-DPO",
+    "split": "train",
+    "prompt_col": "prompt",
+    "chosen_col": "chosen",
+    "rejected_col": "rejected",
+    "max_samples": 500,
+    "batch_size": 8
+  },
+  "feature_conditioned": {
+    "tau": 0.01,
+    "silent_pct": 5.0,
+    "n_data_clusters": 512,
+    "min_feat_cluster_size": 10,
+    "min_data_cluster_size": 25,
+    "split_half_eps": 1e-06
+  },
+  "prompt_conditioned": {
+    "min_prompt_count": 200,
+    "min_resp_count": 200,
+    "min_resp_sigma": 0.001,
+    "min_resp_abs_delta": 0.0001,
+    "n_sample_emb": 30000,
+    "n_svd": 128,
+    "n_prompt_clusters": 512,
+    "n_resp_clusters": 512
+  }
+}

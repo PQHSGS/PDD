@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Data / caches / outputs
+data/
+runs/
+cache/
+*.parquet
+
+# Secrets
+.env
+
+# CodeGraph / notebooklm indexes (regenerated per machine)
+.codegraph/
+.notebooklm/

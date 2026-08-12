@@ -1,0 +1,49 @@
+{
+  "name": "qwen3_1.7b_dolci",
+  "seed": 0,
+  "output_dir": "runs/qwen3_1.7b_dolci",
+  "checkpoint_dir": "checkpoints/",
+  "use_checkpoint": true,
+  "model": {
+    "path": "Qwen/Qwen3-1.7B-Base",
+    "dtype": "bfloat16",
+    "device": "cuda"
+  },
+  "sae": {
+    "type": "auto",
+    "repo": "Qwen/SAE-Res-Qwen3-1.7B-Base-W32K-L0_50",
+    "sae_id": null,
+    "layer": 14,
+    "d_in": 2048,
+    "d_sae": 32768,
+    "k": 50,
+    "device": "cuda"
+  },
+  "data": {
+    "path": "allenai/Dolci-Instruct-DPO",
+    "split": "train",
+    "prompt_col": "prompt",
+    "chosen_col": "chosen",
+    "rejected_col": "rejected",
+    "max_samples": 500,
+    "batch_size": 8
+  },
+  "feature_conditioned": {
+    "tau": 0.01,
+    "silent_pct": 5.0,
+    "n_data_clusters": 512,
+    "min_feat_cluster_size": 10,
+    "min_data_cluster_size": 25,
+    "split_half_eps": 1e-06
+  },
+  "prompt_conditioned": {
+    "min_prompt_count": 200,
+    "min_resp_count": 200,
+    "min_resp_sigma": 0.001,
+    "min_resp_abs_delta": 0.0001,
+    "n_sample_emb": 30000,
+    "n_svd": 128,
+    "n_prompt_clusters": 512,
+    "n_resp_clusters": 512
+  }
+}
