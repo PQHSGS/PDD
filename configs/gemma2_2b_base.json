@@ -25,7 +25,7 @@
     "prompt_col": "prompt",
     "chosen_col": "chosen",
     "rejected_col": "rejected",
-    "max_samples": 500,
+    "max_samples": -1,
     "batch_size": 8
   },
   "feature_conditioned": {
