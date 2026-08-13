@@ -45,8 +45,10 @@ class PromptConditionedResult:
             "total_hypotheses": len(self.hypotheses),
             "hypotheses": [asdict(h) for h in self.hypotheses],
         }
-        with open(filepath, "w", encoding="utf-8") as f:
+        tmp_filepath = filepath + ".tmp"
+        with open(tmp_filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+        os.replace(tmp_filepath, filepath)
 
 
 class PromptConditionedPipeline:
@@ -66,21 +68,25 @@ class PromptConditionedPipeline:
         D = matrices.D_max if use_max_statistic else matrices.D_freq
         N, d_sae = P.shape
 
-        logger.info(f"Filtering features for prompt-conditioned pipeline (min_prompt_count={self.cfg.min_prompt_count})...")
+        effective_min_p = min(self.cfg.min_prompt_count, max(2, int(0.01 * N)))
+        effective_min_r = min(self.cfg.min_resp_count, max(2, int(0.01 * N)))
+        logger.info(f"Filtering features for prompt-conditioned pipeline (effective min_prompt_count={effective_min_p}, min_resp_count={effective_min_r})...")
+
         p_counts = np.sum(P > 0, axis=0)
-        retained_p_indices = np.where(p_counts >= self.cfg.min_prompt_count)[0]
+        retained_p_indices = np.where(p_counts >= effective_min_p)[0]
 
         r_counts = np.sum((matrices.C_freq > 0) | (matrices.R_freq > 0), axis=0)
         d_means = np.mean(D, axis=0)
         d_stds = np.std(D, axis=0)
 
         retained_r_indices = np.where(
-            (r_counts >= self.cfg.min_resp_count)
+            (r_counts >= effective_min_r)
             & (d_stds >= self.cfg.min_resp_sigma)
             & (np.abs(d_means) >= self.cfg.min_resp_abs_delta)
         )[0]
 
         logger.info(f"Retained {len(retained_p_indices)} prompt features and {len(retained_r_indices)} response features.")
+
 
         if len(retained_p_indices) < 2 or len(retained_r_indices) < 2:
             logger.warning("Insufficient features retained for prompt-conditioned pipeline. Returning empty result.")

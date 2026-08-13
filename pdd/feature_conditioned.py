@@ -51,8 +51,10 @@ class FeatureConditionedResult:
             "total_hypotheses": len(self.hypotheses),
             "hypotheses": [asdict(h) for h in self.hypotheses],
         }
-        with open(filepath, "w", encoding="utf-8") as f:
+        tmp_filepath = filepath + ".tmp"
+        with open(tmp_filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+        os.replace(tmp_filepath, filepath)
 
 
 class FeatureConditionedPipeline:
@@ -110,13 +112,14 @@ class FeatureConditionedPipeline:
 
         cluster_assignments = np.zeros(N, dtype=np.int32)
         if N_act > 0 and self.cfg.n_data_clusters > 0:
-            logger.info(f"Running Spherical K-Means (K={self.cfg.n_data_clusters}) on {N_act} active examples...")
+            # Scale n_clusters dynamically if N_act is small (e.g. 500 or 10k)
+            n_clusters = min(self.cfg.n_data_clusters, max(2, N_act // 10))
+            logger.info(f"Running Spherical K-Means (K={n_clusters}) on {N_act} active examples...")
             s_act = s_matrix[active_indices]
             s_act_norms = np.linalg.norm(s_act, axis=1, keepdims=True)
             s_act_norms[s_act_norms == 0] = 1e-12
             s_act_normed = s_act / s_act_norms
 
-            n_clusters = min(self.cfg.n_data_clusters, N_act)
             kmeans = MiniBatchKMeans(
                 n_clusters=n_clusters,
                 batch_size=min(1024, N_act),
@@ -145,6 +148,8 @@ class FeatureConditionedPipeline:
 
         unique_clusters = set(cluster_assignments)
         unique_clusters.discard(0)
+        num_active_clusters = max(1, len(unique_clusters))
+        effective_min_cluster_size = min(self.cfg.min_data_cluster_size, max(2, N_act // (num_active_clusters * 4)))
 
         for k in tqdm(sorted(unique_clusters), desc="Testing feature-data pairs"):
             in_mask = (cluster_assignments == k)
@@ -199,7 +204,8 @@ class FeatureConditionedPipeline:
                 )
                 delta_min = min(abs(delta_A), abs(delta_B))
 
-                if t_m >= self.cfg.min_feat_cluster_size and n_k >= self.cfg.min_data_cluster_size and sc:
+                if t_m >= self.cfg.min_feat_cluster_size and n_k >= effective_min_cluster_size and sc:
+
                     hypotheses.append(
                         HypothesisPair(
                             k=int(k),

@@ -3,16 +3,31 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
+.pytest_cache/
 
-# Data / caches / outputs
-data/
+# Large files & checkpoints / datasets / outputs
+checkpoints/
+datasets/
 runs/
+data/
 cache/
+scratch/
+
+# Large binary file formats
+*.npz
+*.tmp
+*.pt
+*.bin
+*.pth
 *.parquet
+*.h5
+*.safetensors
 
-# Secrets
+# Secrets & IDE
 .env
+.vscode/
+.idea/
 
-# CodeGraph / notebooklm indexes (regenerated per machine)
+# CodeGraph / notebooklm indexes
 .codegraph/
 .notebooklm/

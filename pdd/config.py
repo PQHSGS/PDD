@@ -52,12 +52,14 @@ class DataConfig:
     rejected_col: str = "rejected"
     max_samples: int = -1
     batch_size: int = 8
+    datasets_dir: str = "datasets"
 
     def validate(self) -> None:
         if not self.path:
             raise ValueError("DataConfig.path cannot be empty.")
         if self.batch_size <= 0:
             raise ValueError(f"DataConfig.batch_size must be positive, got {self.batch_size}.")
+
 
 
 @dataclass

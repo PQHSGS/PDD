@@ -32,8 +32,10 @@ class FeatureClusterMap:
             "clusters": {str(k): v for k, v in self.clusters.items()},
             "feature_to_cluster": {str(k): v for k, v in self.feature_to_cluster.items()},
         }
-        with open(filepath, "w", encoding="utf-8") as f:
+        tmp_filepath = filepath + ".tmp"
+        with open(tmp_filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+        os.replace(tmp_filepath, filepath)
 
     @classmethod
     def load_json(cls, filepath: str) -> FeatureClusterMap:
@@ -52,11 +54,12 @@ class LeidenFeatureClusterer:
         self,
         top_pct: float = 1.0,
         min_community_size: int = 4,
-        min_firing_freq: float = 1e-5,
+        min_firing_freq: float = 1e-4,
     ):
         self.top_pct = top_pct
         self.min_community_size = min_community_size
         self.min_firing_freq = min_firing_freq
+
 
     def cluster(
         self,

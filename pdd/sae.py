@@ -30,6 +30,8 @@ class ModelBackend:
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
+
+
         logger.info(f"Loading model from {self.cfg.path} (dtype={self.cfg.dtype}, device={self.cfg.device})...")
         dtype_map = {
             "bfloat16": torch.bfloat16,
