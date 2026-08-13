@@ -184,7 +184,14 @@ class PDDPipeline:
                     elif os.path.exists(part_ckpt):
                         try:
                             with np.load(part_ckpt) as data:
-                                score = len(data["P_max"])
+                                if "example_ids" in data:
+                                    score = len(data["example_ids"])
+                                elif "P_max_shape" in data:
+                                    score = int(data["P_max_shape"][0])
+                                elif "P_max" in data:
+                                    score = len(data["P_max"])
+                                else:
+                                    score = 10
                         except Exception:
                             score = 5
                     elif os.path.exists(ex_ckpt):

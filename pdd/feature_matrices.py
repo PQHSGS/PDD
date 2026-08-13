@@ -193,6 +193,18 @@ class FeatureMatrixExtractor:
                 logger.info(f"Found partial batch checkpoint '{partial_ckpt}'. Loading intermediate state...")
                 partial_matrices = FeatureMatrices.load_npz(partial_ckpt)
                 n_part = partial_matrices.P_max.shape[0]
+                start_batch_idx = n_part // self.batch_size
+                start_i = start_batch_idx * self.batch_size
+
+                if start_i < n_part:
+                    logger.info(f"Adjusting partial checkpoint to alignment boundary start_i={start_i} for new batch_size={self.batch_size}.")
+                    partial_matrices.P_max = partial_matrices.P_max[:start_i]
+                    partial_matrices.P_freq = partial_matrices.P_freq[:start_i]
+                    partial_matrices.C_max = partial_matrices.C_max[:start_i]
+                    partial_matrices.C_freq = partial_matrices.C_freq[:start_i]
+                    partial_matrices.R_max = partial_matrices.R_max[:start_i]
+                    partial_matrices.R_freq = partial_matrices.R_freq[:start_i]
+
                 P_max_list.append(partial_matrices.P_max)
                 P_freq_list.append(partial_matrices.P_freq)
                 C_max_list.append(partial_matrices.C_max)
@@ -200,13 +212,7 @@ class FeatureMatrixExtractor:
                 R_max_list.append(partial_matrices.R_max)
                 R_freq_list.append(partial_matrices.R_freq)
                 
-                # Check for last_batch_idx in raw partial data if present
-                raw_data = np.load(partial_ckpt)
-                if "last_batch_idx" in raw_data:
-                    start_batch_idx = int(np.squeeze(raw_data["last_batch_idx"])) + 1
-                else:
-                    start_batch_idx = (n_part + self.batch_size - 1) // self.batch_size
-                logger.info(f"Resuming SAE feature extraction from batch {start_batch_idx} ({n_part}/{N} examples pre-loaded)...")
+                logger.info(f"Resuming SAE feature extraction from example index {start_i} (batch {start_batch_idx}, batch_size={self.batch_size})...")
             except Exception as e:
                 logger.warning(f"Could not load partial checkpoint '{partial_ckpt}': {e}. Starting from batch 0...")
                 P_max_list.clear()

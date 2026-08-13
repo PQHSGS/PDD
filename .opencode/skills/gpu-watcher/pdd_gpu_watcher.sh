@@ -36,6 +36,6 @@ tmux has-session -t pdd 2>/dev/null || tmux new-session -d -s pdd
 tmux send-keys -t pdd "clear" Enter
 
 # start the run inside tmux; pipe its output to the run log
-tmux send-keys -t pdd "cd /mnt/disk4/pquan/PDD && source /mnt/disk1/miniconda3/etc/profile.d/conda.sh && conda activate pdd && python -u -m pdd.cli --config configs/qwen3_1.7b_base.json" Enter
+tmux send-keys -t pdd "python -u -m pdd.cli --config configs/qwen3_1.7b_base.json" Enter
 tmux pipe-pane -t pdd -o "cat >> $RUN_LOG"
 log "command sent to tmux 'pdd'; run log at $RUN_LOG"
