@@ -5,6 +5,7 @@ from dataclasses import dataclass, asdict
 import json
 import os
 import numpy as np
+import scipy.sparse as sp
 from sklearn.cluster import MiniBatchKMeans
 from tqdm import tqdm
 from typing import Dict, List, Optional, Tuple
@@ -96,6 +97,10 @@ class FeatureConditionedPipeline:
             feats = cluster_map.clusters[cid]
             c_freq = matrices.C_freq[:, feats]
             r_freq = matrices.R_freq[:, feats]
+            if sp.issparse(c_freq):
+                c_freq = c_freq.toarray()
+            if sp.issparse(r_freq):
+                r_freq = r_freq.toarray()
 
             s_matrix[:, col_idx] = np.sum(c_freq + r_freq, axis=1)
             b_tau = (c_freq > self.cfg.tau).astype(np.float32) - (r_freq > self.cfg.tau).astype(np.float32)
@@ -112,8 +117,9 @@ class FeatureConditionedPipeline:
 
         cluster_assignments = np.zeros(N, dtype=np.int32)
         if N_act > 0 and self.cfg.n_data_clusters > 0:
-            # Scale n_clusters dynamically if N_act is small (e.g. 500 or 10k)
             n_clusters = min(self.cfg.n_data_clusters, max(2, N_act // 10))
+            if n_clusters < self.cfg.n_data_clusters:
+                logger.info(f"Adjusted data clusters K={n_clusters} (from configured {self.cfg.n_data_clusters}) for active sample size N_act={N_act}.")
             logger.info(f"Running Spherical K-Means (K={n_clusters}) on {N_act} active examples...")
             s_act = s_matrix[active_indices]
             s_act_norms = np.linalg.norm(s_act, axis=1, keepdims=True)

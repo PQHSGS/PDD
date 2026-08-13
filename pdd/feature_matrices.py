@@ -14,55 +14,111 @@ from .logger import get_logger
 logger = get_logger("PDD.FeatureExtractor")
 
 
+import scipy.sparse as sp
+
+
+def _to_csr(mat: Any) -> sp.csr_matrix:
+    if sp.isspmatrix_csr(mat):
+        return mat
+    elif sp.issparse(mat):
+        return mat.tocsr()
+    else:
+        return sp.csr_matrix(mat, dtype=np.float32)
+
+
 @dataclass
 class FeatureMatrices:
-    """Example-level feature matrices for retained preference examples."""
+    """Example-level sparse feature matrices for retained preference examples."""
 
     example_ids: np.ndarray             # (N,)
-    P_max: np.ndarray                   # (N, d_sae)
-    P_freq: np.ndarray                  # (N, d_sae)
-    C_max: np.ndarray                   # (N, d_sae)
-    C_freq: np.ndarray                  # (N, d_sae)
-    R_max: np.ndarray                   # (N, d_sae)
-    R_freq: np.ndarray                  # (N, d_sae)
+    P_max: Any                          # (N, d_sae) sp.csr_matrix
+    P_freq: Any                         # (N, d_sae) sp.csr_matrix
+    C_max: Any                          # (N, d_sae) sp.csr_matrix
+    C_freq: Any                         # (N, d_sae) sp.csr_matrix
+    R_max: Any                          # (N, d_sae) sp.csr_matrix
+    R_freq: Any                         # (N, d_sae) sp.csr_matrix
+
+    def __post_init__(self):
+        self.P_max = _to_csr(self.P_max)
+        self.P_freq = _to_csr(self.P_freq)
+        self.C_max = _to_csr(self.C_max)
+        self.C_freq = _to_csr(self.C_freq)
+        self.R_max = _to_csr(self.R_max)
+        self.R_freq = _to_csr(self.R_freq)
 
     @property
-    def D_max(self) -> np.ndarray:
+    def D_max(self) -> sp.csr_matrix:
         return self.C_max - self.R_max
 
     @property
-    def D_freq(self) -> np.ndarray:
+    def D_freq(self) -> sp.csr_matrix:
         return self.C_freq - self.R_freq
 
-    def save_npz(self, filepath: str) -> None:
-        """Save feature matrices to disk as an uncompressed .npz archive."""
+    def save_npz(self, filepath: str, last_batch_idx: Optional[int] = None) -> None:
+        """Save sparse feature matrices to disk as a compact .npz archive."""
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
         tmp_filepath = filepath.replace(".npz", "_tmp.npz")
-        np.savez(
-            tmp_filepath,
-            example_ids=self.example_ids,
-            P_max=self.P_max,
-            P_freq=self.P_freq,
-            C_max=self.C_max,
-            C_freq=self.C_freq,
-            R_max=self.R_max,
-            R_freq=self.R_freq,
-        )
+
+        kwargs = {"example_ids": self.example_ids}
+        if last_batch_idx is not None:
+            kwargs["last_batch_idx"] = np.array([last_batch_idx], dtype=np.int64)
+
+        matrix_names = ["P_max", "P_freq", "C_max", "C_freq", "R_max", "R_freq"]
+        for name in matrix_names:
+            csr = _to_csr(getattr(self, name))
+            kwargs[f"{name}_data"] = csr.data
+            kwargs[f"{name}_indices"] = csr.indices
+            kwargs[f"{name}_indptr"] = csr.indptr
+            kwargs[f"{name}_shape"] = np.array(csr.shape, dtype=np.int64)
+
+        np.savez(tmp_filepath, **kwargs)
         os.replace(tmp_filepath, filepath)
 
     @classmethod
     def load_npz(cls, filepath: str) -> FeatureMatrices:
-        """Load feature matrices from disk .npz archive."""
+        """Load feature matrices from disk .npz archive (supports sparse CSR & dense legacy formats)."""
         data = np.load(filepath)
-        return cls(
-            example_ids=data["example_ids"],
-            P_max=data["P_max"],
-            P_freq=data["P_freq"],
-            C_max=data["C_max"],
-            C_freq=data["C_freq"],
-            R_max=data["R_max"],
-            R_freq=data["R_freq"],
-        )
+        matrix_names = ["P_max", "P_freq", "C_max", "C_freq", "R_max", "R_freq"]
+
+        if "P_max_data" in data:
+            mats = {}
+            for name in matrix_names:
+                d = data[f"{name}_data"]
+                ind = data[f"{name}_indices"]
+                ptr = data[f"{name}_indptr"]
+                shp = tuple(data[f"{name}_shape"])
+                mats[name] = sp.csr_matrix((d, ind, ptr), shape=shp)
+            if "example_ids" in data:
+                ex_ids = data["example_ids"]
+            else:
+                logger.warning(f"Key 'example_ids' missing in '{filepath}'; generated default sequence IDs [0..{mats['P_max'].shape[0]-1}].")
+                ex_ids = np.arange(mats["P_max"].shape[0], dtype=np.int64)
+            return cls(
+                example_ids=ex_ids,
+                P_max=mats["P_max"],
+                P_freq=mats["P_freq"],
+                C_max=mats["C_max"],
+                C_freq=mats["C_freq"],
+                R_max=mats["R_max"],
+                R_freq=mats["R_freq"],
+            )
+        else:
+            logger.warning(f"File '{filepath}' contains legacy dense numpy format. Converting to sparse CSR matrix...")
+            p_m = data["P_max"]
+            if "example_ids" in data:
+                ex_ids = data["example_ids"]
+            else:
+                logger.warning(f"Key 'example_ids' missing in legacy file '{filepath}'; generated default sequence IDs [0..{p_m.shape[0]-1}].")
+                ex_ids = np.arange(p_m.shape[0], dtype=np.int64)
+            return cls(
+                example_ids=ex_ids,
+                P_max=_to_csr(p_m),
+                P_freq=_to_csr(data["P_freq"]),
+                C_max=_to_csr(data["C_max"]),
+                C_freq=_to_csr(data["C_freq"]),
+                R_max=_to_csr(data["R_max"]),
+                R_freq=_to_csr(data["R_freq"]),
+            )
 
 
 class FeatureMatrixExtractor:
@@ -95,7 +151,6 @@ class FeatureMatrixExtractor:
             logger.info(f"Loading cached feature matrices from checkpoint: {checkpoint_path}")
             return FeatureMatrices.load_npz(checkpoint_path)
 
-
         logger.info(f"Extracting SAE feature matrices for {len(examples)} examples (batch_size={self.batch_size})...")
         matrices = self._extract_batched(
             examples=examples,
@@ -123,12 +178,12 @@ class FeatureMatrixExtractor:
         N = len(examples)
         example_ids = np.array([ex.example_id for ex in examples], dtype=np.int64)
 
-        P_max = np.zeros((N, d_sae), dtype=np.float32)
-        P_freq = np.zeros((N, d_sae), dtype=np.float32)
-        C_max = np.zeros((N, d_sae), dtype=np.float32)
-        C_freq = np.zeros((N, d_sae), dtype=np.float32)
-        R_max = np.zeros((N, d_sae), dtype=np.float32)
-        R_freq = np.zeros((N, d_sae), dtype=np.float32)
+        P_max_list: List[sp.csr_matrix] = []
+        P_freq_list: List[sp.csr_matrix] = []
+        C_max_list: List[sp.csr_matrix] = []
+        C_freq_list: List[sp.csr_matrix] = []
+        R_max_list: List[sp.csr_matrix] = []
+        R_freq_list: List[sp.csr_matrix] = []
 
         partial_ckpt = checkpoint_path.replace(".npz", "_partial.npz") if checkpoint_path else None
         start_batch_idx = 0
@@ -136,19 +191,30 @@ class FeatureMatrixExtractor:
         if use_checkpoint and partial_ckpt and os.path.exists(partial_ckpt):
             try:
                 logger.info(f"Found partial batch checkpoint '{partial_ckpt}'. Loading intermediate state...")
-                partial_data = np.load(partial_ckpt)
-                p_m_part = partial_data["P_max"]
-                n_part = len(p_m_part)
-                P_max[:n_part] = p_m_part
-                P_freq[:n_part] = partial_data["P_freq"]
-                C_max[:n_part] = partial_data["C_max"]
-                C_freq[:n_part] = partial_data["C_freq"]
-                R_max[:n_part] = partial_data["R_max"]
-                R_freq[:n_part] = partial_data["R_freq"]
-                start_batch_idx = int(partial_data["last_batch_idx"]) + 1
+                partial_matrices = FeatureMatrices.load_npz(partial_ckpt)
+                n_part = partial_matrices.P_max.shape[0]
+                P_max_list.append(partial_matrices.P_max)
+                P_freq_list.append(partial_matrices.P_freq)
+                C_max_list.append(partial_matrices.C_max)
+                C_freq_list.append(partial_matrices.C_freq)
+                R_max_list.append(partial_matrices.R_max)
+                R_freq_list.append(partial_matrices.R_freq)
+                
+                # Check for last_batch_idx in raw partial data if present
+                raw_data = np.load(partial_ckpt)
+                if "last_batch_idx" in raw_data:
+                    start_batch_idx = int(np.squeeze(raw_data["last_batch_idx"])) + 1
+                else:
+                    start_batch_idx = (n_part + self.batch_size - 1) // self.batch_size
                 logger.info(f"Resuming SAE feature extraction from batch {start_batch_idx} ({n_part}/{N} examples pre-loaded)...")
             except Exception as e:
                 logger.warning(f"Could not load partial checkpoint '{partial_ckpt}': {e}. Starting from batch 0...")
+                P_max_list.clear()
+                P_freq_list.clear()
+                C_max_list.clear()
+                C_freq_list.clear()
+                R_max_list.clear()
+                R_freq_list.clear()
                 start_batch_idx = 0
 
         # Hook target layer
@@ -174,46 +240,42 @@ class FeatureMatrixExtractor:
                 end_i = min(start_i + self.batch_size, N)
                 batch_exs = examples[start_i:end_i]
 
-                # 1. Process Prompts (applying chat template if tokenizer supports it)
+                # 1. Process Prompts
                 prompts = [ex.prompt for ex in batch_exs]
                 p_m, p_f = self._process_span_batch(prompts, target_layer, residual_container, is_prompt=True)
-                P_max[start_i:end_i] = p_m
-                P_freq[start_i:end_i] = p_f
+                P_max_list.append(sp.csr_matrix(p_m, dtype=np.float32))
+                P_freq_list.append(sp.csr_matrix(p_f, dtype=np.float32))
 
                 # 2. Process Chosen Responses
                 chosens = [ex.chosen for ex in batch_exs]
                 c_m, c_f = self._process_span_batch(chosens, target_layer, residual_container, is_prompt=False)
-                C_max[start_i:end_i] = c_m
-                C_freq[start_i:end_i] = c_f
+                C_max_list.append(sp.csr_matrix(c_m, dtype=np.float32))
+                C_freq_list.append(sp.csr_matrix(c_f, dtype=np.float32))
 
                 # 3. Process Rejected Responses
                 rejecteds = [ex.rejected for ex in batch_exs]
                 r_m, r_f = self._process_span_batch(rejecteds, target_layer, residual_container, is_prompt=False)
-                R_max[start_i:end_i] = r_m
-                R_freq[start_i:end_i] = r_f
+                R_max_list.append(sp.csr_matrix(r_m, dtype=np.float32))
+                R_freq_list.append(sp.csr_matrix(r_f, dtype=np.float32))
 
-                # Incrementally save partial progress checkpoint (sliced up to end_i for fast uncompressed saving)
+                # Incrementally save sparse partial progress checkpoint
                 if partial_ckpt and ((b_idx + 1) % save_every_batches == 0 or b_idx == num_batches - 1):
-                    tmp_ckpt = partial_ckpt.replace(".npz", "_tmp.npz")
-                    np.savez(
-                        tmp_ckpt,
-                        P_max=P_max[:end_i],
-                        P_freq=P_freq[:end_i],
-                        C_max=C_max[:end_i],
-                        C_freq=C_freq[:end_i],
-                        R_max=R_max[:end_i],
-                        R_freq=R_freq[:end_i],
-                        last_batch_idx=b_idx,
+                    part_matrices = FeatureMatrices(
+                        example_ids=example_ids[:end_i],
+                        P_max=sp.vstack(P_max_list, format="csr"),
+                        P_freq=sp.vstack(P_freq_list, format="csr"),
+                        C_max=sp.vstack(C_max_list, format="csr"),
+                        C_freq=sp.vstack(C_freq_list, format="csr"),
+                        R_max=sp.vstack(R_max_list, format="csr"),
+                        R_freq=sp.vstack(R_freq_list, format="csr"),
                     )
-                    os.replace(tmp_ckpt, partial_ckpt)
+                    part_matrices.save_npz(partial_ckpt, last_batch_idx=b_idx)
 
             if partial_ckpt and os.path.exists(partial_ckpt):
                 try:
                     os.remove(partial_ckpt)
                 except Exception:
                     pass
-
-
 
         finally:
             handle.remove()
@@ -222,12 +284,12 @@ class FeatureMatrixExtractor:
 
         return FeatureMatrices(
             example_ids=example_ids,
-            P_max=P_max,
-            P_freq=P_freq,
-            C_max=C_max,
-            C_freq=C_freq,
-            R_max=R_max,
-            R_freq=R_freq,
+            P_max=sp.vstack(P_max_list, format="csr"),
+            P_freq=sp.vstack(P_freq_list, format="csr"),
+            C_max=sp.vstack(C_max_list, format="csr"),
+            C_freq=sp.vstack(C_freq_list, format="csr"),
+            R_max=sp.vstack(R_max_list, format="csr"),
+            R_freq=sp.vstack(R_freq_list, format="csr"),
         )
 
     def _process_span_batch(

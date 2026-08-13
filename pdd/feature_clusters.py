@@ -7,6 +7,7 @@ import os
 import igraph as ig
 import leidenalg as la
 import numpy as np
+import scipy.sparse as sp
 from typing import Dict, List, Optional, Tuple
 
 from .logger import get_logger
@@ -83,9 +84,14 @@ class LeidenFeatureClusterer:
 
         return cluster_map
 
-    def _build_clusters(self, binary_activations: np.ndarray, seed: int) -> FeatureClusterMap:
+    def _build_clusters(self, binary_activations: Any, seed: int) -> FeatureClusterMap:
+        if sp.issparse(binary_activations):
+            binary_activations = binary_activations.tocsr()
+            p1 = np.asarray(binary_activations.mean(axis=0)).flatten()
+        else:
+            p1 = binary_activations.mean(axis=0)
+
         N, d_sae = binary_activations.shape
-        p1 = binary_activations.mean(axis=0)
         p0 = 1.0 - p1
 
         active_indices = np.where(p1 > self.min_firing_freq)[0]
@@ -102,7 +108,8 @@ class LeidenFeatureClusterer:
         H = - np.where(p0_act > 0, p0_act * np.log(p0_act + 1e-12), 0.0) \
             - np.where(p1_act > 0, p1_act * np.log(p1_act + 1e-12), 0.0)
 
-        p11 = (act_matrix.T @ act_matrix) / N
+        p11_raw = (act_matrix.T @ act_matrix) / N
+        p11 = np.asarray(p11_raw.toarray()) if sp.issparse(p11_raw) else p11_raw
         p10 = p1_act[:, None] - p11
         p01 = p1_act[None, :] - p11
         p00 = 1.0 - p11 - p10 - p01

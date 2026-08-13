@@ -72,12 +72,27 @@ class PromptConditionedPipeline:
         effective_min_r = min(self.cfg.min_resp_count, max(2, int(0.01 * N)))
         logger.info(f"Filtering features for prompt-conditioned pipeline (effective min_prompt_count={effective_min_p}, min_resp_count={effective_min_r})...")
 
-        p_counts = np.sum(P > 0, axis=0)
+        import scipy.sparse as sp
+
+        if sp.issparse(P):
+            p_counts = np.asarray((P > 0).sum(axis=0)).flatten()
+        else:
+            p_counts = np.sum(P > 0, axis=0)
         retained_p_indices = np.where(p_counts >= effective_min_p)[0]
 
-        r_counts = np.sum((matrices.C_freq > 0) | (matrices.R_freq > 0), axis=0)
-        d_means = np.mean(D, axis=0)
-        d_stds = np.std(D, axis=0)
+        if sp.issparse(matrices.C_freq):
+            r_counts = np.asarray(((matrices.C_freq > 0) + (matrices.R_freq > 0) > 0).sum(axis=0)).flatten()
+        else:
+            r_counts = np.sum((matrices.C_freq > 0) | (matrices.R_freq > 0), axis=0)
+
+        if sp.issparse(D):
+            d_means = np.asarray(D.mean(axis=0)).flatten()
+            D_sq = D.copy()
+            D_sq.data = D_sq.data ** 2
+            d_stds = np.sqrt(np.maximum(0, np.asarray(D_sq.mean(axis=0)).flatten() - d_means ** 2))
+        else:
+            d_means = np.mean(D, axis=0)
+            d_stds = np.std(D, axis=0)
 
         retained_r_indices = np.where(
             (r_counts >= effective_min_r)
@@ -105,12 +120,16 @@ class PromptConditionedPipeline:
         # 1. Prompt Feature Embeddings (SVD-128)
         logger.info(f"Computing SVD-{self.cfg.n_svd} embeddings for prompt features...")
         P_sample = P[sample_idx][:, retained_p_indices].T
+        if sp.issparse(P_sample):
+            P_sample = P_sample.tocsr()
         n_p_components = min(self.cfg.n_svd, min(P_sample.shape) - 1)
+        if n_p_components < self.cfg.n_svd:
+            logger.info(f"Adjusted prompt SVD components to n_components={n_p_components} (from configured {self.cfg.n_svd}) for matrix shape {P_sample.shape}.")
         if n_p_components >= 2:
             svd_p = TruncatedSVD(n_components=n_p_components, random_state=seed)
             emb_p = svd_p.fit_transform(P_sample)
         else:
-            emb_p = P_sample
+            emb_p = P_sample.toarray() if sp.issparse(P_sample) else P_sample
 
         emb_p_norms = np.linalg.norm(emb_p, axis=1, keepdims=True)
         emb_p_norms[emb_p_norms == 0] = 1e-12
@@ -128,12 +147,14 @@ class PromptConditionedPipeline:
         # 2. Response Feature Embeddings (SVD-128)
         logger.info(f"Computing SVD-{self.cfg.n_svd} embeddings for response features...")
         D_sample = D[sample_idx][:, retained_r_indices].T
+        if sp.issparse(D_sample):
+            D_sample = D_sample.tocsr()
         n_r_components = min(self.cfg.n_svd, min(D_sample.shape) - 1)
         if n_r_components >= 2:
             svd_r = TruncatedSVD(n_components=n_r_components, random_state=seed)
             emb_r = svd_r.fit_transform(D_sample)
         else:
-            emb_r = D_sample
+            emb_r = D_sample.toarray() if sp.issparse(D_sample) else D_sample
 
         emb_r_norms = np.linalg.norm(emb_r, axis=1, keepdims=True)
         emb_r_norms[emb_r_norms == 0] = 1e-12
@@ -158,12 +179,20 @@ class PromptConditionedPipeline:
         p_keys = sorted(prompt_clusters.keys())
         for col_idx, pk in enumerate(p_keys):
             feats = prompt_clusters[pk]
-            c_matrix[:, col_idx] = np.mean(P[:, feats], axis=1)
+            p_sub = P[:, feats]
+            if sp.issparse(p_sub):
+                c_matrix[:, col_idx] = np.asarray(p_sub.mean(axis=1)).flatten()
+            else:
+                c_matrix[:, col_idx] = np.mean(p_sub, axis=1)
 
         r_keys = sorted(resp_clusters.keys())
         for col_idx, rk in enumerate(r_keys):
             feats = resp_clusters[rk]
-            u_matrix[:, col_idx] = np.mean(D[:, feats], axis=1)
+            d_sub = D[:, feats]
+            if sp.issparse(d_sub):
+                u_matrix[:, col_idx] = np.asarray(d_sub.mean(axis=1)).flatten()
+            else:
+                u_matrix[:, col_idx] = np.mean(d_sub, axis=1)
 
         logger.info(f"Computing Welch inside-vs-outside tests across {K_p_final} prompt x {K_r_final} response clusters...")
         hypotheses: List[PromptConditionedHypothesis] = []
