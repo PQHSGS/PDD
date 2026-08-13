@@ -210,34 +210,32 @@ class PromptConditionedPipeline:
                 n_in = n_top
                 n_out = N - n_in
 
+                u_in_all = u_matrix[in_mask].mean(axis=0)
+                u_out_all = u_matrix[out_mask].mean(axis=0)
+                delta_all = u_in_all - u_out_all
+
+                var_in_all = u_matrix[in_mask].var(axis=0, ddof=1)
+                var_out_all = u_matrix[out_mask].var(axis=0, ddof=1)
+
+                se_all = np.sqrt((var_in_all / n_in) + (var_out_all / n_out) + 1e-12)
+                z_score_all = delta_all / se_all
+
+                s_pooled_sq_all = (((n_in - 1) * var_in_all) + ((n_out - 1) * var_out_all)) / max(1, (N - 2))
+                s_pooled_all = np.sqrt(s_pooled_sq_all + 1e-12)
+                cohens_d_all = delta_all / s_pooled_all
+
                 for r_col_idx, rk_val in enumerate(r_keys):
-                    u_col = u_matrix[:, r_col_idx]
-
-                    u_in = np.mean(u_col[in_mask])
-                    u_out = np.mean(u_col[out_mask])
-                    delta = u_in - u_out
-
-                    var_in = np.var(u_col[in_mask], ddof=1)
-                    var_out = np.var(u_col[out_mask], ddof=1)
-
-                    se = np.sqrt((var_in / n_in) + (var_out / n_out) + 1e-12)
-                    z_score = delta / se
-
-                    s_pooled_sq = (((n_in - 1) * var_in) + ((n_out - 1) * var_out)) / max(1, (N - 2))
-                    s_pooled = np.sqrt(s_pooled_sq + 1e-12)
-                    cohens_d = delta / s_pooled
-
                     hypotheses.append(
                         PromptConditionedHypothesis(
                             k=int(pk_val),
                             m=int(rk_val),
                             n_prompt_feats=len(prompt_clusters[pk_val]),
                             n_resp_feats=len(resp_clusters[rk_val]),
-                            u_in=float(u_in),
-                            u_out=float(u_out),
-                            delta=float(delta),
-                            z_score=float(z_score),
-                            cohens_d=float(cohens_d),
+                            u_in=float(u_in_all[r_col_idx]),
+                            u_out=float(u_out_all[r_col_idx]),
+                            delta=float(delta_all[r_col_idx]),
+                            z_score=float(z_score_all[r_col_idx]),
+                            cohens_d=float(cohens_d_all[r_col_idx]),
                         )
                     )
 

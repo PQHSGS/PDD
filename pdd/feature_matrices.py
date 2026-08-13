@@ -71,7 +71,7 @@ class FeatureMatrices:
             kwargs[f"{name}_indptr"] = csr.indptr
             kwargs[f"{name}_shape"] = np.array(csr.shape, dtype=np.int64)
 
-        np.savez(tmp_filepath, **kwargs)
+        np.savez_compressed(tmp_filepath, **kwargs)
         os.replace(tmp_filepath, filepath)
 
     @classmethod
@@ -240,21 +240,13 @@ class FeatureMatrixExtractor:
                 end_i = min(start_i + self.batch_size, N)
                 batch_exs = examples[start_i:end_i]
 
-                # 1. Process Prompts
-                prompts = [ex.prompt for ex in batch_exs]
-                p_m, p_f = self._process_span_batch(prompts, target_layer, residual_container, is_prompt=True)
+                # 2-pass preference batch extraction (Prompt+Chosen & Prompt+Rejected)
+                p_m, p_f, c_m, c_f, r_m, r_f = self._process_preference_batch(batch_exs, target_layer, residual_container)
+
                 P_max_list.append(sp.csr_matrix(p_m, dtype=np.float32))
                 P_freq_list.append(sp.csr_matrix(p_f, dtype=np.float32))
-
-                # 2. Process Chosen Responses
-                chosens = [ex.chosen for ex in batch_exs]
-                c_m, c_f = self._process_span_batch(chosens, target_layer, residual_container, is_prompt=False)
                 C_max_list.append(sp.csr_matrix(c_m, dtype=np.float32))
                 C_freq_list.append(sp.csr_matrix(c_f, dtype=np.float32))
-
-                # 3. Process Rejected Responses
-                rejecteds = [ex.rejected for ex in batch_exs]
-                r_m, r_f = self._process_span_batch(rejecteds, target_layer, residual_container, is_prompt=False)
                 R_max_list.append(sp.csr_matrix(r_m, dtype=np.float32))
                 R_freq_list.append(sp.csr_matrix(r_f, dtype=np.float32))
 
@@ -292,58 +284,110 @@ class FeatureMatrixExtractor:
             R_freq=sp.vstack(R_freq_list, format="csr"),
         )
 
-    def _process_span_batch(
+    def _process_preference_batch(
         self,
-        texts: List[str],
+        batch_exs: List[PreferenceExample],
         target_layer: Any,
         residual_container: List[torch.Tensor],
-        is_prompt: bool = False,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         residual_container.clear()
+        B = len(batch_exs)
+        d_sae = self.sae.cfg.d_sae
 
-        # Apply chat template formatting to user prompts if chat_template exists
-        if is_prompt and getattr(self.tokenizer, "chat_template", None) is not None:
-            formatted_texts = []
-            for text in texts:
+        # 1. Format prompts with chat template if present
+        formatted_prompts = []
+        for ex in batch_exs:
+            if getattr(self.tokenizer, "chat_template", None) is not None:
                 try:
                     formatted = self.tokenizer.apply_chat_template(
-                        [{"role": "user", "content": text}],
+                        [{"role": "user", "content": ex.prompt}],
                         tokenize=False,
                         add_generation_prompt=True,
                     )
-                    formatted_texts.append(formatted)
+                    formatted_prompts.append(formatted)
                 except Exception:
-                    formatted_texts.append(text)
-            texts = formatted_texts
+                    formatted_prompts.append(ex.prompt)
+            else:
+                formatted_prompts.append(ex.prompt)
 
-        inputs = self.tokenizer(
-            texts,
+        # Tokenize prompts alone to extract exact prompt token lengths
+        prompt_inputs = self.tokenizer(
+            formatted_prompts,
+            padding=False,
+            truncation=True,
+            max_length=512,
+            add_special_tokens=True,
+        )
+        p_lens = [len(ids) for ids in prompt_inputs["input_ids"]]
+
+        # 2. Process Prompt + Chosen sequences
+        chosen_texts = [p + ex.chosen for p, ex in zip(formatted_prompts, batch_exs)]
+        c_inputs = self.tokenizer(
+            chosen_texts,
             padding=True,
             truncation=True,
             max_length=1024,
             return_tensors="pt",
         ).to(self.device)
 
+        with torch.inference_mode():
+            self.model(**c_inputs)
+
+        c_resid = residual_container[0]
+        residual_container.clear()
+        c_acts = self.sae.encode(c_resid.to(self.sae.device)).to(torch.float32)
+        c_attn_mask = c_inputs.attention_mask.to(self.sae.device)
+
+        p_m = np.zeros((B, d_sae), dtype=np.float32)
+        p_f = np.zeros((B, d_sae), dtype=np.float32)
+        c_m = np.zeros((B, d_sae), dtype=np.float32)
+        c_f = np.zeros((B, d_sae), dtype=np.float32)
+
+        for i in range(B):
+            valid_len = int(c_attn_mask[i].sum().item())
+            p_len = min(p_lens[i], valid_len)
+
+            if p_len > 0:
+                p_span = c_acts[i, :p_len]
+                p_m[i] = torch.max(p_span, dim=0).values.detach().cpu().numpy()
+                p_f[i] = (torch.sum((p_span > 0).float(), dim=0) / float(p_len)).detach().cpu().numpy()
+
+            c_len = max(0, valid_len - p_len)
+            if c_len > 0:
+                c_span = c_acts[i, p_len:valid_len]
+                c_m[i] = torch.max(c_span, dim=0).values.detach().cpu().numpy()
+                c_f[i] = (torch.sum((c_span > 0).float(), dim=0) / float(c_len)).detach().cpu().numpy()
+
+        # 3. Process Prompt + Rejected sequences
+        rejected_texts = [p + ex.rejected for p, ex in zip(formatted_prompts, batch_exs)]
+        r_inputs = self.tokenizer(
+            rejected_texts,
+            padding=True,
+            truncation=True,
+            max_length=1024,
+            return_tensors="pt",
+        ).to(self.device)
 
         with torch.inference_mode():
-            self.model(**inputs)
+            self.model(**r_inputs)
 
-        resid = residual_container[0]  # (B, L, d_in)
-        mask = inputs.attention_mask.unsqueeze(-1).to(self.sae.device) # (B, L, 1)
+        r_resid = residual_container[0]
+        residual_container.clear()
+        r_acts = self.sae.encode(r_resid.to(self.sae.device)).to(torch.float32)
+        r_attn_mask = r_inputs.attention_mask.to(self.sae.device)
 
-        # Encode with SAE
-        acts = self.sae.encode(resid.to(self.sae.device)).to(torch.float32) # (B, L, d_sae)
+        r_m = np.zeros((B, d_sae), dtype=np.float32)
+        r_f = np.zeros((B, d_sae), dtype=np.float32)
 
-        # Mask out padding tokens before computing max / mean frequency
-        acts_masked = acts * mask
+        for i in range(B):
+            valid_len = int(r_attn_mask[i].sum().item())
+            p_len = min(p_lens[i], valid_len)
 
-        # Span Max: (B, d_sae)
-        span_max = torch.max(acts_masked, dim=1).values.detach().cpu().numpy()
+            r_len = max(0, valid_len - p_len)
+            if r_len > 0:
+                r_span = r_acts[i, p_len:valid_len]
+                r_m[i] = torch.max(r_span, dim=0).values.detach().cpu().numpy()
+                r_f[i] = (torch.sum((r_span > 0).float(), dim=0) / float(r_len)).detach().cpu().numpy()
 
-        # Span Frequency: sum over valid tokens / valid token count
-        token_counts = torch.sum(inputs.attention_mask, dim=1, keepdim=True).to(self.sae.device) # (B, 1)
-        token_counts = torch.clamp(token_counts, min=1)
-        span_freq = (torch.sum((acts_masked > 0).float(), dim=1) / token_counts).detach().cpu().numpy()
-
-        return span_max, span_freq
+        return p_m, p_f, c_m, c_f, r_m, r_f
 

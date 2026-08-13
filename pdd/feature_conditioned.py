@@ -177,57 +177,54 @@ class FeatureConditionedPipeline:
             n_in_B = np.sum(in_B_mask)
             n_out_B = np.sum(out_B_mask)
 
+            u_in_all = u_matrix[in_mask].mean(axis=0)
+            u_out_all = u_matrix[out_mask].mean(axis=0)
+            delta_all = u_in_all - u_out_all
+
+            var_in_all = u_matrix[in_mask].var(axis=0, ddof=1)
+            var_out_all = u_matrix[out_mask].var(axis=0, ddof=1)
+
+            se_all = np.sqrt((var_in_all / n_k) + (var_out_all / n_out) + 1e-12)
+            z_score_all = delta_all / se_all
+
+            s_pooled_sq_all = (((n_k - 1) * var_in_all) + ((n_out - 1) * var_out_all)) / max(1, (N_pool - 2))
+            cohens_d_all = delta_all / np.sqrt(s_pooled_sq_all + 1e-12)
+
+            delta_A_all = np.zeros(K_r, dtype=np.float32)
+            if n_in_A > 0 and n_out_A > 0:
+                delta_A_all = u_matrix[in_A_mask].mean(axis=0) - u_matrix[out_A_mask].mean(axis=0)
+
+            delta_B_all = np.zeros(K_r, dtype=np.float32)
+            if n_in_B > 0 and n_out_B > 0:
+                delta_B_all = u_matrix[in_B_mask].mean(axis=0) - u_matrix[out_B_mask].mean(axis=0)
+
+            sc_all = (
+                (np.abs(delta_A_all) > self.cfg.split_half_eps)
+                & (np.abs(delta_B_all) > self.cfg.split_half_eps)
+                & (np.sign(delta_A_all) == np.sign(delta_B_all))
+            )
+            delta_min_all = np.minimum(np.abs(delta_A_all), np.abs(delta_B_all))
+
             for col_idx, cid in enumerate(cluster_ids):
                 t_m = cluster_sizes[col_idx]
-                u_col = u_matrix[:, col_idx]
-
-                u_in = np.mean(u_col[in_mask])
-                u_out = np.mean(u_col[out_mask])
-                delta = u_in - u_out
-
-                var_in = np.var(u_col[in_mask], ddof=1)
-                var_out = np.var(u_col[out_mask], ddof=1)
-
-                se = np.sqrt((var_in / n_k) + (var_out / n_out) + 1e-12)
-                z_score = delta / se
-
-                s_pooled_sq = (((n_k - 1) * var_in) + ((n_out - 1) * var_out)) / max(1, (N_pool - 2))
-                s_pooled = np.sqrt(s_pooled_sq + 1e-12)
-                cohens_d = delta / s_pooled
-
-                delta_A = 0.0
-                if n_in_A > 0 and n_out_A > 0:
-                    delta_A = np.mean(u_col[in_A_mask]) - np.mean(u_col[out_A_mask])
-
-                delta_B = 0.0
-                if n_in_B > 0 and n_out_B > 0:
-                    delta_B = np.mean(u_col[in_B_mask]) - np.mean(u_col[out_B_mask])
-
-                sc = (
-                    abs(delta_A) > self.cfg.split_half_eps
-                    and abs(delta_B) > self.cfg.split_half_eps
-                    and (np.sign(delta_A) == np.sign(delta_B))
-                )
-                delta_min = min(abs(delta_A), abs(delta_B))
-
+                sc = sc_all[col_idx]
                 if t_m >= self.cfg.min_feat_cluster_size and n_k >= effective_min_cluster_size and sc:
-
                     hypotheses.append(
                         HypothesisPair(
                             k=int(k),
                             m=int(cid),
                             n_k=int(n_k),
                             t_m=int(t_m),
-                            u_in=float(u_in),
-                            u_out=float(u_out),
-                            delta=float(delta),
-                            z_score=float(z_score),
-                            cohens_d=float(cohens_d),
-                            delta_A=float(delta_A),
-                            delta_B=float(delta_B),
+                            u_in=float(u_in_all[col_idx]),
+                            u_out=float(u_out_all[col_idx]),
+                            delta=float(delta_all[col_idx]),
+                            z_score=float(z_score_all[col_idx]),
+                            cohens_d=float(cohens_d_all[col_idx]),
+                            delta_A=float(delta_A_all[col_idx]),
+                            delta_B=float(delta_B_all[col_idx]),
                             sign_consistent=bool(sc),
-                            delta_min=float(delta_min),
-                            is_chosen_leaning=(delta > 0),
+                            delta_min=float(delta_min_all[col_idx]),
+                            is_chosen_leaning=bool(delta_all[col_idx] > 0),
                         )
                     )
 
