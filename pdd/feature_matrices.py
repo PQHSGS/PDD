@@ -71,7 +71,7 @@ class FeatureMatrices:
             kwargs[f"{name}_indptr"] = csr.indptr
             kwargs[f"{name}_shape"] = np.array(csr.shape, dtype=np.int64)
 
-        np.savez_compressed(tmp_filepath, **kwargs)
+        np.savez(tmp_filepath, **kwargs)
         os.replace(tmp_filepath, filepath)
 
     @classmethod
