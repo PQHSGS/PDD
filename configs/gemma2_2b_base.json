@@ -13,7 +13,7 @@
     "type": "auto",
     "repo": "gemma-scope-2b-pt-res-canonical",
     "sae_id": "layer_12/width_16k/canonical",
-    "layer": 12,
+    "layer": 14,
     "d_in": 2048,
     "d_sae": 16384,
     "k": null,
