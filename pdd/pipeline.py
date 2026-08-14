@@ -43,12 +43,28 @@ class PDDPipeline:
         clusters_ckpt = os.path.join(run_ckpt_dir, "clusters.json")
         manifest_ckpt = os.path.join(run_ckpt_dir, "manifest.json")
 
+        # Write manifest file immediately into checkpoint subfolder
+        manifest_data = {
+            "name": self.cfg.name,
+            "seed": self.cfg.seed,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "config": self.cfg.to_dict(),
+        }
+        manifest_tmp = manifest_ckpt + ".tmp"
+        with open(manifest_tmp, "w", encoding="utf-8") as f:
+            json.dump(manifest_data, f, indent=2)
+        os.replace(manifest_tmp, manifest_ckpt)
+
         # 1. Dataset Loading (cached from JSON if available)
         data_loader = DatasetLoader(self.cfg.data)
         examples = data_loader.load(
             checkpoint_path=examples_ckpt,
             use_checkpoint=self.cfg.use_checkpoint,
         )
+
+        # Flush temporary Arrow / dataset parsing buffers from system RAM
+        import gc
+        gc.collect()
 
 
         # 2. Checkpoint check for feature matrices
@@ -69,6 +85,7 @@ class PDDPipeline:
                 hook_layer=self.cfg.sae.layer,
                 device=self.cfg.model.device,
                 batch_size=self.cfg.data.batch_size,
+                save_every_batches=getattr(self.cfg.data, "save_every_batches", 100),
             )
             matrices = extractor.extract(
                 examples=examples,
@@ -77,7 +94,7 @@ class PDDPipeline:
             )
         else:
             logger.info(f"Found cached feature matrices at '{matrices_ckpt}'. Skipping model/SAE loading!")
-            extractor = FeatureMatrixExtractor(None, None, None, self.cfg.sae.layer, self.cfg.model.device)
+            extractor = FeatureMatrixExtractor(None, None, None, self.cfg.sae.layer, self.cfg.model.device, save_every_batches=getattr(self.cfg.data, "save_every_batches", 100))
             matrices = extractor.extract(
                 examples=examples,
                 checkpoint_path=matrices_ckpt,
@@ -148,6 +165,7 @@ class PDDPipeline:
 
     def _resolve_checkpoint_subfolder(self, timestamp_str: str) -> str:
         """Find existing matching checkpoint subfolder with maximum progress or create new timestamped subfolder."""
+        import numpy as np
         prefix = f"{self.cfg.name}_seed{self.cfg.seed}_"
 
         if self.cfg.use_checkpoint and os.path.exists(self.cfg.checkpoint_dir):
@@ -166,28 +184,41 @@ class PDDPipeline:
                 best_dir = None
                 best_score = -1
 
-                import numpy as np
-
                 for d in matching_subdirs:
                     full_path = os.path.join(self.cfg.checkpoint_dir, d)
                     mat_ckpt = os.path.join(full_path, "matrices.npz")
                     part_ckpt = os.path.join(full_path, "matrices_partial.npz")
+                    chunks_dir = os.path.join(full_path, "chunks")
                     ex_ckpt = os.path.join(full_path, "examples.json")
-
                     score = 0
                     if os.path.exists(mat_ckpt):
                         try:
-                            with np.load(mat_ckpt) as data:
-                                score = len(data["example_ids"])
+                            with np.load(mat_ckpt, mmap_mode="r") as data:
+                                score = int(data["P_max_shape"][0]) + 1_000_000 if "P_max_shape" in data else len(data["example_ids"]) + 1_000_000
                         except Exception:
-                            score = 100
+                            score = 1_000_000
+                    elif os.path.exists(chunks_dir):
+                        try:
+                            c_files = sorted([f for f in os.listdir(chunks_dir) if f.startswith("chunk_") and f.endswith(".npz")])
+                            for cf in c_files:
+                                cf_path = os.path.join(chunks_dir, cf)
+                                try:
+                                    with np.load(cf_path, mmap_mode="r") as d_hdr:
+                                        if "P_max_shape" in d_hdr:
+                                            score += int(d_hdr["P_max_shape"][0])
+                                        elif "example_ids" in d_hdr:
+                                            score += len(d_hdr["example_ids"])
+                                except Exception as e:
+                                    logger.warning(f"Error reading header of '{cf_path}': {e}")
+                        except Exception as e:
+                            logger.warning(f"Error listing chunks dir '{chunks_dir}': {e}")
                     elif os.path.exists(part_ckpt):
                         try:
-                            with np.load(part_ckpt) as data:
-                                if "example_ids" in data:
-                                    score = len(data["example_ids"])
-                                elif "P_max_shape" in data:
+                            with np.load(part_ckpt, mmap_mode="r") as data:
+                                if "P_max_shape" in data:
                                     score = int(data["P_max_shape"][0])
+                                elif "example_ids" in data:
+                                    score = len(data["example_ids"])
                                 elif "P_max" in data:
                                     score = len(data["P_max"])
                                 else:

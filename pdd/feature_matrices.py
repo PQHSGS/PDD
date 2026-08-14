@@ -132,6 +132,7 @@ class FeatureMatrixExtractor:
         hook_layer: int,
         device: str = "cuda",
         batch_size: int = 8,
+        save_every_batches: Optional[int] = None,
     ):
         self.model = model
         self.tokenizer = tokenizer
@@ -139,12 +140,14 @@ class FeatureMatrixExtractor:
         self.hook_layer = hook_layer
         self.device = device
         self.batch_size = batch_size
+        self.save_every_batches = save_every_batches
 
     def extract(
         self,
         examples: List[PreferenceExample],
         checkpoint_path: Optional[str] = None,
         use_checkpoint: bool = True,
+        save_every_batches: Optional[int] = None,
     ) -> FeatureMatrices:
         """Extract or load feature matrices."""
         if use_checkpoint and checkpoint_path and os.path.exists(checkpoint_path):
@@ -156,6 +159,7 @@ class FeatureMatrixExtractor:
             examples=examples,
             checkpoint_path=checkpoint_path,
             use_checkpoint=use_checkpoint,
+            save_every_batches=save_every_batches or self.save_every_batches,
         )
 
         if checkpoint_path:
@@ -170,58 +174,80 @@ class FeatureMatrixExtractor:
         examples: List[PreferenceExample],
         checkpoint_path: Optional[str] = None,
         use_checkpoint: bool = True,
-        save_every_batches: int = 1250,
+        save_every_batches: Optional[int] = None,
     ) -> FeatureMatrices:
         self.model.eval()
+
+        if save_every_batches is None:
+            save_every_batches = self.save_every_batches
+        if save_every_batches is None:
+            save_every_batches = max(1, 1000 // max(1, self.batch_size))
 
         d_sae = self.sae.cfg.d_sae
         N = len(examples)
         example_ids = np.array([ex.example_id for ex in examples], dtype=np.int64)
 
-        P_max_list: List[sp.csr_matrix] = []
-        P_freq_list: List[sp.csr_matrix] = []
-        C_max_list: List[sp.csr_matrix] = []
-        C_freq_list: List[sp.csr_matrix] = []
-        R_max_list: List[sp.csr_matrix] = []
-        R_freq_list: List[sp.csr_matrix] = []
-
+        chunks_dir = os.path.join(os.path.dirname(os.path.abspath(checkpoint_path)), "chunks") if checkpoint_path else None
         partial_ckpt = checkpoint_path.replace(".npz", "_partial.npz") if checkpoint_path else None
-        start_batch_idx = 0
 
-        if use_checkpoint and partial_ckpt and os.path.exists(partial_ckpt):
-            try:
-                logger.info(f"Found partial batch checkpoint '{partial_ckpt}'. Loading intermediate state...")
-                partial_matrices = FeatureMatrices.load_npz(partial_ckpt)
-                n_part = partial_matrices.P_max.shape[0]
-                start_batch_idx = n_part // self.batch_size
-                start_i = start_batch_idx * self.batch_size
+        processed_samples = 0
+        chunk_files: List[str] = []
 
-                if start_i < n_part:
-                    logger.info(f"Adjusting partial checkpoint to alignment boundary start_i={start_i} for new batch_size={self.batch_size}.")
-                    partial_matrices.P_max = partial_matrices.P_max[:start_i]
-                    partial_matrices.P_freq = partial_matrices.P_freq[:start_i]
-                    partial_matrices.C_max = partial_matrices.C_max[:start_i]
-                    partial_matrices.C_freq = partial_matrices.C_freq[:start_i]
-                    partial_matrices.R_max = partial_matrices.R_max[:start_i]
-                    partial_matrices.R_freq = partial_matrices.R_freq[:start_i]
+        if use_checkpoint and chunks_dir and os.path.exists(chunks_dir):
+            existing_chunks = sorted([f for f in os.listdir(chunks_dir) if f.startswith("chunk_") and f.endswith(".npz")])
+            if existing_chunks:
+                try:
+                    for fname in existing_chunks:
+                        fpath = os.path.join(chunks_dir, fname)
+                        with np.load(fpath, mmap_mode="r") as d_hdr:
+                            if "P_max_shape" in d_hdr:
+                                n_c = int(d_hdr["P_max_shape"][0])
+                            elif "example_ids" in d_hdr:
+                                n_c = len(d_hdr["example_ids"])
+                            else:
+                                n_c = 0
+                        processed_samples += n_c
+                        chunk_files.append(fname)
+                    logger.info(f"Found chunked checkpoint directory: {processed_samples:,} samples pre-extracted across {len(chunk_files)} chunks [ZERO RAM loaded].")
+                except Exception as e:
+                    logger.warning(f"Could not read chunk directory '{chunks_dir}': {e}. Starting fresh...")
+                    processed_samples = 0
+                    chunk_files.clear()
+            elif partial_ckpt and os.path.exists(partial_ckpt):
+                try:
+                    logger.info(f"Converting legacy partial checkpoint '{partial_ckpt}' to incremental chunk format...")
+                    os.makedirs(chunks_dir, exist_ok=True)
+                    part_mats = FeatureMatrices.load_npz(partial_ckpt)
+                    n_part = part_mats.P_max.shape[0]
+                    legacy_chunk_file = os.path.join(chunks_dir, "chunk_0000000.npz")
+                    part_mats.save_npz(legacy_chunk_file)
+                    
+                    processed_samples = n_part
+                    chunk_files = ["chunk_0000000.npz"]
+                    del part_mats
+                    import gc
+                    gc.collect()
+                    logger.info(f"Converted legacy partial checkpoint cleanly. Processed samples: {processed_samples:,}.")
+                except Exception as e:
+                    logger.warning(f"Could not convert legacy partial checkpoint '{partial_ckpt}': {e}. Starting fresh...")
+                    processed_samples = 0
 
-                P_max_list.append(partial_matrices.P_max)
-                P_freq_list.append(partial_matrices.P_freq)
-                C_max_list.append(partial_matrices.C_max)
-                C_freq_list.append(partial_matrices.C_freq)
-                R_max_list.append(partial_matrices.R_max)
-                R_freq_list.append(partial_matrices.R_freq)
-                
-                logger.info(f"Resuming SAE feature extraction from example index {start_i} (batch {start_batch_idx}, batch_size={self.batch_size})...")
-            except Exception as e:
-                logger.warning(f"Could not load partial checkpoint '{partial_ckpt}': {e}. Starting from batch 0...")
-                P_max_list.clear()
-                P_freq_list.clear()
-                C_max_list.clear()
-                C_freq_list.clear()
-                R_max_list.clear()
-                R_freq_list.clear()
-                start_batch_idx = 0
+        start_batch_idx = processed_samples // self.batch_size
+        start_i = start_batch_idx * self.batch_size
+
+        if start_i > 0:
+            logger.info(f"Resuming SAE extraction from sample index {start_i:,} (batch {start_batch_idx:,}, batch_size={self.batch_size}) [ZERO RAM loaded].")
+
+        # In-memory accumulator for CURRENT CHUNK ONLY (keeps RAM footprint <100 MB)
+        curr_chunk_P_max: List[sp.csr_matrix] = []
+        curr_chunk_P_freq: List[sp.csr_matrix] = []
+        curr_chunk_C_max: List[sp.csr_matrix] = []
+        curr_chunk_C_freq: List[sp.csr_matrix] = []
+        curr_chunk_R_max: List[sp.csr_matrix] = []
+        curr_chunk_R_freq: List[sp.csr_matrix] = []
+        curr_chunk_ex_ids: List[int] = []
+
+        chunk_start_i = start_i
 
         # Hook target layer
         residual_container = []
@@ -242,53 +268,103 @@ class FeatureMatrixExtractor:
         try:
             num_batches = (N + self.batch_size - 1) // self.batch_size
             for b_idx in tqdm(range(start_batch_idx, num_batches), desc="Batched SAE extraction", initial=start_batch_idx, total=num_batches):
-                start_i = b_idx * self.batch_size
-                end_i = min(start_i + self.batch_size, N)
-                batch_exs = examples[start_i:end_i]
+                b_start = b_idx * self.batch_size
+                b_end = min(b_start + self.batch_size, N)
+                batch_exs = examples[b_start:b_end]
 
                 # 2-pass preference batch extraction (Prompt+Chosen & Prompt+Rejected)
                 p_m, p_f, c_m, c_f, r_m, r_f = self._process_preference_batch(batch_exs, target_layer, residual_container)
 
-                P_max_list.append(sp.csr_matrix(p_m, dtype=np.float32))
-                P_freq_list.append(sp.csr_matrix(p_f, dtype=np.float32))
-                C_max_list.append(sp.csr_matrix(c_m, dtype=np.float32))
-                C_freq_list.append(sp.csr_matrix(c_f, dtype=np.float32))
-                R_max_list.append(sp.csr_matrix(r_m, dtype=np.float32))
-                R_freq_list.append(sp.csr_matrix(r_f, dtype=np.float32))
+                curr_chunk_P_max.append(sp.csr_matrix(p_m, dtype=np.float32))
+                curr_chunk_P_freq.append(sp.csr_matrix(p_f, dtype=np.float32))
+                curr_chunk_C_max.append(sp.csr_matrix(c_m, dtype=np.float32))
+                curr_chunk_C_freq.append(sp.csr_matrix(c_f, dtype=np.float32))
+                curr_chunk_R_max.append(sp.csr_matrix(r_m, dtype=np.float32))
+                curr_chunk_R_freq.append(sp.csr_matrix(r_f, dtype=np.float32))
+                curr_chunk_ex_ids.extend([ex.example_id for ex in batch_exs])
 
-                # Incrementally save sparse partial progress checkpoint
-                if partial_ckpt and ((b_idx + 1) % save_every_batches == 0 or b_idx == num_batches - 1):
-                    part_matrices = FeatureMatrices(
-                        example_ids=example_ids[:end_i],
-                        P_max=sp.vstack(P_max_list, format="csr"),
-                        P_freq=sp.vstack(P_freq_list, format="csr"),
-                        C_max=sp.vstack(C_max_list, format="csr"),
-                        C_freq=sp.vstack(C_freq_list, format="csr"),
-                        R_max=sp.vstack(R_max_list, format="csr"),
-                        R_freq=sp.vstack(R_freq_list, format="csr"),
-                    )
-                    part_matrices.save_npz(partial_ckpt, last_batch_idx=b_idx)
+                # Save current chunk incrementally every save_every_batches or at final batch
+                if chunks_dir and ((b_idx + 1) % save_every_batches == 0 or b_idx == num_batches - 1):
+                    if len(curr_chunk_P_max) > 0:
+                        os.makedirs(chunks_dir, exist_ok=True)
+                        chunk_filename = f"chunk_{chunk_start_i:07d}.npz"
+                        chunk_filepath = os.path.join(chunks_dir, chunk_filename)
+                        
+                        chunk_mats = FeatureMatrices(
+                            example_ids=np.array(curr_chunk_ex_ids, dtype=np.int64),
+                            P_max=sp.vstack(curr_chunk_P_max, format="csr"),
+                            P_freq=sp.vstack(curr_chunk_P_freq, format="csr"),
+                            C_max=sp.vstack(curr_chunk_C_max, format="csr"),
+                            C_freq=sp.vstack(curr_chunk_C_freq, format="csr"),
+                            R_max=sp.vstack(curr_chunk_R_max, format="csr"),
+                            R_freq=sp.vstack(curr_chunk_R_freq, format="csr"),
+                        )
+                        chunk_mats.save_npz(chunk_filepath)
 
-            if partial_ckpt and os.path.exists(partial_ckpt):
-                try:
-                    os.remove(partial_ckpt)
-                except Exception:
-                    pass
+                        if chunk_filename not in chunk_files:
+                            chunk_files.append(chunk_filename)
+
+                        # Reset in-memory chunk arrays to keep RAM < 100 MB
+                        curr_chunk_P_max.clear()
+                        curr_chunk_P_freq.clear()
+                        curr_chunk_C_max.clear()
+                        curr_chunk_C_freq.clear()
+                        curr_chunk_R_max.clear()
+                        curr_chunk_R_freq.clear()
+                        curr_chunk_ex_ids.clear()
+                        chunk_start_i = b_end
+                        import gc
+                        gc.collect()
 
         finally:
             handle.remove()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-        return FeatureMatrices(
-            example_ids=example_ids,
-            P_max=sp.vstack(P_max_list, format="csr"),
-            P_freq=sp.vstack(P_freq_list, format="csr"),
-            C_max=sp.vstack(C_max_list, format="csr"),
-            C_freq=sp.vstack(C_freq_list, format="csr"),
-            R_max=sp.vstack(R_max_list, format="csr"),
-            R_freq=sp.vstack(R_freq_list, format="csr"),
+        # Merge all chunks into final consolidated FeatureMatrices
+        logger.info(f"Consolidating extraction chunks from '{chunks_dir}'...")
+        all_P_max: List[sp.csr_matrix] = []
+        all_P_freq: List[sp.csr_matrix] = []
+        all_C_max: List[sp.csr_matrix] = []
+        all_C_freq: List[sp.csr_matrix] = []
+        all_R_max: List[sp.csr_matrix] = []
+        all_R_freq: List[sp.csr_matrix] = []
+        all_ex_ids: List[np.ndarray] = []
+
+        if chunks_dir and os.path.exists(chunks_dir):
+            existing_chunks = sorted([f for f in os.listdir(chunks_dir) if f.startswith("chunk_") and f.endswith(".npz")])
+            for fname in existing_chunks:
+                fpath = os.path.join(chunks_dir, fname)
+                if os.path.exists(fpath):
+                    m = FeatureMatrices.load_npz(fpath)
+                    all_ex_ids.append(m.example_ids)
+                    all_P_max.append(m.P_max)
+                    all_P_freq.append(m.P_freq)
+                    all_C_max.append(m.C_max)
+                    all_C_freq.append(m.C_freq)
+                    all_R_max.append(m.R_max)
+                    all_R_freq.append(m.R_freq)
+
+        final_matrices = FeatureMatrices(
+            example_ids=np.concatenate(all_ex_ids) if all_ex_ids else example_ids,
+            P_max=sp.vstack(all_P_max, format="csr") if all_P_max else sp.csr_matrix((N, d_sae), dtype=np.float32),
+            P_freq=sp.vstack(all_P_freq, format="csr") if all_P_freq else sp.csr_matrix((N, d_sae), dtype=np.float32),
+            C_max=sp.vstack(all_C_max, format="csr") if all_C_max else sp.csr_matrix((N, d_sae), dtype=np.float32),
+            C_freq=sp.vstack(all_C_freq, format="csr") if all_C_freq else sp.csr_matrix((N, d_sae), dtype=np.float32),
+            R_max=sp.vstack(all_R_max, format="csr") if all_R_max else sp.csr_matrix((N, d_sae), dtype=np.float32),
+            R_freq=sp.vstack(all_R_freq, format="csr") if all_R_freq else sp.csr_matrix((N, d_sae), dtype=np.float32),
         )
+
+        # Clean up temporary chunks directory after successful final matrix consolidation
+        if chunks_dir and os.path.exists(chunks_dir):
+            try:
+                import shutil
+                shutil.rmtree(chunks_dir)
+                logger.info(f"Cleaned up temporary chunk directory '{chunks_dir}'.")
+            except Exception as e:
+                logger.warning(f"Could not remove temporary chunk directory '{chunks_dir}': {e}")
+
+        return final_matrices
 
     def _process_preference_batch(
         self,

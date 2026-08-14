@@ -32,6 +32,7 @@ class SAEConfig:
     d_sae: int = 32768
     k: Optional[int] = 50
     device: str = "cuda"
+    sae_cpu: bool = False
 
     def validate(self) -> None:
         if self.type not in ("auto", "qwen_scope", "sae_lens"):
@@ -53,12 +54,15 @@ class DataConfig:
     max_samples: int = -1
     batch_size: int = 8
     datasets_dir: str = "datasets"
+    save_every_batches: int = 100
 
     def validate(self) -> None:
         if not self.path:
             raise ValueError("DataConfig.path cannot be empty.")
         if self.batch_size <= 0:
             raise ValueError(f"DataConfig.batch_size must be positive, got {self.batch_size}.")
+        if self.save_every_batches <= 0:
+            raise ValueError(f"DataConfig.save_every_batches must be positive, got {self.save_every_batches}.")
 
 
 

@@ -26,7 +26,8 @@
     "chosen_col": "chosen",
     "rejected_col": "rejected",
     "max_samples": -1,
-    "batch_size": 2
+    "batch_size": 2,
+    "save_every_batches": 5000
   },
   "feature_conditioned": {
     "tau": 0.01,

@@ -82,9 +82,10 @@ class SAEBackend:
         else:
             raise ValueError(f"Unsupported SAE type: '{self.cfg.type}'")
 
-        if self.cfg.device != "cpu":
-            self.sae.to(self.cfg.device)
-            self.sae.cfg.device = self.cfg.device
+        target_device = "cpu" if self.cfg.sae_cpu else self.cfg.device
+        logger.info(f"Setting SAE execution device to '{target_device}' (sae_cpu={self.cfg.sae_cpu})...")
+        self.sae.to(target_device)
+        self.sae.cfg.device = target_device
 
         return self.sae
 
@@ -102,6 +103,7 @@ class SAEBackend:
             "b_dec": state["b_dec"].contiguous(),
         }
         k_val = self.cfg.k if self.cfg.k is not None else 50
+        target_device = "cpu" if self.cfg.sae_cpu else self.cfg.device
         cfg_dict = {
             "architecture": "topk",
             "d_in": self.cfg.d_in,
@@ -120,7 +122,7 @@ class SAEBackend:
             "dataset_trust_remote_code": False,
             "normalize_activations": "none",
             "dtype": "float32",
-            "device": self.cfg.device,
+            "device": target_device,
             "sae_lens_training_version": "qwen-scope-0.0.1",
             "neuronpedia_id": None,
             **weights,

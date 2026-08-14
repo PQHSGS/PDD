@@ -7,7 +7,20 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+
+# Disable HuggingFace tokenizer background worker forks to prevent RAM memory leaks (pt_data_worker OOM)
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+# Prevent CUDA memory fragmentation for tight GPU VRAM environments
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+# Force line-buffered unbuffered stdout so tqdm and logs stream immediately to tmux / log files
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
 
 from .config import PipelineConfig
 from .logger import get_logger
@@ -27,6 +40,8 @@ def main():
     parser.add_argument("--force_rerun", action="store_true", help="Bypass cached checkpoints and force fresh computation")
     parser.add_argument("--device", type=str, default=None, help="Override execution device ('cuda' or 'cpu')")
     parser.add_argument("--batch_size", type=int, default=None, help="Override extraction batch size")
+    parser.add_argument("--save_every_batches", type=int, default=None, help="Override checkpoint chunk save frequency in batches")
+    parser.add_argument("--sae_cpu", action="store_true", help="Run SAE encoding on CPU instead of CUDA")
 
     args = parser.parse_args()
 
@@ -44,6 +59,10 @@ def main():
         config.sae.device = args.device
     if args.batch_size:
         config.data.batch_size = args.batch_size
+    if args.save_every_batches:
+        config.data.save_every_batches = args.save_every_batches
+    if args.sae_cpu:
+        config.sae.sae_cpu = True
 
 
     pipeline = PDDPipeline(config)

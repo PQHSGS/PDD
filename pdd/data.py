@@ -146,7 +146,7 @@ class DatasetLoader:
         data = [ex.to_dict() for ex in examples]
         tmp_filepath = filepath + ".tmp"
         with open(tmp_filepath, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+            json.dump(data, f, separators=(",", ":"))
         os.replace(tmp_filepath, filepath)
 
     @staticmethod
