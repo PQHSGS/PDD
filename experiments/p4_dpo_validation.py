@@ -366,12 +366,11 @@ def main():
     # Compute Empirical Rollout Feature Shift: delta_empirical = mean(a(y_DPO)) - mean(a(y_SFT))
     delta_empirical_all = dpo_act_mean - sft_act_mean
 
-    # 6. Load Hypotheses & Correlate delta_predicted vs delta_empirical
+    # 6. Load Hypotheses & Correlate cluster-level delta_predicted vs delta_empirical
     hypo_path = os.path.join(run_dir, "feature_conditioned_hypotheses.json")
     with open(hypo_path, "r", encoding="utf-8") as f:
         h_raw = json.load(f)
     hypotheses = h_raw.get("hypotheses", h_raw) if isinstance(h_raw, dict) else h_raw
-    top_hypotheses = sorted(hypotheses, key=lambda h: abs(h.get("delta", 0.0)), reverse=True)[:args.num_features]
 
     # Load Feature Clusters mapping
     clusters_path = os.path.join(subfolder, "clusters.json")
@@ -379,15 +378,28 @@ def main():
         clusters_data = json.load(f)
     retained_clusters = {int(k): [int(x) for x in v] for k, v in clusters_data.get("clusters", {}).items()}
 
+    # Group hypotheses by feature cluster m to compute 1-to-1 cluster-level predictions
+    cluster_to_deltas = {}
+    for h in hypotheses:
+        m = int(h["m"])
+        d = float(h.get("delta", 0.0))
+        cluster_to_deltas.setdefault(m, []).append(d)
+
+    # Rank top feature clusters by magnitude of predicted disparity
+    sorted_clusters = sorted(
+        cluster_to_deltas.keys(),
+        key=lambda m: abs(np.mean(cluster_to_deltas[m])),
+        reverse=True
+    )[:args.num_features]
+
     delta_predicted = []
     delta_empirical = []
 
-    for h in top_hypotheses:
-        m = h["m"]
-        pred_delta = h.get("delta", 0.0)
+    for m in sorted_clusters:
         feats = retained_clusters.get(m, [])
         if not feats:
             continue
+        pred_delta = float(np.mean(cluster_to_deltas[m]))
         emp_delta = float(np.mean(delta_empirical_all[feats]))
         delta_predicted.append(pred_delta)
         delta_empirical.append(emp_delta)

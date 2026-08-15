@@ -18,39 +18,6 @@ from .logger import get_logger
 logger = get_logger("PDD.FeatureClusterer")
 
 
-def _binary_union(c_freq: Any, r_freq: Any, cols: Any) -> Any:
-    """Return float32 CSR binary = (C_freq[:, cols] > 0) | (R_freq[:, cols] > 0).
-
-    Uses fast CSC range slicing and relative column indexing to avoid SciPy's slow
-    fancy array matrix multiplication (which takes 2.5s per block call).
-    """
-    if isinstance(cols, slice):
-        c_bin = (c_freq[:, cols] > 0).tocsc()
-        r_bin = (r_freq[:, cols] > 0).tocsc()
-        union = (c_bin + r_bin) > 0
-        return (union.tocsr()).astype(np.float32)
-
-    cols_arr = np.asarray(cols, dtype=np.int64)
-    if len(cols_arr) == 0:
-        return sp.csr_matrix((c_freq.shape[0], 0), dtype=np.float32)
-
-    c0, c1 = int(cols_arr[0]), int(cols_arr[-1]) + 1
-    if c1 - c0 == len(cols_arr):
-        c_bin = (c_freq[:, c0:c1] > 0).tocsc()
-        r_bin = (r_freq[:, c0:c1] > 0).tocsc()
-        union = (c_bin + r_bin) > 0
-        return (union.tocsr()).astype(np.float32)
-
-    # Non-contiguous column selection: range slice then fast local CSC index
-    c_sub = (c_freq[:, c0:c1] > 0).tocsc()
-    r_sub = (r_freq[:, c0:c1] > 0).tocsc()
-    rel_cols = cols_arr - c0
-    c_act = c_sub[:, rel_cols]
-    r_act = r_sub[:, rel_cols]
-    union = (c_act + r_act) > 0
-    return (union.tocsr()).astype(np.float32)
-
-
 @dataclass
 class FeatureClusterMap:
     """Mapping of feature clusters T_m and feature assignments."""
@@ -87,15 +54,17 @@ class LeidenFeatureClusterer:
 
     def __init__(
         self,
+        min_community_size: int,
         top_pct: float = 1.0,
-        min_community_size: int = 4,
         min_firing_freq: float = 1e-4,
         block_size: int = 2048,
+        resolution_parameter: float = 1.5,
     ):
-        self.top_pct = top_pct
         self.min_community_size = min_community_size
+        self.top_pct = top_pct
         self.min_firing_freq = min_firing_freq
         self.block_size = block_size
+        self.resolution_parameter = resolution_parameter
 
 
     def cluster(
@@ -107,9 +76,9 @@ class LeidenFeatureClusterer:
     ) -> FeatureClusterMap:
         """Cluster SAE features using binary MI graph and Leiden algorithm.
 
-        ``matrices`` is a FeatureMatrices; the binary activation (C_freq>0 | R_freq>0)
-        union is built block-wise from a single shared CSC copy of C_freq/R_freq
-        so the full ~19GB union is never materialized in RAM.
+        ``matrices`` is a FeatureMatrices; the binary activation union is streamed
+        from the mmap'd C_freq/R_freq (two row passes, ~0 RAM) so neither the full
+        ~15GB C/R pair nor the ~19GB union matrix is ever materialized in RAM.
         """
         ckpt_dir = os.path.dirname(os.path.abspath(checkpoint_path)) if checkpoint_path else None
         mi_graph_path = os.path.join(ckpt_dir, "mi_graph.npz") if ckpt_dir else None
@@ -123,7 +92,7 @@ class LeidenFeatureClusterer:
         if use_checkpoint and checkpoint_path and os.path.exists(checkpoint_path) and cached_ok:
             logger.info(f"Loading cached feature clusters from checkpoint: {checkpoint_path}")
             return FeatureClusterMap.load_json(checkpoint_path)
-        if os.path.exists(mi_graph_path) and not cached_ok:
+        if mi_graph_path and os.path.exists(mi_graph_path) and not cached_ok:
             logger.warning(f"Ignoring stale MI graph '{mi_graph_path}' (extraction state changed); recomputing.")
             os.remove(mi_graph_path)
 
@@ -149,12 +118,13 @@ class LeidenFeatureClusterer:
         return cluster_map
 
     def _build_clusters(self, matrices: Any, seed: int, mi_graph_path: Optional[str] = None) -> FeatureClusterMap:
-        """Cluster features using binary MI, computed block-wise to stay memory-safe.
+        """Cluster features using binary MI, computed memory-safely.
 
-        Holds the shared CSC copies of C_freq and R_freq (~15GB total) while it
-        runs, plus at most two (N x block) union blocks (~750MB each) and the
-        small norm-MI block — never the full union matrix nor all pre-built
-        block copies.
+        Two streaming row passes over the mmap'd C_freq/R_freq build (a) the per-
+        feature union firing probability and (b) the binary union matrix U over
+        active features (~1.6GB). The MI co-occurrence is then computed with dense
+        BLAS on 4096-row chunks (never the full 34GB dense U), and the norm-MI is
+        streamed to a disk memmap. Peak RAM stays < ~5GB.
         """
         import gc
 
@@ -172,12 +142,12 @@ class LeidenFeatureClusterer:
             edges = list(zip(global_i.tolist(), global_j.tolist()))
             g = ig.Graph(n=d_sae, edges=edges, edge_attrs={"weight": edge_weights})
             
-            logger.info(f"Running Leiden community detection (RBConfiguration, res=1.5) on graph with {len(edges):,} edges...")
+            logger.info(f"Running Leiden community detection (RBConfiguration, res={self.resolution_parameter}) on graph with {len(edges):,} edges...")
             partition = la.find_partition(
                 g,
                 la.RBConfigurationVertexPartition,
                 weights="weight",
-                resolution_parameter=1.5,
+                resolution_parameter=self.resolution_parameter,
                 seed=seed,
             )
 
@@ -195,20 +165,11 @@ class LeidenFeatureClusterer:
             logger.info(f"Extracted {len(clusters)} retained Leiden feature communities.")
             return FeatureClusterMap(clusters=clusters, feature_to_cluster=feature_to_cluster)
 
-        c_freq = matrices.C_freq
-        r_freq = matrices.R_freq
-        N, d_sae = c_freq.shape
-        # 1. Compute binary union firing counts per feature column block-wise.
-        #    Slices 2048-column blocks directly from the disk-backed mmap matrices
-        #    so peak RAM stays < 100 MB (never the full 15GB matrix in RAM).
-        p1 = np.zeros(d_sae, dtype=np.float32)
+        N, d_sae = matrices.C_freq.shape
         block = self.block_size
-        for b in range((d_sae + block - 1) // block):
-            b0, b1 = b * block, min((b + 1) * block, d_sae)
-            u = _binary_union(c_freq, r_freq, slice(b0, b1))
-            p1[b0:b1] = np.bincount(u.indices, minlength=b1 - b0) / float(N)
-            del u
-            gc.collect()
+
+        # 1. Union firing probabilities via a single streaming row pass (peak RAM ~0).
+        p1 = matrices.union_p1(d_sae)
 
         # Stash the union firing probabilities for reuse by the B.2 pipeline's
         # response-feature retention filter (r_counts = p1 * N), avoiding a
@@ -256,40 +217,52 @@ class LeidenFeatureClusterer:
         norm_mi_mmap = np.lib.format.open_memmap(mmap_path, mode="w+", dtype=np.float32, shape=(n_pairs,))
 
         n_blocks = (D_act + block - 1) // block
-        logger.info(f"Pre-building {n_blocks} feature blocks for fast in-memory MI matrix multiplication...")
-        A_blocks = [
-            _binary_union(c_freq, r_freq, active_indices[b * block : min((b + 1) * block, D_act)])
-            for b in tqdm(range(n_blocks), desc="Pre-building feature blocks")
-        ]
-        A_blocks_T = [blk.T for blk in A_blocks]
-
         logger.info(f"Building binary MI graph over {n_blocks} feature blocks (block_size={block})...")
 
-        for bi in tqdm(range(n_blocks), desc="Building MI graph blocks"):
+        # 2. Co-occurrence p11 = U^T U / N via dense BLAS over row-chunks. The
+        #    binary union is streamed one row-chunk at a time from the mmap'd
+        #    C_freq/R_freq (never materialized in full, ~34GB dense or ~15GB
+        #    sparse), and per-block-pair products accumulate into float32 buffers.
+        chunk_rows = 4096
+        widths = [min(block, D_act - b * block) for b in range(n_blocks)]
+        p11 = [
+            [np.zeros((widths[bi], widths[bj]), dtype=np.float32) for bj in range(bi, n_blocks)]
+            for bi in range(n_blocks)
+        ]
+        for r0 in tqdm(range(0, N, chunk_rows), desc="MI co-occurrence (dense BLAS)"):
+            r1 = min(r0 + chunk_rows, N)
+            Uc = matrices.union_chunk_dense(r0, r1, active_indices)
+            UcT = np.ascontiguousarray(Uc.T)
+            for bi in range(n_blocks):
+                i0, i1 = bi * block, min((bi + 1) * block, D_act)
+                Ai = UcT[i0:i1]
+                for bj in range(bi, n_blocks):
+                    j0, j1 = bj * block, min((bj + 1) * block, D_act)
+                    p11[bi][bj - bi] += Ai @ Uc[:, j0:j1]
+        del Uc, UcT
+        gc.collect()
+
+        # 4. Per block-pair: normalize, compute MI / norm-MI, sorted write to memmap.
+        for bi in tqdm(range(n_blocks), desc="Writing norm-MI blocks"):
             i0, i1 = bi * block, min((bi + 1) * block, D_act)
-            A_T = A_blocks_T[bi]
+            p1_i = p1_act[i0:i1][:, None]
+            p0_i = p0_act[i0:i1][:, None]
+            Hi = H[i0:i1][:, None]
 
             for bj in range(bi, n_blocks):
                 j0, j1 = bj * block, min((bj + 1) * block, D_act)
-                B = A_blocks[bj]
+                p11_blk = p11[bi][bj - bi] / np.float32(N)
 
-                # p11_ij = (A^T B) / N — fast C matmul in float32
-                p11_blk_raw = A_T @ B
-                p11_blk = np.asarray(p11_blk_raw.toarray(), dtype=np.float32) / np.float32(N)
-
-                # Local feature indices within active_indices
-                ii = np.arange(i0, i1)[:, None]
-                jj = np.arange(j0, j1)[None, :]
+                p1_j = p1_act[j0:j1][None, :]
+                p0_j = p0_act[j0:j1][None, :]
 
                 # Upper-triangle mask: only keep pairs where global i < global j.
-                keep = (ii < jj) if bi == bj else np.ones((i1 - i0, j1 - j0), dtype=bool)
-                if not np.any(keep):
-                    continue
-
-                p1_i = p1_act[i0:i1][:, None]
-                p1_j = p1_act[j0:j1][None, :]
-                p0_i = p0_act[i0:i1][:, None]
-                p0_j = p0_act[j0:j1][None, :]
+                if bi == bj:
+                    ii = np.arange(i0, i1)[:, None]
+                    jj = np.arange(j0, j1)[None, :]
+                    keep = (ii < jj)
+                else:
+                    keep = None
 
                 p10 = p1_i - p11_blk
                 p01 = p1_j - p11_blk
@@ -305,16 +278,19 @@ class LeidenFeatureClusterer:
                    + p01c * np.log(p01c / (p0_i * p1_j + 1e-7)) \
                    + p00c * np.log(p00c / (p0_i * p0_j + 1e-7))
 
-                Hi = H[i0:i1][:, None]
                 Hj = H[j0:j1][None, :]
                 norm_MI = MI / (np.sqrt(Hi * Hj) + 1e-7)
 
-                rows, cols = np.where(keep)
+                rows, cols = np.where(keep) if keep is not None else np.where(np.ones_like(norm_MI, dtype=bool))
                 gidx = tri_idx(i0 + rows, j0 + cols)
-                norm_mi_mmap[gidx] = norm_MI[rows, cols]
+                vals = norm_MI[rows, cols]
+                # Write in ascending index order -> sequential-ish pages on the
+                # memmap, avoiding random scattered writes on slow storage.
+                order = np.argsort(gidx)
+                norm_mi_mmap[gidx[order]] = vals[order]
 
-        del A_blocks, A_blocks_T
-        gc.collect()
+                del p11_blk, norm_MI, vals
+                gc.collect()
 
         norm_mi_mmap.flush()
         logger.info(f"Computed {n_pairs:,} normalized-MI values (upper triangle) into memmap.")
@@ -388,12 +364,12 @@ class LeidenFeatureClusterer:
 
         g = ig.Graph(n=d_sae, edges=edges, edge_attrs={"weight": edge_weights})
 
-        logger.info(f"Running Leiden community detection (RBConfiguration, res=1.5) on graph with {len(edges):,} edges...")
+        logger.info(f"Running Leiden community detection (RBConfiguration, res={self.resolution_parameter}) on graph with {len(edges):,} edges...")
         partition = la.find_partition(
             g,
             la.RBConfigurationVertexPartition,
             weights="weight",
-            resolution_parameter=1.5,
+            resolution_parameter=self.resolution_parameter,
             seed=seed,
         )
 

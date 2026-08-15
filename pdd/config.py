@@ -99,6 +99,33 @@ class PromptConditionedConfig:
 
 
 @dataclass
+class FeatureClusterConfig:
+    """SAE feature clustering (binary MI graph + Leiden) settings.
+
+    Goodfire/paper defaults (arXiv:2606.12360, App. "SAE Feature Clusters"):
+    top 1% of off-diagonal MI pairs, communities with fewer than 4 features
+    filtered out.
+    """
+    top_pct: float = 1.0               # Keep the top top_pct% of positive-MI pairs (paper: 1.0)
+    min_community_size: int = 4        # Drop Leiden communities with fewer features (paper: 4)
+    min_firing_freq: float = 1e-4      # Restrict MI graph to features firing >= this fraction of rows
+    block_size: int = 2048             # MI co-occurrence block size (performance, not a paper knob)
+    resolution_parameter: float = 1.5  # Leiden RBConfiguration resolution (unset in paper)
+
+    def validate(self) -> None:
+        if not (0.0 < self.top_pct <= 100.0):
+            raise ValueError("top_pct must be in (0, 100].")
+        if self.min_community_size < 1:
+            raise ValueError("min_community_size must be >= 1.")
+        if self.min_firing_freq < 0.0:
+            raise ValueError("min_firing_freq must be non-negative.")
+        if self.block_size <= 0:
+            raise ValueError("block_size must be positive.")
+        if self.resolution_parameter <= 0.0:
+            raise ValueError("resolution_parameter must be positive.")
+
+
+@dataclass
 class PipelineConfig:
     name: str = "qwen3_dolci_default"
     seed: int = 0
@@ -108,6 +135,7 @@ class PipelineConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     sae: SAEConfig = field(default_factory=SAEConfig)
     data: DataConfig = field(default_factory=DataConfig)
+    feature_clusters: FeatureClusterConfig = field(default_factory=FeatureClusterConfig)
     feature_conditioned: FeatureConditionedConfig = field(default_factory=FeatureConditionedConfig)
     prompt_conditioned: PromptConditionedConfig = field(default_factory=PromptConditionedConfig)
 
@@ -117,6 +145,7 @@ class PipelineConfig:
         self.model.validate()
         self.sae.validate()
         self.data.validate()
+        self.feature_clusters.validate()
         self.feature_conditioned.validate()
         self.prompt_conditioned.validate()
 
@@ -134,16 +163,18 @@ class PipelineConfig:
         model_cfg = ModelConfig(**data.get("model", {}))
         sae_cfg = SAEConfig(**data.get("sae", {}))
         data_cfg = DataConfig(**data.get("data", {}))
-        fc_cfg = FeatureConditionedConfig(**data.get("feature_conditioned", {}))
+        fc_cfg = FeatureClusterConfig(**data.get("feature_clusters", {}))
+        fcd_cfg = FeatureConditionedConfig(**data.get("feature_conditioned", {}))
         pc_cfg = PromptConditionedConfig(**data.get("prompt_conditioned", {}))
 
-        top_kwargs = {k: v for k, v in data.items() if k not in ("model", "sae", "data", "feature_conditioned", "prompt_conditioned")}
+        top_kwargs = {k: v for k, v in data.items() if k not in ("model", "sae", "data", "feature_clusters", "feature_conditioned", "prompt_conditioned")}
 
         config = cls(
             model=model_cfg,
             sae=sae_cfg,
             data=data_cfg,
-            feature_conditioned=fc_cfg,
+            feature_clusters=fc_cfg,
+            feature_conditioned=fcd_cfg,
             prompt_conditioned=pc_cfg,
             **top_kwargs
         )

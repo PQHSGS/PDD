@@ -209,6 +209,40 @@ class FeatureMatrices:
     def D_freq(self) -> sp.csr_matrix:
         return self.C_freq - self.R_freq
 
+    def union_chunk_sparse(self, r0: int, r1: int) -> sp.csr_matrix:
+        """Binary union chunk C[r0:r1] OR R[r0:r1], as a float32 CSR (0/1)."""
+        c_csr, r_csr = self.C_freq, self.R_freq
+        return ((c_csr[r0:r1] > 0) + (r_csr[r0:r1] > 0) > 0).astype(np.float32)
+
+    def union_p1(self, d_sae: int) -> np.ndarray:
+        """Union firing probability per feature, via bounded-memory chunked passes.
+
+        Computes p1[f] = P(C[:, f] > 0 OR R[:, f] > 0) by OR-ing row-chunks of
+        C_freq/R_freq (never a full matrix copy, no per-row allocation churn).
+        Used by the B.1/B.2 pipelines via the stashed ``matrices._union_p1``.
+        """
+        N = self.C_freq.shape[0]
+        p1 = np.zeros(d_sae, dtype=np.float32)
+        chunk = 8192
+        for r0 in range(0, N, chunk):
+            r1 = min(r0 + chunk, N)
+            u = self.union_chunk_sparse(r0, r1)
+            p1 += np.bincount(u.indices, minlength=d_sae)
+            del u
+        return p1 / float(N)
+
+    def union_chunk_dense(self, r0: int, r1: int, active_indices: np.ndarray) -> np.ndarray:
+        """Dense float32 chunk of the union restricted to ``active_indices`` columns.
+
+        Columns are the ACTIVE features (as in ``union_active_csr`` semantics);
+        if all features are active this is a plain toarray, otherwise a column
+        selection on the small chunk only (bounded memory).
+        """
+        u = self.union_chunk_sparse(r0, r1)
+        if len(active_indices) == u.shape[1] and active_indices[-1] == u.shape[1] - 1:
+            return u.toarray()
+        return u[:, active_indices].toarray()
+
     def save_npz(self, filepath: str, last_batch_idx: Optional[int] = None) -> None:
         """Save sparse feature matrices to disk as a compact .npz archive."""
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)

@@ -91,29 +91,33 @@ class FeatureConditionedPipeline:
         cluster_ids = sorted(cluster_map.clusters.keys())
         cluster_sizes = [len(cluster_map.clusters[cid]) for cid in cluster_ids]
 
-        c_freq = matrices.C_freq
-        r_freq = matrices.R_freq
+        # Per-cluster primitives computed with bounded-memory sparse-dense matmuls
+        # against an indicator matrix A[f, k] = 1 iff feature f is in cluster k.
+        # s = C@A + R@A (sum of activations), v = C@A - R@A, and u counts activations
+        # > tau chunk-wise (never materializing the full ~15GB C/R or a full bool
+        # mask). Peak RAM stays at the (N, K) outputs + one row-chunk.
+        c_csr = matrices.C_freq
+        r_csr = matrices.R_freq
+        d_sae = c_csr.shape[1]
+        A = np.zeros((d_sae, K_r), dtype=np.float32)
+        for k, cid in enumerate(cluster_ids):
+            A[cluster_map.clusters[cid], k] = 1.0
 
-        for col_idx, cid in enumerate(cluster_ids):
-            feats_arr = np.asarray(cluster_map.clusters[cid], dtype=np.int64)
-            c0, c1 = int(feats_arr[0]), int(feats_arr[-1]) + 1
-            if c1 - c0 == len(feats_arr):
-                c_sub = c_freq[:, c0:c1]
-                r_sub = r_freq[:, c0:c1]
-            else:
-                rel_cols = feats_arr - c0
-                c_sub = (c_freq[:, c0:c1].tocsc())[:, rel_cols]
-                r_sub = (r_freq[:, c0:c1].tocsc())[:, rel_cols]
+        s_C = c_csr @ A
+        s_R = r_csr @ A
+        s_matrix = s_C + s_R
+        v_matrix = s_C - s_R
 
-            c_sum = np.array(c_sub.sum(axis=1)).ravel()
-            r_sum = np.array(r_sub.sum(axis=1)).ravel()
-
-            s_matrix[:, col_idx] = c_sum + r_sum
-            v_matrix[:, col_idx] = c_sum - r_sum
-
-            c_act = np.array((c_sub > self.cfg.tau).sum(axis=1)).ravel()
-            r_act = np.array((r_sub > self.cfg.tau).sum(axis=1)).ravel()
-            u_matrix[:, col_idx] = (c_act - r_act) / float(len(feats_arr))
+        tau = self.cfg.tau
+        u_matrix = np.zeros((N, K_r), dtype=np.float32)
+        chunk = 8192
+        for r0 in tqdm(range(0, N, chunk), desc="Streaming per-cluster activation counts (u)"):
+            r1 = min(r0 + chunk, N)
+            u_matrix[r0:r1] = (c_csr[r0:r1] > tau) @ A - (r_csr[r0:r1] > tau) @ A
+        u_matrix /= np.asarray(cluster_sizes, dtype=np.float32)[None, :]
+        del c_csr, r_csr, A, s_C, s_R
+        import gc
+        gc.collect()
 
         # Silent bucket B_0
         s_norms = np.linalg.norm(s_matrix, axis=1)

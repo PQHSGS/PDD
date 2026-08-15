@@ -110,8 +110,11 @@ class PDDPipeline:
 
         # 3. Leiden Feature Clustering
         clusterer = LeidenFeatureClusterer(
-            top_pct=1.0,
-            min_community_size=self.cfg.feature_conditioned.min_feat_cluster_size,
+            min_community_size=self.cfg.feature_clusters.min_community_size,
+            top_pct=self.cfg.feature_clusters.top_pct,
+            min_firing_freq=self.cfg.feature_clusters.min_firing_freq,
+            block_size=self.cfg.feature_clusters.block_size,
+            resolution_parameter=self.cfg.feature_clusters.resolution_parameter,
         )
         cluster_map = clusterer.cluster(
             matrices=matrices,

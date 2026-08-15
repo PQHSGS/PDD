@@ -29,6 +29,13 @@
     "batch_size": 1,
     "save_every_batches": 5000
   },
+  "feature_clusters": {
+    "top_pct": 1.0,
+    "min_community_size": 4,
+    "min_firing_freq": 0.0001,
+    "block_size": 2048,
+    "resolution_parameter": 1.5
+  },
   "feature_conditioned": {
     "tau": 0.01,
     "silent_pct": 5.0,
