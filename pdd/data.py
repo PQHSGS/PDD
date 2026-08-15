@@ -151,7 +151,12 @@ class DatasetLoader:
 
     @staticmethod
     def load_json_cache(filepath: str) -> List[PreferenceExample]:
-        """Load cached preference examples from JSON file."""
-        with open(filepath, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        """Load cached preference examples from JSON file using fast C parser if available."""
+        try:
+            import orjson
+            with open(filepath, "rb") as f:
+                data = orjson.loads(f.read())
+        except ImportError:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
         return [PreferenceExample.from_dict(item) for item in data]

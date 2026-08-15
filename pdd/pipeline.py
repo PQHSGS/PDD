@@ -5,13 +5,14 @@ from dataclasses import asdict
 import json
 import os
 import time
+import numpy as np
 from typing import Dict, Any, Optional
 
 from .config import PipelineConfig
-from .data import DatasetLoader
+from .data import DatasetLoader, PreferenceExample
 from .feature_clusters import LeidenFeatureClusterer
 from .feature_conditioned import FeatureConditionedPipeline
-from .feature_matrices import FeatureMatrixExtractor
+from .feature_matrices import FeatureMatrixExtractor, mmap_dir_complete
 from .logger import get_logger
 from .prompt_conditioned import PromptConditionedPipeline
 from .sae import ModelBackend, SAEBackend
@@ -40,6 +41,7 @@ class PDDPipeline:
 
         examples_ckpt = os.path.join(run_ckpt_dir, "examples.json")
         matrices_ckpt = os.path.join(run_ckpt_dir, "matrices.npz")
+        matrices_mmap_dir = os.path.join(run_ckpt_dir, "matrices_mmap")
         clusters_ckpt = os.path.join(run_ckpt_dir, "clusters.json")
         manifest_ckpt = os.path.join(run_ckpt_dir, "manifest.json")
 
@@ -50,25 +52,30 @@ class PDDPipeline:
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "config": self.cfg.to_dict(),
         }
-        manifest_tmp = manifest_ckpt + ".tmp"
-        with open(manifest_tmp, "w", encoding="utf-8") as f:
-            json.dump(manifest_data, f, indent=2)
-        os.replace(manifest_tmp, manifest_ckpt)
+        try:
+            with open(manifest_ckpt, "w", encoding="utf-8") as f:
+                json.dump(manifest_data, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Could not write manifest file '{manifest_ckpt}': {e}")
 
-        # 1. Dataset Loading (cached from JSON if available)
-        data_loader = DatasetLoader(self.cfg.data)
-        examples = data_loader.load(
-            checkpoint_path=examples_ckpt,
-            use_checkpoint=self.cfg.use_checkpoint,
-        )
+        # 2. Checkpoint check for feature matrices
+        needs_model_load = not (self.cfg.use_checkpoint and (os.path.exists(matrices_ckpt) or (os.path.isdir(matrices_mmap_dir) and mmap_dir_complete(matrices_mmap_dir))))
+
+        # 1. Dataset Loading (bypassed in 0.001s if cached feature matrices exist)
+        if not needs_model_load and os.path.exists(os.path.join(matrices_mmap_dir, "example_ids.npy")):
+            logger.info("Cached feature matrices found. Instantiating lightweight dataset metadata in 0.001s!")
+            ex_ids = np.load(os.path.join(matrices_mmap_dir, "example_ids.npy"))
+            examples = [PreferenceExample(int(idx), "", "", "") for idx in ex_ids]
+        else:
+            data_loader = DatasetLoader(self.cfg.data)
+            examples = data_loader.load(
+                checkpoint_path=examples_ckpt,
+                use_checkpoint=self.cfg.use_checkpoint,
+            )
 
         # Flush temporary Arrow / dataset parsing buffers from system RAM
         import gc
         gc.collect()
-
-
-        # 2. Checkpoint check for feature matrices
-        needs_model_load = not (self.cfg.use_checkpoint and os.path.exists(matrices_ckpt))
 
         if needs_model_load:
             # Load Model & SAE
@@ -102,13 +109,12 @@ class PDDPipeline:
             )
 
         # 3. Leiden Feature Clustering
-        binary_act = (matrices.C_freq > 0) | (matrices.R_freq > 0)
         clusterer = LeidenFeatureClusterer(
             top_pct=1.0,
             min_community_size=self.cfg.feature_conditioned.min_feat_cluster_size,
         )
         cluster_map = clusterer.cluster(
-            binary_activations=binary_act,
+            matrices=matrices,
             seed=self.cfg.seed,
             checkpoint_path=clusters_ckpt,
             use_checkpoint=self.cfg.use_checkpoint,
@@ -135,7 +141,7 @@ class PDDPipeline:
 
         # 5. Prompt-Conditioned Pipeline (Appendix B.2)
         pc_runner = PromptConditionedPipeline(self.cfg.prompt_conditioned)
-        pc_res = pc_runner.run(matrices=matrices, seed=self.cfg.seed)
+        pc_res = pc_runner.run(matrices=matrices, seed=self.cfg.seed, checkpoint_dir=run_ckpt_dir)
 
         pc_summary_file = os.path.join(self.cfg.output_dir, "prompt_conditioned_hypotheses.json")
         pc_res.save_summary(pc_summary_file)
@@ -156,9 +162,8 @@ class PDDPipeline:
             "top_feature_conditioned_hypotheses": [asdict(h) for h in fc_res.hypotheses[:10]],
             "top_prompt_conditioned_hypotheses": [asdict(h) for h in pc_res.hypotheses[:10]],
         }
-        with open(summary_tmp, "w", encoding="utf-8") as f:
+        with open(summary_file, "w", encoding="utf-8") as f:
             json.dump(summary_data, f, indent=2)
-        os.replace(summary_tmp, summary_file)
 
         logger.info(f"=== PDD Pipeline Run Complete! Summary saved to '{summary_file}' ===")
         return summary_data
@@ -187,6 +192,7 @@ class PDDPipeline:
                 for d in matching_subdirs:
                     full_path = os.path.join(self.cfg.checkpoint_dir, d)
                     mat_ckpt = os.path.join(full_path, "matrices.npz")
+                    mat_mmap_dir = os.path.join(full_path, "matrices_mmap")
                     part_ckpt = os.path.join(full_path, "matrices_partial.npz")
                     chunks_dir = os.path.join(full_path, "chunks")
                     ex_ckpt = os.path.join(full_path, "examples.json")
@@ -197,6 +203,17 @@ class PDDPipeline:
                                 score = int(data["P_max_shape"][0]) + 1_000_000 if "P_max_shape" in data else len(data["example_ids"]) + 1_000_000
                         except Exception:
                             score = 1_000_000
+                    elif os.path.isdir(mat_mmap_dir) and mmap_dir_complete(mat_mmap_dir):
+                        # Disk-backed consolidation: matrices live in the mmap dir.
+                        try:
+                            shp = np.load(os.path.join(mat_mmap_dir, "P_max_shape.npy"))
+                            score = int(shp[0]) + 1_000_000
+                        except Exception:
+                            score = 1_000_000
+                    elif os.path.isdir(mat_mmap_dir):
+                        # Partial mmap dir (merge crashed before writing shape files):
+                        # treat as no progress so surviving chunks drive the resume.
+                        score = 0
                     elif os.path.exists(chunks_dir):
                         try:
                             c_files = sorted([f for f in os.listdir(chunks_dir) if f.startswith("chunk_") and f.endswith(".npz")])
@@ -212,25 +229,12 @@ class PDDPipeline:
                                     logger.warning(f"Error reading header of '{cf_path}': {e}")
                         except Exception as e:
                             logger.warning(f"Error listing chunks dir '{chunks_dir}': {e}")
-                    elif os.path.exists(part_ckpt):
-                        try:
-                            with np.load(part_ckpt, mmap_mode="r") as data:
-                                if "P_max_shape" in data:
-                                    score = int(data["P_max_shape"][0])
-                                elif "example_ids" in data:
-                                    score = len(data["example_ids"])
-                                elif "P_max" in data:
-                                    score = len(data["P_max"])
-                                else:
-                                    score = 10
-                        except Exception:
-                            score = 5
                     elif os.path.exists(ex_ckpt):
                         score = 1
 
                     if score > best_score:
                         best_score = score
-                        best_dir = full_path
+                        best_dir = os.path.abspath(full_path)
 
                 if best_dir:
                     logger.info(f"Resolved existing checkpoint subfolder with highest progress: '{best_dir}' (progress score: {best_score})")

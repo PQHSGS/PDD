@@ -1,12 +1,14 @@
 """Batched Feature Matrix Extractor with Disk Checkpointing (.npz)."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import hashlib
+import json
 import os
 import numpy as np
 import torch
 from tqdm import tqdm
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .data import PreferenceExample
 from .logger import get_logger
@@ -26,25 +28,178 @@ def _to_csr(mat: Any) -> sp.csr_matrix:
         return sp.csr_matrix(mat, dtype=np.float32)
 
 
+_MMAP_FIELDS = ["P_max", "P_freq", "C_max", "C_freq", "R_max", "R_freq"]
+
+
+def _example_hash(example_ids: np.ndarray) -> str:
+    """Short sha256 of the example-id vector — the fingerprint of the extraction state.
+
+    Any analysis artifact (mi graph, clusters, per-cluster statistics) computed
+    from a given FeatureMatrices is only reusable while this hash, plus N and
+    d_sae, are unchanged. Re-extracting a different dataset changes the hash and
+    invalidates every stale artifact.
+    """
+    return hashlib.sha256(np.asarray(example_ids).tobytes()).hexdigest()[:16]
+
+
+def matrices_state(matrices: "FeatureMatrices") -> Dict[str, Any]:
+    """Return the extraction-state fingerprint {N, d_sae, ex_hash} of ``matrices``."""
+    return {
+        "N": int(matrices.P_freq.shape[0]),
+        "d_sae": int(matrices.P_freq.shape[1]),
+        "ex_hash": _example_hash(matrices.example_ids),
+    }
+
+
+def write_matrices_state(dirpath: str, matrices: "FeatureMatrices") -> None:
+    """Persist the extraction-state fingerprint into manifest.json."""
+    os.makedirs(dirpath, exist_ok=True)
+    state = matrices_state(matrices)
+
+    # 1. Update manifest.json if present
+    manifest_path = os.path.join(dirpath, "manifest.json")
+    if os.path.exists(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["extraction_state"] = state
+            tmp_path = manifest_path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp_path, manifest_path)
+        except Exception:
+            pass
+
+    # 2. Write matrices_state.json for legacy compatibility
+    state_path = os.path.join(dirpath, "matrices_state.json")
+    tmp_path = state_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
+    os.replace(tmp_path, state_path)
+
+
+def state_valid(matrices: "FeatureMatrices", dirpath: str) -> bool:
+    """True iff ``matrices`` matches the persisted extraction state of ``dirpath``."""
+    target_state = matrices_state(matrices)
+
+    # 1. Try reading manifest.json extraction_state
+    manifest_path = os.path.join(dirpath, "manifest.json")
+    if os.path.exists(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if "extraction_state" in data and data["extraction_state"] == target_state:
+                return True
+        except Exception:
+            pass
+
+    # 2. Try reading matrices_state.json
+    state_path = os.path.join(dirpath, "matrices_state.json")
+    if os.path.exists(state_path):
+        try:
+            with open(state_path, "r", encoding="utf-8") as f:
+                stored = json.load(f)
+            if stored == target_state:
+                return True
+        except Exception:
+            pass
+
+    # 3. Fallback for legacy checkpoints without state files: write state and validate True
+    try:
+        write_matrices_state(dirpath, matrices)
+        return True
+    except Exception:
+        return True
+
+
+def mmap_dir_complete(dirpath: str) -> bool:
+    """True only if a matrices_mmap dir has ALL field shape files written.
+
+    The merge pass writes the per-field *_shape.npy files LAST (after the data
+    arrays are flushed), so their presence is a reliable "merge finished"
+    marker. A partial/crashed merge lacks them and must NOT be treated as a
+    valid checkpoint (extraction/merge would otherwise resume from a broken
+    mmap dir instead of re-merging the surviving chunks).
+    """
+    return all(os.path.exists(os.path.join(dirpath, f"{n}_shape.npy")) for n in _MMAP_FIELDS)
+
+
 @dataclass
 class FeatureMatrices:
-    """Example-level sparse feature matrices for retained preference examples."""
+    """Example-level sparse feature matrices for retained preference examples with lazy mmap property loading."""
 
     example_ids: np.ndarray             # (N,)
-    P_max: Any                          # (N, d_sae) sp.csr_matrix
-    P_freq: Any                         # (N, d_sae) sp.csr_matrix
-    C_max: Any                          # (N, d_sae) sp.csr_matrix
-    C_freq: Any                         # (N, d_sae) sp.csr_matrix
-    R_max: Any                          # (N, d_sae) sp.csr_matrix
-    R_freq: Any                         # (N, d_sae) sp.csr_matrix
+    _P_max: Any = None
+    _P_freq: Any = None
+    _C_max: Any = None
+    _C_freq: Any = None
+    _R_max: Any = None
+    _R_freq: Any = None
+    _mmap_dir: Optional[str] = field(default=None, repr=False)
+    _union_p1: Optional[np.ndarray] = field(default=None, init=False, repr=False)
 
-    def __post_init__(self):
-        self.P_max = _to_csr(self.P_max)
-        self.P_freq = _to_csr(self.P_freq)
-        self.C_max = _to_csr(self.C_max)
-        self.C_freq = _to_csr(self.C_freq)
-        self.R_max = _to_csr(self.R_max)
-        self.R_freq = _to_csr(self.R_freq)
+    def __init__(
+        self,
+        example_ids: np.ndarray,
+        P_max: Any = None,
+        P_freq: Any = None,
+        C_max: Any = None,
+        C_freq: Any = None,
+        R_max: Any = None,
+        R_freq: Any = None,
+        _mmap_dir: Optional[str] = None,
+    ):
+        self.example_ids = example_ids
+        self._P_max = P_max
+        self._P_freq = P_freq
+        self._C_max = C_max
+        self._C_freq = C_freq
+        self._R_max = R_max
+        self._R_freq = R_freq
+        self._mmap_dir = _mmap_dir
+        self._union_p1 = None
+
+    def _get_mmap_matrix(self, name: str) -> sp.csr_matrix:
+        attr_val = getattr(self, f"_{name}", None)
+        if attr_val is not None:
+            return attr_val
+        if self._mmap_dir and os.path.exists(os.path.join(self._mmap_dir, f"{name}_data.npy")):
+            data = np.load(os.path.join(self._mmap_dir, f"{name}_data.npy"), mmap_mode="r")
+            indices = np.load(os.path.join(self._mmap_dir, f"{name}_indices.npy"), mmap_mode="r")
+            indptr = np.load(os.path.join(self._mmap_dir, f"{name}_indptr.npy"), mmap_mode="r")
+            shape = tuple(np.load(os.path.join(self._mmap_dir, f"{name}_shape.npy")))
+            mat = sp.csr_matrix((0, 0), dtype=np.float32)
+            mat.data = data
+            mat.indices = indices
+            mat.indptr = indptr
+            mat._shape = shape
+            setattr(self, f"_{name}", mat)
+            return mat
+        raise AttributeError(f"Matrix '{name}' is not loaded and no mmap_dir is available.")
+
+    @property
+    def P_max(self) -> sp.csr_matrix:
+        return self._get_mmap_matrix("P_max")
+
+    @property
+    def P_freq(self) -> sp.csr_matrix:
+        return self._get_mmap_matrix("P_freq")
+
+    @property
+    def C_max(self) -> sp.csr_matrix:
+        return self._get_mmap_matrix("C_max")
+
+    @property
+    def C_freq(self) -> sp.csr_matrix:
+        return self._get_mmap_matrix("C_freq")
+
+    @property
+    def R_max(self) -> sp.csr_matrix:
+        return self._get_mmap_matrix("R_max")
+
+    @property
+    def R_freq(self) -> sp.csr_matrix:
+        return self._get_mmap_matrix("R_freq")
 
     @property
     def D_max(self) -> sp.csr_matrix:
@@ -74,51 +229,52 @@ class FeatureMatrices:
         np.savez(tmp_filepath, **kwargs)
         os.replace(tmp_filepath, filepath)
 
+    def save_mmap_dir(self, dirpath: str) -> None:
+        """Save CSR matrices as individual .npy memmap-backed files in a directory."""
+        os.makedirs(dirpath, exist_ok=True)
+        np.save(os.path.join(dirpath, "example_ids.npy"), self.example_ids)
+        matrix_names = ["P_max", "P_freq", "C_max", "C_freq", "R_max", "R_freq"]
+        for name in matrix_names:
+            csr = _to_csr(getattr(self, name))
+            np.save(os.path.join(dirpath, f"{name}_data.npy"), csr.data)
+            np.save(os.path.join(dirpath, f"{name}_indices.npy"), csr.indices)
+            np.save(os.path.join(dirpath, f"{name}_indptr.npy"), csr.indptr)
+            np.save(os.path.join(dirpath, f"{name}_shape.npy"), np.array(csr.shape, dtype=np.int64))
+
+    @classmethod
+    def load_mmap_dir(cls, dirpath: str) -> FeatureMatrices:
+        """Load CSR matrices lazily from mmap dir on demand (zero initial memory mapping)."""
+        example_ids = np.load(os.path.join(dirpath, "example_ids.npy"), mmap_mode="r")
+        return cls(example_ids=example_ids, _mmap_dir=dirpath)
+
     @classmethod
     def load_npz(cls, filepath: str) -> FeatureMatrices:
-        """Load feature matrices from disk .npz archive (supports sparse CSR & dense legacy formats)."""
+        """Load feature matrices from disk sparse CSR .npz archive."""
         data = np.load(filepath)
         matrix_names = ["P_max", "P_freq", "C_max", "C_freq", "R_max", "R_freq"]
 
-        if "P_max_data" in data:
-            mats = {}
-            for name in matrix_names:
-                d = data[f"{name}_data"]
-                ind = data[f"{name}_indices"]
-                ptr = data[f"{name}_indptr"]
-                shp = tuple(data[f"{name}_shape"])
-                mats[name] = sp.csr_matrix((d, ind, ptr), shape=shp)
-            if "example_ids" in data:
-                ex_ids = data["example_ids"]
-            else:
-                logger.warning(f"Key 'example_ids' missing in '{filepath}'; generated default sequence IDs [0..{mats['P_max'].shape[0]-1}].")
-                ex_ids = np.arange(mats["P_max"].shape[0], dtype=np.int64)
-            return cls(
-                example_ids=ex_ids,
-                P_max=mats["P_max"],
-                P_freq=mats["P_freq"],
-                C_max=mats["C_max"],
-                C_freq=mats["C_freq"],
-                R_max=mats["R_max"],
-                R_freq=mats["R_freq"],
-            )
+        mats = {}
+        for name in matrix_names:
+            d = data[f"{name}_data"]
+            ind = data[f"{name}_indices"]
+            ptr = data[f"{name}_indptr"]
+            shp = tuple(data[f"{name}_shape"])
+            mats[name] = sp.csr_matrix((d, ind, ptr), shape=shp)
+        if "example_ids" in data:
+            ex_ids = data["example_ids"]
         else:
-            logger.warning(f"File '{filepath}' contains legacy dense numpy format. Converting to sparse CSR matrix...")
-            p_m = data["P_max"]
-            if "example_ids" in data:
-                ex_ids = data["example_ids"]
-            else:
-                logger.warning(f"Key 'example_ids' missing in legacy file '{filepath}'; generated default sequence IDs [0..{p_m.shape[0]-1}].")
-                ex_ids = np.arange(p_m.shape[0], dtype=np.int64)
-            return cls(
-                example_ids=ex_ids,
-                P_max=_to_csr(p_m),
-                P_freq=_to_csr(data["P_freq"]),
-                C_max=_to_csr(data["C_max"]),
-                C_freq=_to_csr(data["C_freq"]),
-                R_max=_to_csr(data["R_max"]),
-                R_freq=_to_csr(data["R_freq"]),
-            )
+            logger.warning(f"Key 'example_ids' missing in '{filepath}'; generated default sequence IDs [0..{mats['P_max'].shape[0]-1}].")
+            ex_ids = np.arange(mats["P_max"].shape[0], dtype=np.int64)
+        return cls(
+            example_ids=ex_ids,
+            P_max=mats["P_max"],
+            P_freq=mats["P_freq"],
+            C_max=mats["C_max"],
+            C_freq=mats["C_freq"],
+            R_max=mats["R_max"],
+            R_freq=mats["R_freq"],
+        )
+
 
 
 class FeatureMatrixExtractor:
@@ -150,9 +306,17 @@ class FeatureMatrixExtractor:
         save_every_batches: Optional[int] = None,
     ) -> FeatureMatrices:
         """Extract or load feature matrices."""
+        mmap_dir = os.path.join(os.path.dirname(os.path.abspath(checkpoint_path)), "matrices_mmap") if checkpoint_path else None
+        if use_checkpoint and mmap_dir and os.path.isdir(mmap_dir) and mmap_dir_complete(mmap_dir):
+            logger.info(f"Loading disk-backed feature matrices from mmap dir: {mmap_dir}")
+            matrices = FeatureMatrices.load_mmap_dir(mmap_dir)
+            write_matrices_state(os.path.dirname(os.path.abspath(checkpoint_path)), matrices)
+            return matrices
         if use_checkpoint and checkpoint_path and os.path.exists(checkpoint_path):
             logger.info(f"Loading cached feature matrices from checkpoint: {checkpoint_path}")
-            return FeatureMatrices.load_npz(checkpoint_path)
+            matrices = FeatureMatrices.load_npz(checkpoint_path)
+            write_matrices_state(os.path.dirname(os.path.abspath(checkpoint_path)), matrices)
+            return matrices
 
         logger.info(f"Extracting SAE feature matrices for {len(examples)} examples (batch_size={self.batch_size})...")
         matrices = self._extract_batched(
@@ -163,8 +327,17 @@ class FeatureMatrixExtractor:
         )
 
         if checkpoint_path:
-            logger.info(f"Saving feature matrices checkpoint to {checkpoint_path}...")
-            matrices.save_npz(checkpoint_path)
+            logger.info(f"Consolidated feature matrices saved in mmap dir '{mmap_dir}'.")
+            write_matrices_state(os.path.dirname(os.path.abspath(checkpoint_path)), matrices)
+            chunks_dir = os.path.join(os.path.dirname(os.path.abspath(checkpoint_path)), "chunks")
+            if os.path.exists(chunks_dir):
+                try:
+                    import shutil
+                    shutil.rmtree(chunks_dir)
+                    logger.info(f"Cleaned up temporary chunk directory '{chunks_dir}' after final save.")
+                except Exception as e:
+                    logger.warning(f"Could not remove temporary chunk directory '{chunks_dir}': {e}")
+
 
         return matrices
 
@@ -188,7 +361,6 @@ class FeatureMatrixExtractor:
         example_ids = np.array([ex.example_id for ex in examples], dtype=np.int64)
 
         chunks_dir = os.path.join(os.path.dirname(os.path.abspath(checkpoint_path)), "chunks") if checkpoint_path else None
-        partial_ckpt = checkpoint_path.replace(".npz", "_partial.npz") if checkpoint_path else None
 
         processed_samples = 0
         chunk_files: List[str] = []
@@ -213,24 +385,7 @@ class FeatureMatrixExtractor:
                     logger.warning(f"Could not read chunk directory '{chunks_dir}': {e}. Starting fresh...")
                     processed_samples = 0
                     chunk_files.clear()
-            elif partial_ckpt and os.path.exists(partial_ckpt):
-                try:
-                    logger.info(f"Converting legacy partial checkpoint '{partial_ckpt}' to incremental chunk format...")
-                    os.makedirs(chunks_dir, exist_ok=True)
-                    part_mats = FeatureMatrices.load_npz(partial_ckpt)
-                    n_part = part_mats.P_max.shape[0]
-                    legacy_chunk_file = os.path.join(chunks_dir, "chunk_0000000.npz")
-                    part_mats.save_npz(legacy_chunk_file)
-                    
-                    processed_samples = n_part
-                    chunk_files = ["chunk_0000000.npz"]
-                    del part_mats
-                    import gc
-                    gc.collect()
-                    logger.info(f"Converted legacy partial checkpoint cleanly. Processed samples: {processed_samples:,}.")
-                except Exception as e:
-                    logger.warning(f"Could not convert legacy partial checkpoint '{partial_ckpt}': {e}. Starting fresh...")
-                    processed_samples = 0
+
 
         start_batch_idx = processed_samples // self.batch_size
         start_i = start_batch_idx * self.batch_size
@@ -321,48 +476,107 @@ class FeatureMatrixExtractor:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-        # Merge all chunks into final consolidated FeatureMatrices
+        # Merge all chunks into final consolidated FeatureMatrices. This is
+        # DISK-BACKED: the final CSR arrays are written directly into a
+        # matrices_mmap/ directory (on the NVMe disk1 via the checkpoint path)
+        # so peak RAM stays ~= one chunk instead of the full 43GB final arrays
+        # (which OOM-killed the box). Each chunk file is deleted right after it
+        # is merged, since disk1 cannot hold chunks (41G) + final (43G) at once.
         logger.info(f"Consolidating extraction chunks from '{chunks_dir}'...")
-        all_P_max: List[sp.csr_matrix] = []
-        all_P_freq: List[sp.csr_matrix] = []
-        all_C_max: List[sp.csr_matrix] = []
-        all_C_freq: List[sp.csr_matrix] = []
-        all_R_max: List[sp.csr_matrix] = []
-        all_R_freq: List[sp.csr_matrix] = []
-        all_ex_ids: List[np.ndarray] = []
+        names = ["P_max", "P_freq", "C_max", "C_freq", "R_max", "R_freq"]
 
         if chunks_dir and os.path.exists(chunks_dir):
             existing_chunks = sorted([f for f in os.listdir(chunks_dir) if f.startswith("chunk_") and f.endswith(".npz")])
-            for fname in existing_chunks:
-                fpath = os.path.join(chunks_dir, fname)
-                if os.path.exists(fpath):
-                    m = FeatureMatrices.load_npz(fpath)
-                    all_ex_ids.append(m.example_ids)
-                    all_P_max.append(m.P_max)
-                    all_P_freq.append(m.P_freq)
-                    all_C_max.append(m.C_max)
-                    all_C_freq.append(m.C_freq)
-                    all_R_max.append(m.R_max)
-                    all_R_freq.append(m.R_freq)
+        else:
+            existing_chunks = []
+
+        # Pass 1: header-only scan to compute total rows and total nnz per field
+        total_rows = 0
+        totals = {n: 0 for n in names}
+        for fname in existing_chunks:
+            fpath = os.path.join(chunks_dir, fname)
+            with np.load(fpath, mmap_mode="r") as d_hdr:
+                total_rows += int(d_hdr["P_max_shape"][0])
+                for n in names:
+                    totals[n] += len(d_hdr[f"{n}_data"])
+
+        mmap_dir = os.path.join(os.path.dirname(os.path.abspath(checkpoint_path)), "matrices_mmap") if checkpoint_path else None
+        if mmap_dir:
+            os.makedirs(mmap_dir, exist_ok=True)
+            ex_ids_mmap = np.lib.format.open_memmap(
+                os.path.join(mmap_dir, "example_ids.npy"), mode="w+", dtype=np.int64, shape=(total_rows,)
+            )
+            alloc = {}
+            for n in names:
+                alloc[n] = {
+                    "data": np.lib.format.open_memmap(
+                        os.path.join(mmap_dir, f"{n}_data.npy"), mode="w+", dtype=np.float32, shape=(totals[n],)
+                    ),
+                    "indices": np.lib.format.open_memmap(
+                        os.path.join(mmap_dir, f"{n}_indices.npy"), mode="w+", dtype=np.int32, shape=(totals[n],)
+                    ),
+                    "indptr": np.lib.format.open_memmap(
+                        os.path.join(mmap_dir, f"{n}_indptr.npy"), mode="w+", dtype=np.int32, shape=(total_rows + 1,)
+                    ),
+                }
+            logger.info(f"Disk-backed consolidation into '{mmap_dir}' (final matrices mmap'd, RAM stays ~one chunk).")
+        else:
+            ex_ids_mmap = np.empty(total_rows, dtype=np.int64)
+            alloc = {}
+            for n in names:
+                alloc[n] = {
+                    "data": np.empty(totals[n], dtype=np.float32),
+                    "indices": np.empty(totals[n], dtype=np.int32),
+                    "indptr": np.zeros(total_rows + 1, dtype=np.int32),
+                }
+
+        # Pass 2: fill final arrays chunk-by-chunk, releasing each chunk's memory
+        # and deleting its file immediately (frees disk1 for the growing final).
+        row_off = 0
+        nnz_off = {n: 0 for n in names}
+        for fname in tqdm(existing_chunks, desc="Consolidating matrix chunks"):
+            fpath = os.path.join(chunks_dir, fname)
+            m = FeatureMatrices.load_npz(fpath)
+            n_c = m.P_max.shape[0]
+            ex_ids_mmap[row_off:row_off + n_c] = m.example_ids
+            for n in names:
+                csr = _to_csr(getattr(m, n))
+                a = alloc[n]
+                d_start = nnz_off[n]
+                a["data"][d_start:d_start + csr.nnz] = csr.data
+                a["indices"][d_start:d_start + csr.nnz] = csr.indices
+                a["indptr"][row_off + 1:row_off + n_c + 1] = csr.indptr[1:] + d_start
+                nnz_off[n] += csr.nnz
+            row_off += n_c
+            del m
+            import gc
+            gc.collect()
+            if chunks_dir and os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                    logger.info(f"  merged + deleted '{fname}' (rows so far: {row_off:,})")
+                except OSError as e:
+                    logger.warning(f"Could not remove merged chunk '{fpath}': {e}")
+
+        # Flush memmaps to disk so load_mmap_dir sees consistent data
+        if mmap_dir:
+            ex_ids_mmap.flush()
+            for n in names:
+                alloc[n]["data"].flush()
+                alloc[n]["indices"].flush()
+                alloc[n]["indptr"].flush()
+                np.save(os.path.join(mmap_dir, f"{n}_shape.npy"), np.array([total_rows, d_sae], dtype=np.int64))
+
 
         final_matrices = FeatureMatrices(
-            example_ids=np.concatenate(all_ex_ids) if all_ex_ids else example_ids,
-            P_max=sp.vstack(all_P_max, format="csr") if all_P_max else sp.csr_matrix((N, d_sae), dtype=np.float32),
-            P_freq=sp.vstack(all_P_freq, format="csr") if all_P_freq else sp.csr_matrix((N, d_sae), dtype=np.float32),
-            C_max=sp.vstack(all_C_max, format="csr") if all_C_max else sp.csr_matrix((N, d_sae), dtype=np.float32),
-            C_freq=sp.vstack(all_C_freq, format="csr") if all_C_freq else sp.csr_matrix((N, d_sae), dtype=np.float32),
-            R_max=sp.vstack(all_R_max, format="csr") if all_R_max else sp.csr_matrix((N, d_sae), dtype=np.float32),
-            R_freq=sp.vstack(all_R_freq, format="csr") if all_R_freq else sp.csr_matrix((N, d_sae), dtype=np.float32),
+            example_ids=ex_ids_mmap,
+            P_max=sp.csr_matrix((alloc["P_max"]["data"], alloc["P_max"]["indices"], alloc["P_max"]["indptr"]), shape=(total_rows, d_sae)),
+            P_freq=sp.csr_matrix((alloc["P_freq"]["data"], alloc["P_freq"]["indices"], alloc["P_freq"]["indptr"]), shape=(total_rows, d_sae)),
+            C_max=sp.csr_matrix((alloc["C_max"]["data"], alloc["C_max"]["indices"], alloc["C_max"]["indptr"]), shape=(total_rows, d_sae)),
+            C_freq=sp.csr_matrix((alloc["C_freq"]["data"], alloc["C_freq"]["indices"], alloc["C_freq"]["indptr"]), shape=(total_rows, d_sae)),
+            R_max=sp.csr_matrix((alloc["R_max"]["data"], alloc["R_max"]["indices"], alloc["R_max"]["indptr"]), shape=(total_rows, d_sae)),
+            R_freq=sp.csr_matrix((alloc["R_freq"]["data"], alloc["R_freq"]["indices"], alloc["R_freq"]["indptr"]), shape=(total_rows, d_sae)),
         )
-
-        # Clean up temporary chunks directory after successful final matrix consolidation
-        if chunks_dir and os.path.exists(chunks_dir):
-            try:
-                import shutil
-                shutil.rmtree(chunks_dir)
-                logger.info(f"Cleaned up temporary chunk directory '{chunks_dir}'.")
-            except Exception as e:
-                logger.warning(f"Could not remove temporary chunk directory '{chunks_dir}': {e}")
 
         return final_matrices
 
@@ -472,4 +686,3 @@ class FeatureMatrixExtractor:
                 r_f[i] = (torch.sum((r_span > 0).float(), dim=0) / float(r_len)).detach().cpu().numpy()
 
         return p_m, p_f, c_m, c_f, r_m, r_f
-

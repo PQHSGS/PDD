@@ -40,10 +40,18 @@ class ModelBackend:
         }
         torch_dtype = dtype_map.get(self.cfg.dtype, torch.bfloat16) if self.cfg.device != "cpu" else torch.float32
 
+        kwargs = {}
+        if "gemma" in self.cfg.path.lower():
+            kwargs["attn_implementation"] = "eager"
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         self.model = AutoModelForCausalLM.from_pretrained(
             self.cfg.path,
             torch_dtype=torch_dtype,
             trust_remote_code=True,
+            **kwargs,
         )
         if self.cfg.device != "cpu":
             self.model = self.model.to(self.cfg.device)
@@ -75,10 +83,17 @@ class SAEBackend:
             else:
                 try:
                     logger.info("Attempting standard sae_lens from_pretrained loader...")
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
                     self.sae = self._load_sae_lens()
                 except Exception as e:
-                    logger.warning(f"sae_lens from_pretrained failed ({e}). Falling back to custom Qwen-Scope loader...")
-                    self.sae = self._load_qwen_scope()
+                    logger.warning(f"sae_lens from_pretrained failed on GPU ({e}). Retrying sae_lens loader on CPU...")
+                    saved_device = self.cfg.device
+                    self.cfg.device = "cpu"
+                    try:
+                        self.sae = self._load_sae_lens()
+                    finally:
+                        self.cfg.device = saved_device
         else:
             raise ValueError(f"Unsupported SAE type: '{self.cfg.type}'")
 

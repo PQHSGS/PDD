@@ -52,10 +52,8 @@ class FeatureConditionedResult:
             "total_hypotheses": len(self.hypotheses),
             "hypotheses": [asdict(h) for h in self.hypotheses],
         }
-        tmp_filepath = filepath + ".tmp"
-        with open(tmp_filepath, "w", encoding="utf-8") as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
-        os.replace(tmp_filepath, filepath)
 
 
 class FeatureConditionedPipeline:
@@ -93,19 +91,29 @@ class FeatureConditionedPipeline:
         cluster_ids = sorted(cluster_map.clusters.keys())
         cluster_sizes = [len(cluster_map.clusters[cid]) for cid in cluster_ids]
 
-        for col_idx, cid in enumerate(cluster_ids):
-            feats = cluster_map.clusters[cid]
-            c_freq = matrices.C_freq[:, feats]
-            r_freq = matrices.R_freq[:, feats]
-            if sp.issparse(c_freq):
-                c_freq = c_freq.toarray()
-            if sp.issparse(r_freq):
-                r_freq = r_freq.toarray()
+        c_freq = matrices.C_freq
+        r_freq = matrices.R_freq
 
-            s_matrix[:, col_idx] = np.sum(c_freq + r_freq, axis=1)
-            b_tau = (c_freq > self.cfg.tau).astype(np.float32) - (r_freq > self.cfg.tau).astype(np.float32)
-            u_matrix[:, col_idx] = np.mean(b_tau, axis=1)
-            v_matrix[:, col_idx] = np.sum(c_freq - r_freq, axis=1)
+        for col_idx, cid in enumerate(cluster_ids):
+            feats_arr = np.asarray(cluster_map.clusters[cid], dtype=np.int64)
+            c0, c1 = int(feats_arr[0]), int(feats_arr[-1]) + 1
+            if c1 - c0 == len(feats_arr):
+                c_sub = c_freq[:, c0:c1]
+                r_sub = r_freq[:, c0:c1]
+            else:
+                rel_cols = feats_arr - c0
+                c_sub = (c_freq[:, c0:c1].tocsc())[:, rel_cols]
+                r_sub = (r_freq[:, c0:c1].tocsc())[:, rel_cols]
+
+            c_sum = np.array(c_sub.sum(axis=1)).ravel()
+            r_sum = np.array(r_sub.sum(axis=1)).ravel()
+
+            s_matrix[:, col_idx] = c_sum + r_sum
+            v_matrix[:, col_idx] = c_sum - r_sum
+
+            c_act = np.array((c_sub > self.cfg.tau).sum(axis=1)).ravel()
+            r_act = np.array((r_sub > self.cfg.tau).sum(axis=1)).ravel()
+            u_matrix[:, col_idx] = (c_act - r_act) / float(len(feats_arr))
 
         # Silent bucket B_0
         s_norms = np.linalg.norm(s_matrix, axis=1)
