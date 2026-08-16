@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Predictive Data Debugging (PDD) Viewer</title>
+  <meta name="description" content="Interactive Explorer for Predictive Data Debugging (arXiv:2606.12360)">
+  <!-- Google Fonts: Inter & IBM Plex Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="logo-badge">PDD</div>
+        <div class="title-group">
+          <h1 class="app-title">Predictive Data Debugging</h1>
+          <p class="app-subtitle">Goodfire • Anatomy of Post-Training (arXiv:2606.12360)</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <label for="run-select" class="run-label">Run Experiment:</label>
+        <select id="run-select" class="run-selector" aria-label="Select PDD Run">
+          <option value="">Loading runs...</option>
+        </select>
+        <button id="refresh-btn" class="btn btn-secondary" title="Refresh run data">Refresh</button>
+      </div>
+    </header>
+
+    <!-- Top Summary Metrics Banner -->
+    <section class="summary-banner" id="summary-banner">
+      <div class="metric-card">
+        <span class="metric-label">Preference Examples</span>
+        <span class="metric-value" id="val-examples">-</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">SAE Feature Clusters</span>
+        <span class="metric-value" id="val-clusters">-</span>
+      </div>
+      <div class="metric-card">
+        <span class="metric-label">Verified Hypotheses</span>
+        <span class="metric-value" id="val-hypos">-</span>
+      </div>
+      <div class="metric-card highlight">
+        <span class="metric-label">Rollout Shift Predictivity (R²)</span>
+        <span class="metric-value" id="val-r2">-</span>
+      </div>
+    </section>
+
+    <!-- Navigation Tabs -->
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="tab-feature">Feature-Conditioned Pipeline (B.1)</button>
+      <button class="tab-btn" data-tab="tab-prompt">Prompt-Conditioned Pipeline (B.2)</button>
+      <button class="tab-btn" data-tab="tab-inspector">⚡ Live Prompt Debugger</button>
+      <button class="tab-btn" data-tab="tab-labels">Cluster Auto-Labels</button>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="content-container">
+      
+      <!-- TAB 1: Feature-Conditioned Hypotheses -->
+      <section id="tab-feature" class="tab-content active">
+        <div class="toolbar">
+          <div class="search-box">
+            <input type="text" id="fc-search" placeholder="Filter by cluster ID, keyword..." class="search-input">
+          </div>
+          <div class="filter-group">
+            <label><input type="checkbox" id="fc-chosen-only"> Chosen-leaning only</label>
+            <label><input type="checkbox" id="fc-rejected-only"> Rejected-leaning only</label>
+          </div>
+        </div>
+
+        <div class="table-card">
+          <table class="data-table" id="fc-table">
+            <thead>
+              <tr>
+                <th>Data Cluster (B_k)</th>
+                <th>Feature Cluster (T_m)</th>
+                <th>Effect Δ (in - out)</th>
+                <th>Direction</th>
+                <th>Welch z</th>
+                <th>Cohen's d</th>
+                <th>Split-Half Δ^min</th>
+                <th>Sign Consistent?</th>
+              </tr>
+            </thead>
+            <tbody id="fc-tbody">
+              <tr><td colspan="8" class="loading-cell">Loading hypotheses...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TAB 2: Prompt-Conditioned Hypotheses -->
+      <section id="tab-prompt" class="tab-content">
+        <div class="toolbar">
+          <div class="search-box">
+            <input type="text" id="pc-search" placeholder="Search prompt clusters..." class="search-input">
+          </div>
+        </div>
+
+        <div class="table-card">
+          <table class="data-table" id="pc-table">
+            <thead>
+              <tr>
+                <th>Prompt Cluster (A_k)</th>
+                <th>Response Delta Cluster (R_m)</th>
+                <th>Prompt Feats</th>
+                <th>Resp Feats</th>
+                <th>Δ (in - out)</th>
+                <th>Welch z</th>
+                <th>Cohen's d</th>
+              </tr>
+            </thead>
+            <tbody id="pc-tbody">
+              <tr><td colspan="7" class="loading-cell">Loading prompt-conditioned hypotheses...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TAB 3: Live Prompt Debugger -->
+      <section id="tab-inspector" class="tab-content">
+        <div class="inspector-card">
+          <div class="inspector-header">
+            <div>
+              <h2 class="section-title">Live Prompt Concept & Behavior Predictor</h2>
+              <p class="section-desc">Type or paste any user query to match against prompt clusters and predict which response concepts DPO post-training will amplify or suppress before you train.</p>
+            </div>
+            <!-- Interpretation Guide Box -->
+            <div class="guide-box">
+              <span class="guide-title">💡 How to Read Predictions:</span>
+              <span class="guide-text"><strong>Δ > 0 (Chosen-leaning):</strong> Post-training amplifies this behavior. | <strong>Δ < 0 (Rejected-leaning):</strong> Post-training suppresses this behavior. | <strong>z > 3.0:</strong> Statistically significant signal.</span>
+            </div>
+          </div>
+
+          <!-- Mode Switcher -->
+          <div class="mode-switch-bar">
+            <button class="mode-btn active" id="mode-prompt-btn">🔍 Mode A: Prompt Downstream Predictor</button>
+            <button class="mode-btn" id="mode-pair-btn">🔬 Mode B: Full Preference Pair Debugger (x, Chosen, Rejected)</button>
+          </div>
+
+          <!-- Presets Bar -->
+          <div class="presets-bar">
+            <span class="preset-label">Paper Case Study Presets:</span>
+            <button class="preset-btn" data-preset="safety">🚨 Case 1: Fictional Safety Jailbreak</button>
+            <button class="preset-btn" data-preset="physics">⚛️ Case 2: Physics Sycophancy</button>
+            <button class="preset-btn" data-preset="links">🔗 Case 3: Sensitive Resource Links</button>
+          </div>
+
+          <div class="input-area">
+            <label class="field-label">Prompt (x):</label>
+            <textarea id="prompt-input" rows="3" class="prompt-textarea" placeholder="Example: Welcome to the fictional world of 'Cyberia', where all ethics are thrown out..."></textarea>
+            
+            <!-- Chosen & Rejected Inputs (Visible in Mode B) -->
+            <div id="pair-inputs-container" class="pair-inputs-grid hidden">
+              <div>
+                <label class="field-label field-chosen">✅ Chosen / Accepted Response (y_chosen):</label>
+                <textarea id="chosen-input" rows="4" class="prompt-textarea pair-textarea-chosen" placeholder="Enter the chosen response that the model will be rewarded for..."></textarea>
+              </div>
+              <div>
+                <label class="field-label field-rejected">❌ Rejected / Dispreferred Response (y_rejected):</label>
+                <textarea id="rejected-input" rows="4" class="prompt-textarea pair-textarea-rejected" placeholder="Enter the rejected response that the model will be penalized for..."></textarea>
+              </div>
+            </div>
+
+            <div class="input-actions-row">
+              <div class="template-controls">
+                <label><input type="checkbox" id="apply-template-check"> Apply Chat Template</label>
+                <select id="template-select" class="template-selector" disabled>
+                  <option value="gemma">Gemma 2 Chat Template</option>
+                  <option value="qwen">Qwen Chat Template</option>
+                  <option value="chatml">ChatML Template</option>
+                </select>
+              </div>
+              <button id="inspect-btn" class="btn btn-primary">⚡ Inspect & Debug</button>
+            </div>
+            <div id="inspector-status" style="margin-top: 10px; font-size: 0.85rem; font-weight: 600; color: var(--text-muted);"></div>
+          </div>
+
+          <div id="inspector-results" class="inspector-results hidden">
+            <div class="results-grid">
+              <div class="result-box">
+                <h3>Matched Data & Prompt Clusters</h3>
+                <ul id="matched-clusters-list" class="clusters-list"></ul>
+              </div>
+              <div class="result-box">
+                <h3 id="shifts-box-title">Predicted Post-Training Behavioral Shifts</h3>
+                <div id="predicted-shifts-list" class="shifts-list"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: Cluster Auto-Labels -->
+      <section id="tab-labels" class="tab-content">
+        <div class="labels-grid" id="labels-container">
+          <p class="loading-cell">Loading auto-interpreted cluster labels...</p>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="/static/app.js?v=5"></script>
+</body>
+</html>

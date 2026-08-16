@@ -1,7 +1,7 @@
 """Phase P4 Experiment: 100% Paper-Accurate DPO Fine-Tuning & SAE Rollout Validation (R^2).
 
 Replicates Goodfire's paper (arXiv:2606.12360, §3, §4 & App. B):
-1. Fine-tunes the base model using DPO loss (Rafailov et al., 2023) for 1 epoch on GPU to produce pi_DPO.
+1. Fine-tunes the base model using DPO loss (Rafailov et al., 2023) for one or more epochs on GPU to produce pi_DPO.
 2. Samples text rollouts y_SFT from pre-DPO model and y_DPO from post-DPO model over held-out prompts.
 3. Encodes rollouts through the SAE to measure real empirical rollout activation shifts:
    delta_empirical = mean(a(y_DPO)) - mean(a(y_SFT))
@@ -243,53 +243,51 @@ def train_dpo_model(model, tokenizer, dataset, device: str, batch_size: int = 1,
     return model
 
 
-def sample_rollout_activations(model, tokenizer, sae, hook_layer: int, prompts: list[str], device: str, max_new_tokens: int = 64):
-    """Generates text rollouts and extracts mean SAE feature activations across generated tokens."""
+def sample_rollout_activations(model, tokenizer, sae, hook_layer: int, prompts: list[str], device: str, max_new_tokens: int = 128, tau: float = 0.01):
+    """Generates deterministic (greedy) text rollouts and returns mean SAE feature firing frequency.
+
+    Greedy decoding removes sampling noise so the measured pre-vs-post-DPO rollout shift
+    reflects only the model's learned distribution change.
+    """
     model.eval()
     all_feature_means = []
     base_model = getattr(model, "model", getattr(model, "transformer", model))
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
 
-    for p in tqdm(prompts, desc="Sampling text rollouts"):
-        inputs = tokenizer(p, max_length=256, truncation=True, return_tensors="pt").to(device)
-        with torch.inference_mode():
-            gen_tokens = model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=True,
-                temperature=0.7,
-                top_p=0.9,
-                pad_token_id=pad_id,
-            )
+    target_layer = base_model.layers[hook_layer] if hasattr(base_model, "layers") else model.layers[hook_layer]
+    activations = []
 
-        activations = []
-        def hook_fn(module, input, output):
-            act = output[0] if isinstance(output, tuple) else output
-            activations.append(act)
+    def hook_fn(module, input, output):
+        act = output[0] if isinstance(output, tuple) else output
+        activations.append(act)
 
-        target_layer = base_model.layers[hook_layer] if hasattr(base_model, "layers") else model.layers[hook_layer]
-        handle = target_layer.register_forward_hook(hook_fn)
+    handle = target_layer.register_forward_hook(hook_fn)
+    try:
+        for p in tqdm(prompts, desc="Sampling text rollouts"):
+            inputs = tokenizer(p, max_length=256, truncation=True, return_tensors="pt").to(device)
+            with torch.inference_mode():
+                gen_tokens = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False, pad_token_id=pad_id)
 
-        try:
+            activations.clear()
             with torch.inference_mode():
                 base_model(gen_tokens)
-        finally:
-            handle.remove()
 
-        if not activations:
-            continue
+            if not activations:
+                continue
 
-        res_act = activations[0].squeeze(0)[len(inputs.input_ids[0]):]  # Gen tokens only
-        if len(res_act) == 0:
-            continue
+            res_act = activations[0].squeeze(0)[len(inputs.input_ids[0]):]  # Generated tokens only
+            if len(res_act) == 0:
+                continue
 
-        sae_acts = sae.encode(res_act.to(sae.device))  # (seq_len, d_sae)
-        mean_act = sae_acts.mean(dim=0).detach().cpu().numpy()
-        all_feature_means.append(mean_act)
+            sae_acts = sae.encode(res_act.to(sae.device))  # (seq_len, d_sae)
+            mean_freq = (sae_acts > tau).float().mean(dim=0).detach().cpu().numpy()
+            all_feature_means.append(mean_freq)
 
-        del gen_tokens, activations, res_act, sae_acts
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+            del gen_tokens, res_act, sae_acts
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+    finally:
+        handle.remove()
 
     return np.mean(all_feature_means, axis=0) if all_feature_means else None
 
@@ -297,13 +295,15 @@ def sample_rollout_activations(model, tokenizer, sae, hook_layer: int, prompts: 
 def main():
     parser = argparse.ArgumentParser(description="Phase P4: 100% Real DPO Training & Rollout Validation")
     parser.add_argument("--config", type=str, default="configs/gemma2_2b_base.json", help="Path to JSON config")
-    parser.add_argument("--num_features", type=int, default=500, help="Number of top feature clusters to evaluate (0 = all clusters)")
-    parser.add_argument("--batch_size", type=int, default=1, help="Micro-batch size per GPU step")
+    parser.add_argument("--num_features", type=int, default=50, help="Number of top feature clusters to evaluate (0 = all clusters)")
+    parser.add_argument("--batch_size", type=int, default=4, help="Micro-batch size per GPU step")
     parser.add_argument("--grad_accum", type=int, default=4, help="Gradient accumulation steps")
     parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for DPO training")
     parser.add_argument("--beta", type=float, default=0.1, help="DPO beta regularization parameter")
-    parser.add_argument("--train_samples", type=int, default=0, help="Number of samples to train DPO on (0 = all dataset samples)")
+    parser.add_argument("--train_samples", type=int, default=10000, help="Number of samples to train DPO on (must be in (0, dataset_size) so held-out eval prompts exist)")
     parser.add_argument("--eval_prompts", type=int, default=200, help="Number of evaluation prompts for rollout comparison")
+    parser.add_argument("--epochs", type=int, default=1, help="Number of DPO training epochs")
+    parser.add_argument("--max_new_tokens", type=int, default=128, help="Max new tokens generated per rollout")
     args = parser.parse_args()
 
     cfg = PipelineConfig.load_json(args.config)
@@ -325,14 +325,11 @@ def main():
         ex_dicts = json.load(f)
     examples = [PreferenceExample.from_dict(d) for d in ex_dicts]
 
-    n_train = len(examples) if args.train_samples <= 0 else min(args.train_samples, len(examples))
-    
-    # Split held-out evaluation prompts from training examples for true generalization
-    if args.train_samples > 0 and len(examples) > args.train_samples:
-        held_out_examples = examples[args.train_samples:]
-    else:
-        # Odd-indexed parity split (Goodfire paper App. B.1 split-half rule)
-        held_out_examples = examples[1::2]
+    if args.train_samples <= 0 or args.train_samples >= len(examples):
+        raise ValueError(f"--train_samples must be in (0, {len(examples)}) so held-out eval prompts exist; got {args.train_samples}")
+
+    n_train = args.train_samples
+    held_out_examples = examples[n_train:]
 
     n_eval = min(args.eval_prompts, len(held_out_examples))
     eval_prompts = [ex.prompt for ex in held_out_examples[:n_eval]]
@@ -347,7 +344,7 @@ def main():
 
     # 3. Capture Pre-DPO (SFT) Rollout SAE Feature Activations (on held-out evaluation prompts)
     logger.info(f"Sampling Pre-DPO (SFT) text rollouts over {len(eval_prompts)} held-out evaluation prompts...")
-    sft_act_mean = sample_rollout_activations(model, tokenizer, sae, cfg.sae.layer, eval_prompts, cfg.model.device)
+    sft_act_mean = sample_rollout_activations(model, tokenizer, sae, cfg.sae.layer, eval_prompts, cfg.model.device, tau=cfg.feature_conditioned.tau)
 
     # 4. Fine-Tune Model on DPO Loss (move SAE to CPU to free VRAM during training)
     train_examples = examples[:n_train]
@@ -361,7 +358,7 @@ def main():
     dpo_model = train_dpo_model(
         model, tokenizer, dpo_dataset, cfg.model.device,
         batch_size=args.batch_size, grad_accum=args.grad_accum,
-        beta=args.beta, lr=args.lr
+        beta=args.beta, lr=args.lr, epochs=args.epochs
     )
 
     if hasattr(sae, "to"):
@@ -369,12 +366,12 @@ def main():
 
     # 5. Capture Post-DPO Rollout SAE Feature Activations
     logger.info(f"Sampling Post-DPO text rollouts over {len(eval_prompts)} held-out evaluation prompts...")
-    dpo_act_mean = sample_rollout_activations(dpo_model, tokenizer, sae, cfg.sae.layer, eval_prompts, cfg.model.device)
+    dpo_act_mean = sample_rollout_activations(dpo_model, tokenizer, sae, cfg.sae.layer, eval_prompts, cfg.model.device, tau=cfg.feature_conditioned.tau)
 
-    # Compute Empirical Rollout Feature Shift: delta_empirical = mean(a(y_DPO)) - mean(a(y_SFT))
+    # Compute Empirical Rollout Feature Shift: delta_empirical = mean(f(y_DPO)) - mean(f(y_SFT))
     delta_empirical_all = dpo_act_mean - sft_act_mean
 
-    # 6. Compute Global Feature Cluster Disparity u_bar_m with Standardized Feature Scaling (Paper App. B.1 & B.2)
+    # 6. Compute Global Feature Cluster Disparity u_bar_m (Paper Fig. 4a & App. B.1)
     clusters_path = os.path.join(subfolder, "clusters.json")
     with open(clusters_path, "r", encoding="utf-8") as f:
         clusters_data = json.load(f)
@@ -390,17 +387,6 @@ def main():
         mats = FeatureMatrices.load_npz(npz_path)
     else:
         raise FileNotFoundError(f"No feature matrices found in '{subfolder}'.")
-
-    # Compute per-feature standard deviation sigma_g across dataset (App. B.2 Eq. 1612)
-    d_freq = mats.D_freq
-    d_sq_mean = np.array(d_freq.power(2).mean(axis=0)).ravel()
-    d_mean = np.array(d_freq.mean(axis=0)).ravel()
-    d_var = np.maximum(d_sq_mean - d_mean**2, 1e-12)
-    sigma_g = np.maximum(np.sqrt(d_var), 1e-6)
-
-    # Standardize empirical rollout shift per feature (App. B.2 Eq. 1663): delta_empirical_std = (a_DPO - a_SFT) / sigma_g
-    delta_raw = dpo_act_mean - sft_act_mean
-    delta_empirical_std = delta_raw / sigma_g
 
     fc_pipeline = FeatureConditionedPipeline(cfg.feature_conditioned)
     fc_res = fc_pipeline.run(mats, cluster_map, seed=cfg.seed)
@@ -424,7 +410,7 @@ def main():
         if not feats:
             continue
         pred_delta = float(u_bar_global[col_idx])
-        emp_delta = float(np.mean(delta_empirical_std[feats]))
+        emp_delta = float(np.mean(delta_empirical_all[feats]))
         delta_predicted.append(pred_delta)
         delta_empirical.append(emp_delta)
 
