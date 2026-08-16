@@ -1,53 +1,81 @@
-# AGENTS.md — PDD (Predictive Data Debugging)
+# AGENTS.md
 
-Re-implementation of Goodfire's *Anatomy of Post-Training* (arXiv:2606.12360).
-Source of truth for the algorithm: `docs/paper/main.tex` (the downloaded arXiv
-LaTeX source) — read the relevant appendix section before touching a module.
+Project `survey` = **PDD** (Predictive Data Debugging), re-implementation of Goodfire's *Anatomy of Post-Training* (arXiv:2606.12360; paper in `docs/paper/main.tex`). Runs on UF HiPerGator.
 
-## Environment
+## STRICT RULES (NEVER BREAK)
 
-- Conda env: **`pdd`** (clone of `sae_circuit`). Activate with
-  `conda activate pdd` (or `source ~/.bashrc && conda activate pdd`). **CRITICAL RULE**: ALWAYS use standard `conda activate pdd`. NEVER use hardcoded paths like `/mnt/disk1/miniconda3/...` or `/mnt/disk1/miniconda3/condabin/conda`!
-- Versions pinned in `requirements.txt`. **Watch out:** the env has
-  transformers 4.49 / torch 2.4 / sae-lens 5.3. Do NOT `pip install peft/trl`
-  normally — they pull transformers>=5 which needs torch>=2.5 and breaks the
-  env. If SFT/DPO deps are needed, install with `--no-deps` and pinned
-  versions.
+### R1. Save data ONLY here `[RULE]`
 
-## Model / SAE
+- Save in `NguyenDo3/survey/`. Max boundary: `NguyenDo3/` = `/blue/rc-rse/vanminh.nguyen/NguyenDo/NguyenDo3/`. Nothing outside it.
+- NEVER save in `$HOME` (40 GB, mostly full), `/tmp`, login caches, node local disk. `$HOME/storage/blue/...` = same disk as `/blue/rc-rse/...`, use the `/blue/...` path.
+- `/blue/rc-rse/vanminh.nguyen/` holds old data/envs — read only, don't add.
 
-- Base: `Qwen/Qwen3-1.7B-Base` or `google/gemma-2-2b`.
-- SAE: Qwen-Scope TopK (`Qwen/SAE-Res-Qwen3-1.7B-Base-W32K-L0_50`, k=50) or Gemma-Scope TopK (`gemma-scope-2b-pt-res-canonical`, layer 12).
-## Server & Hardware Context (CPU Load & Mechanical HDD)
+### R2. Project stuff goes in the project folder `[RULE]`
 
-- **High System Load (50+)**: The server frequently runs heavy background training jobs (e.g. `ST_train.py`, meteorological ViT models), causing CPU run queues and load averages to reach 50–60.
-- **Mechanical HDD on `/mnt/disk4`**: Conda environment (`pdd`), models, checkpoints, and datasets reside on `/mnt/disk4` (`/dev/sdb1`), which is a mechanical hard drive under heavy I/O contention. Python imports and file reads can take 15–30s due to disk wait (`wait_on_page_bit_common`, `STAT=Dl+`).
-- **RAM & Swap Pressure**: System RAM cache is near capacity with ~2GB pushed to swap.
-- **DIAGNOSTIC FIRST PRINCIPLE**: If a command or server startup is slow, hanging, or delayed, **ALWAYS check system load, disk I/O wait, and swap FIRST (`uptime`, `vmstat 1 2`, `ps aux`) before assuming there is a code bug**. Do NOT immediately assume code is broken or rewrite logic when the bottleneck is server I/O contention. Keep startup reads lazy and lightweight to prevent I/O blocking.
+- Env, checkpoints, private data, models → `NguyenDo3/survey/` only.
+- Env: `NguyenDo3/survey/.conda_envs/pdd`. Use absolute path: `conda activate /blue/rc-rse/vanminh.nguyen/NguyenDo/NguyenDo3/survey/.conda_envs/pdd`.
+- Old paths `/mnt/disk1/...`, `/mnt/disk4/...` don't exist here — never use.
 
-## Strict Dev Rules & Coding Guidelines
+### R3. Redirect caches before every run/download/install `[RULE]`
 
-- **CRITICAL RULE: IMMEDIATE & PROACTIVE USER COMMUNICATION.** ALWAYS answer user questions and provide status updates in visible natural text FIRST before executing background tool calls or diagnostic scripts. NEVER remain silent or execute background tool loops without informing the user.
-- **STRICT RULE: NO POLLING OR REPETITIVE STATUS CHECK LOOPS.** When a background task (e.g. conda environment cloning, package installation, long-running data preprocessing, model training) is running, NEVER poll or execute repetitive status checking loops (`manage_task status`, schedule timers, repeated `ls`, `ps aux`). Simply stop calling tools and wait quietly for the system notification when the task completes.
-- **CRITICAL RULE: DATA PRESERVATION & SAFETY.** NEVER delete, overwrite, or touch pre-extracted feature matrix checkpoints, activation datasets (`matrices_mmap`), or long-running feature extraction artifacts without explicit user confirmation.
-- **CRITICAL RULE: FILE I/O & CHECKPOINT MUTATION CONFIRMATION.** ALWAYS ask the user for explicit confirmation before making any code modifications or running scripts that alter saved checkpoint files, metadata schemas, directory structures, or file I/O formatting. Explicitly ask the user if they want to update any specific checkpoint subfolders.
-- **STRICT RULE: ZERO MOCK OR SYNTHETIC CODE.** NEVER write placeholder, random, or mock code under any circumstances. All pipeline stages and experiment scripts (`p4_dpo_validation.py`, `p5_interventions.py`, `p6_autolabeling.py`) MUST execute 100% real GPU model training, real SAE rollout extraction, real dataset inoculation, and real data analysis.
-- **STRICT RULE: TQDM PROGRESS BARS.** ALWAYS use `tqdm` progress bars for all batch precomputation, DPO training epochs, dataset feature extraction, and text rollout generation loops across all experiment scripts.
-- **STRICT RULE: GPU VRAM & CPU RAM SAFETY.** ALWAYS call `torch.cuda.empty_cache()` periodically during training and rollout extraction loops. Use sparse matrix operations for feature primitive calculations to keep RAM allocation < 1 MB and prevent OS OOM killer crashes. Store precomputed reference logps in 1D CPU numpy arrays (40 KB).
-- **Headless & Reproducible:** Run via `python -m pdd.cli --config configs/gemma2_2b_base.json` with dataclass/JSON configs in `configs/` and `pdd/config.py`, checkpoints in `checkpoints/`, run outputs under `runs/`.
-- **CPU-First for Analysis:** Use numpy/sklearn on CPU for statistical analysis. Use RTX 4090 GPU strictly for model/SAE forward passes and DPO training — check `nvidia-smi` first; never kill running processes.
+```bash
+PROJECT_DIR="/blue/rc-rse/vanminh.nguyen/NguyenDo/NguyenDo3/survey"
+export HF_HOME="$PROJECT_DIR/.cache/huggingface"
+export TRANSFORMERS_CACHE="$PROJECT_DIR/.cache/huggingface/transformers"
+export HF_DATASETS_CACHE="$PROJECT_DIR/.cache/huggingface/datasets"
+export PIP_CACHE_DIR="$PROJECT_DIR/.cache/pip"
+export TORCH_HOME="$PROJECT_DIR/.cache/torch"
+export MPLCONFIGDIR="$PROJECT_DIR/.cache/matplotlib"
+export XDG_CACHE_HOME="$PROJECT_DIR/.cache/xdg"
+export UV_CACHE_DIR="$PROJECT_DIR/.cache/uv"
+export UV_PYTHON_INSTALL_DIR="$PROJECT_DIR/.cache/uv/python"
+export TMPDIR="$PROJECT_DIR/.tmp"
+mkdir -p "$PROJECT_DIR/.cache" "$PROJECT_DIR/.tmp"
+```
 
-## Paper Recipe (Implementation Checklist)
+Shared caches (HF hub, wandb) → `NguyenDo3/.cache/...`, never `$HOME`. `/blue/rc-rse` is ~95% full (~2.7 TB free) — download little, purge old checkpoints.
 
-- Feature-conditioned pipeline: `docs/paper/main.tex` §"Feature-Conditioned
-  Pipeline" (Appendix B.1): per-pair primitives `s` / `u` (τ=0.01) / `v`;
-  silent bucket = 5th pct of ‖s‖₂; spherical k-means K=512 on normalized s
-  (MiniBatchKMeans); Welch inside-vs-outside Δ/z + Cohen's d; split-half
-  (row-index parity) SC flag + Δ^min; filters |T_m|≥10, n_k≥25, SC=1; rank by
-  Δ^min.
-- Prompt-conditioned pipeline (Appendix B.2): P^q/D^q (max & freq), feature
-  retention (resp: n≥200, σ≥1e-3, mean|D|≥1e-4; prompt: n≥200), feature
-  embeddings (randomized SVD-128 on 30k sample, ℓ2-norm), MiniBatchKMeans →
-  A_k / R_m, scores c_{i,k} / u_{i,m}, top-n_top selection, Δ + Cohen's d + z.
-- Feature clusters: binary-MI graph (top 1% off-diagonal pairs, normalized MI),
-  Leiden, keep communities ≥4 features.
+## Server: HiPerGator / SLURM
+
+Login node has **no GPU**. Use `sbatch`/`srun`.
+
+- **GPU partitions:** `hpg-b200` (B200, 8/node) and `hpg-turin` (L4, 3/node), both `--gres=gpu:N`, 14-day limit. Others exist; don't use them.
+- **Jobs:** `squeue --me` (status), `scancel <jobid>` (kill), `tail -f logs/<name>_<jobid>.out` (output).
+- **Submit** from repo root:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=pdd
+#SBATCH --output=logs/%x_%j.out
+#SBATCH --partition=hpg-b200      # or hpg-turin
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=40gb
+#SBATCH --time=12:00:00
+```
+
+- **Interactive GPU:** `srun --partition=hpg-b200 --gres=gpu:1 --cpus-per-task=4 --mem=40gb --time=02:00:00 --pty bash -i`
+- **Env/modules:** `module load conda` then `conda activate <abs path>`. CUDA: `module load cuda/12.8.1`.
+- **Gotchas:** SLURM spools your script — use `$SLURM_SUBMIT_DIR`, not `${BASH_SOURCE[0]}`. Only allocated GPUs visible → always `cuda:0`. Pin `export UV_PYTHON="$(command -v python)"` so `uv run` uses the conda env. `--time` < partition limit or job dies.
+- Docs: https://docs.hpc.ufl.edu/
+
+## PDD rules
+
+- **Algorithm source:** `docs/paper/main.tex` — read the appendix before editing a module.
+- **Env:** `pdd` (py 3.11, from `requirements.txt`): transformers 4.51 / torch 2.4.1 / sae-lens 5.3. Do NOT `pip install peft/trl` — pulls transformers>=5 needing torch>=2.5, breaks env. If needed: `--no-deps` + pinned.
+- **Model/SAE:** `Qwen/Qwen3-1.7B-Base` + `Qwen/SAE-Res-Qwen3-1.7B-Base-W32K-L0_50` (k=50), or `google/gemma-2-2b` + `gemma-scope-2b-pt-res-canonical` (layer 12). These are stand-ins for the paper's BatchTopK — note deviations in code.
+- **Run:** `PYTHONPATH=. python -m pdd.cli --config configs/<model>.json`; checkpoints/ and runs/ in repo. Data: `allenai/Dolci-Instruct-DPO/SFT`. Experiments: `PYTHONPATH=. python experiments/p4_dpo_validation.py --config configs/qwen3_1.7b_base.json` (also p5, p6).
+- **Dev rules:**
+  - Communicate: status updates in visible text FIRST, never silent background loops.
+  - Never delete/overwrite feature matrix checkpoints, `matrices_mmap`, or extraction artifacts without asking.
+  - Confirm before code that alters checkpoints/schemas/file formats.
+  - No mock/synthetic code — everything runs real GPU training, real SAE extraction, real analysis.
+  - `tqdm` on all batch/epoch/extraction/rollout loops.
+  - Call `torch.cuda.empty_cache()` periodically; sparse ops for feature primitives (RAM < 1 MB); reference logps as 1D CPU numpy arrays.
+  - CPU (numpy/sklearn) for analysis; GPU only for model/SAE forwards + DPO training. Check `squeue --me` before launching; never kill running jobs.
+
+## Paper recipe
+
+- Feature-conditioned (B.1): primitives `s`/`u` (τ=0.01)/`v`; silent bucket = 5th pct ‖s‖₂; spherical k-means K=512 (MiniBatchKMeans); Welch Δ/z + Cohen's d; split-half SC + Δ^min; filters |T_m|≥10, n_k≥25, SC=1; rank Δ^min.
+- Prompt-conditioned (B.2): P^q/D^q (max & freq); retention (resp: n≥200, σ≥1e-3, mean|D|≥1e-4; prompt: n≥200); SVD-128 on 30k, ℓ2; MiniBatchKMeans → A_k/R_m, c_{i,k}/u_{i,m}; Δ + Cohen's d + z.
+- Clusters: binary-MI graph (top 1% off-diagonal), Leiden, keep ≥4 features.
