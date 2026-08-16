@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+import gc
 import json
 import os
 import numpy as np
@@ -116,7 +117,6 @@ class FeatureConditionedPipeline:
             u_matrix[r0:r1] = (c_csr[r0:r1] > tau) @ A - (r_csr[r0:r1] > tau) @ A
         u_matrix /= np.asarray(cluster_sizes, dtype=np.float32)[None, :]
         del c_csr, r_csr, A, s_C, s_R
-        import gc
         gc.collect()
 
         # Silent bucket B_0

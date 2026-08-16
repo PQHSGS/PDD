@@ -23,6 +23,9 @@ from tqdm import tqdm
 
 from pdd.config import PipelineConfig
 from pdd.data import PreferenceExample
+from pdd.feature_clusters import FeatureClusterMap
+from pdd.feature_conditioned import FeatureConditionedPipeline
+from pdd.feature_matrices import FeatureMatrices
 from pdd.logger import get_logger
 from pdd.sae import ModelBackend, SAEBackend
 from pdd.validation import compute_prediction_validation_metrics
@@ -137,14 +140,17 @@ def train_dpo_model(model, tokenizer, dataset, device: str, batch_size: int = 1,
     
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
-    # 1. Precompute reference model logps (stored in 40 KB CPU numpy arrays)
+    # 1. Precompute reference model logps (stored in CPU numpy arrays)
     logger.info("Precomputing reference model logps...")
     model.eval()
     ref_c_arr = np.zeros(len(dataset), dtype=np.float32)
     ref_r_arr = np.zeros(len(dataset), dtype=np.float32)
 
-    with torch.no_grad():
-        for idx, batch in enumerate(tqdm(dataloader, desc="Precomputing reference logps")):
+    ref_batch_size = max(4, min(16, batch_size * 8))
+    ref_dataloader = DataLoader(dataset, batch_size=ref_batch_size, shuffle=False)
+
+    with torch.inference_mode():
+        for idx, batch in enumerate(tqdm(ref_dataloader, desc="Precomputing reference logps")):
             c_ids = batch["chosen_ids"].to(device)
             c_mask = batch["chosen_mask"].to(device)
             c_lbls = batch["chosen_labels"].to(device)
@@ -157,10 +163,12 @@ def train_dpo_model(model, tokenizer, dataset, device: str, batch_size: int = 1,
             ref_r = compute_sequence_logps(model, r_ids, r_mask, r_lbls)
 
             bs = c_ids.size(0)
-            ref_c_arr[idx * bs : (idx + 1) * bs] = ref_c.detach().cpu().numpy()
-            ref_r_arr[idx * bs : (idx + 1) * bs] = ref_r.detach().cpu().numpy()
+            start_i = idx * ref_batch_size
+            end_i = start_i + bs
+            ref_c_arr[start_i:end_i] = ref_c.detach().cpu().numpy()
+            ref_r_arr[start_i:end_i] = ref_r.detach().cpu().numpy()
 
-            if (idx + 1) % 50 == 0 and torch.cuda.is_available():
+            if (idx + 1) % 20 == 0 and torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
     if torch.cuda.is_available():
@@ -244,7 +252,7 @@ def sample_rollout_activations(model, tokenizer, sae, hook_layer: int, prompts: 
 
     for p in tqdm(prompts, desc="Sampling text rollouts"):
         inputs = tokenizer(p, max_length=256, truncation=True, return_tensors="pt").to(device)
-        with torch.no_grad():
+        with torch.inference_mode():
             gen_tokens = model.generate(
                 **inputs,
                 max_new_tokens=max_new_tokens,
@@ -263,7 +271,7 @@ def sample_rollout_activations(model, tokenizer, sae, hook_layer: int, prompts: 
         handle = target_layer.register_forward_hook(hook_fn)
 
         try:
-            with torch.no_grad():
+            with torch.inference_mode():
                 base_model(gen_tokens)
         finally:
             handle.remove()
@@ -289,7 +297,7 @@ def sample_rollout_activations(model, tokenizer, sae, hook_layer: int, prompts: 
 def main():
     parser = argparse.ArgumentParser(description="Phase P4: 100% Real DPO Training & Rollout Validation")
     parser.add_argument("--config", type=str, default="configs/gemma2_2b_base.json", help="Path to JSON config")
-    parser.add_argument("--num_features", type=int, default=50, help="Number of top hypotheses to evaluate")
+    parser.add_argument("--num_features", type=int, default=500, help="Number of top feature clusters to evaluate (0 = all clusters)")
     parser.add_argument("--batch_size", type=int, default=1, help="Micro-batch size per GPU step")
     parser.add_argument("--grad_accum", type=int, default=4, help="Gradient accumulation steps")
     parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for DPO training")
@@ -366,41 +374,57 @@ def main():
     # Compute Empirical Rollout Feature Shift: delta_empirical = mean(a(y_DPO)) - mean(a(y_SFT))
     delta_empirical_all = dpo_act_mean - sft_act_mean
 
-    # 6. Load Hypotheses & Correlate cluster-level delta_predicted vs delta_empirical
-    hypo_path = os.path.join(run_dir, "feature_conditioned_hypotheses.json")
-    with open(hypo_path, "r", encoding="utf-8") as f:
-        h_raw = json.load(f)
-    hypotheses = h_raw.get("hypotheses", h_raw) if isinstance(h_raw, dict) else h_raw
-
-    # Load Feature Clusters mapping
+    # 6. Compute Global Feature Cluster Disparity u_bar_m with Standardized Feature Scaling (Paper App. B.1 & B.2)
     clusters_path = os.path.join(subfolder, "clusters.json")
     with open(clusters_path, "r", encoding="utf-8") as f:
         clusters_data = json.load(f)
+    feat_to_cluster = {int(k): int(v) for k, v in clusters_data.get("feature_to_cluster", {}).items()}
     retained_clusters = {int(k): [int(x) for x in v] for k, v in clusters_data.get("clusters", {}).items()}
+    cluster_map = FeatureClusterMap(clusters=retained_clusters, feature_to_cluster=feat_to_cluster)
 
-    # Group hypotheses by feature cluster m to compute 1-to-1 cluster-level predictions
-    cluster_to_deltas = {}
-    for h in hypotheses:
-        m = int(h["m"])
-        d = float(h.get("delta", 0.0))
-        cluster_to_deltas.setdefault(m, []).append(d)
+    mmap_dir = os.path.join(subfolder, "matrices_mmap")
+    npz_path = os.path.join(subfolder, "matrices.npz")
+    if os.path.isdir(mmap_dir):
+        mats = FeatureMatrices.load_mmap_dir(mmap_dir)
+    elif os.path.exists(npz_path):
+        mats = FeatureMatrices.load_npz(npz_path)
+    else:
+        raise FileNotFoundError(f"No feature matrices found in '{subfolder}'.")
 
-    # Rank top feature clusters by magnitude of predicted disparity
-    sorted_clusters = sorted(
-        cluster_to_deltas.keys(),
-        key=lambda m: abs(np.mean(cluster_to_deltas[m])),
-        reverse=True
-    )[:args.num_features]
+    # Compute per-feature standard deviation sigma_g across dataset (App. B.2 Eq. 1612)
+    d_freq = mats.D_freq
+    d_sq_mean = np.array(d_freq.power(2).mean(axis=0)).ravel()
+    d_mean = np.array(d_freq.mean(axis=0)).ravel()
+    d_var = np.maximum(d_sq_mean - d_mean**2, 1e-12)
+    sigma_g = np.maximum(np.sqrt(d_var), 1e-6)
+
+    # Standardize empirical rollout shift per feature (App. B.2 Eq. 1663): delta_empirical_std = (a_DPO - a_SFT) / sigma_g
+    delta_raw = dpo_act_mean - sft_act_mean
+    delta_empirical_std = delta_raw / sigma_g
+
+    fc_pipeline = FeatureConditionedPipeline(cfg.feature_conditioned)
+    fc_res = fc_pipeline.run(mats, cluster_map, seed=cfg.seed)
+    u_matrix = fc_res.u_matrix  # (N, K_r)
+
+    # Compute global dataset-wide mean disparity per feature cluster m: u_bar_m = mean(u_{i,m})
+    cluster_ids = sorted(cluster_map.clusters.keys())
+    u_bar_global = np.mean(u_matrix, axis=0)  # (K_r,)
+
+    # Rank feature clusters by total magnitude of predicted disparity
+    sorted_cluster_indices = np.argsort(-np.abs(u_bar_global))
+    if args.num_features > 0:
+        sorted_cluster_indices = sorted_cluster_indices[:args.num_features]
 
     delta_predicted = []
     delta_empirical = []
 
-    for m in sorted_clusters:
-        feats = retained_clusters.get(m, [])
+    for col_idx in sorted_cluster_indices:
+        cid = cluster_ids[col_idx]
+        feats = cluster_map.clusters[cid]
         if not feats:
             continue
-        pred_delta = float(np.mean(cluster_to_deltas[m]))
-        emp_delta = float(np.mean(delta_empirical_all[feats]))
+        pred_delta = float(u_bar_global[col_idx])
+        emp_delta = float(np.mean(delta_empirical_std[feats]))
         delta_predicted.append(pred_delta)
         delta_empirical.append(emp_delta)
 

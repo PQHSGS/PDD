@@ -231,17 +231,6 @@ class FeatureMatrices:
             del u
         return p1 / float(N)
 
-    def union_chunk_dense(self, r0: int, r1: int, active_indices: np.ndarray) -> np.ndarray:
-        """Dense float32 chunk of the union restricted to ``active_indices`` columns.
-
-        Columns are the ACTIVE features (as in ``union_active_csr`` semantics);
-        if all features are active this is a plain toarray, otherwise a column
-        selection on the small chunk only (bounded memory).
-        """
-        u = self.union_chunk_sparse(r0, r1)
-        if len(active_indices) == u.shape[1] and active_indices[-1] == u.shape[1] - 1:
-            return u.toarray()
-        return u[:, active_indices].toarray()
 
     def save_npz(self, filepath: str, last_batch_idx: Optional[int] = None) -> None:
         """Save sparse feature matrices to disk as a compact .npz archive."""

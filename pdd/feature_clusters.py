@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
+import gc
 import glob
 import json
 import os
@@ -76,9 +77,9 @@ class LeidenFeatureClusterer:
     ) -> FeatureClusterMap:
         """Cluster SAE features using binary MI graph and Leiden algorithm.
 
-        ``matrices`` is a FeatureMatrices; the binary activation union is streamed
-        from the mmap'd C_freq/R_freq (two row passes, ~0 RAM) so neither the full
-        ~15GB C/R pair nor the ~19GB union matrix is ever materialized in RAM.
+        ``matrices`` is a FeatureMatrices; all matrix passes are streamed in
+        row-chunks from the mmap'd C_freq/R_freq, so neither the full ~15GB C/R
+        pair nor the dense union is ever materialized in RAM.
         """
         ckpt_dir = os.path.dirname(os.path.abspath(checkpoint_path)) if checkpoint_path else None
         mi_graph_path = os.path.join(ckpt_dir, "mi_graph.npz") if ckpt_dir else None
@@ -117,17 +118,42 @@ class LeidenFeatureClusterer:
 
         return cluster_map
 
+    def _run_leiden(self, d_sae: int, edges: List[Tuple[int, int]], edge_weights: List[float], seed: int) -> FeatureClusterMap:
+        """Run Leiden community detection on the MI-edge graph and retain communities >= min_community_size."""
+        g = ig.Graph(n=d_sae, edges=edges, edge_attrs={"weight": edge_weights})
+
+        logger.info(f"Running Leiden community detection (RBConfiguration, res={self.resolution_parameter}) on graph with {len(edges):,} edges...")
+        partition = la.find_partition(
+            g,
+            la.RBConfigurationVertexPartition,
+            weights="weight",
+            resolution_parameter=self.resolution_parameter,
+            seed=seed,
+        )
+
+        clusters: Dict[int, List[int]] = {}
+        feature_to_cluster: Dict[int, int] = {feat: 0 for feat in range(d_sae)}
+
+        cluster_id_counter = 1
+        for comm in partition:
+            if len(comm) >= self.min_community_size:
+                clusters[cluster_id_counter] = list(comm)
+                for feat in comm:
+                    feature_to_cluster[feat] = cluster_id_counter
+                cluster_id_counter += 1
+
+        logger.info(f"Extracted {len(clusters)} retained Leiden feature communities.")
+        return FeatureClusterMap(clusters=clusters, feature_to_cluster=feature_to_cluster)
+
     def _build_clusters(self, matrices: Any, seed: int, mi_graph_path: Optional[str] = None) -> FeatureClusterMap:
         """Cluster features using binary MI, computed memory-safely.
 
-        Two streaming row passes over the mmap'd C_freq/R_freq build (a) the per-
-        feature union firing probability and (b) the binary union matrix U over
-        active features (~1.6GB). The MI co-occurrence is then computed with dense
-        BLAS on 4096-row chunks (never the full 34GB dense U), and the norm-MI is
-        streamed to a disk memmap. Peak RAM stays < ~5GB.
+        Streaming row-chunks over the mmap'd C_freq/R_freq build the per-feature
+        union firing probability and the co-occurrence counts p11 (dense BLAS on
+        4096-row chunks, never the full dense U). Norm-MI is streamed to a disk
+        memmap, the top-{top_pct}% pairs become graph edges, and Leiden produces
+        the final clusters. Peak RAM stays < ~5GB.
         """
-        import gc
-
         from .feature_matrices import state_valid
 
         d_sae = matrices.C_freq.shape[1]
@@ -136,54 +162,28 @@ class LeidenFeatureClusterer:
         if mi_graph_path and os.path.exists(mi_graph_path) and cached_ok:
             logger.info(f"Found cached MI graph at '{mi_graph_path}'. Skipping MI block computation!")
             data = np.load(mi_graph_path)
-            global_i = data["global_i"]
-            global_j = data["global_j"]
+            edges = list(zip(data["global_i"].tolist(), data["global_j"].tolist()))
             edge_weights = data["weights"].tolist()
-            edges = list(zip(global_i.tolist(), global_j.tolist()))
-            g = ig.Graph(n=d_sae, edges=edges, edge_attrs={"weight": edge_weights})
-            
-            logger.info(f"Running Leiden community detection (RBConfiguration, res={self.resolution_parameter}) on graph with {len(edges):,} edges...")
-            partition = la.find_partition(
-                g,
-                la.RBConfigurationVertexPartition,
-                weights="weight",
-                resolution_parameter=self.resolution_parameter,
-                seed=seed,
-            )
-
-            clusters: Dict[int, List[int]] = {}
-            feature_to_cluster: Dict[int, int] = {feat: 0 for feat in range(d_sae)}
-
-            cluster_id_counter = 1
-            for comm in partition:
-                if len(comm) >= self.min_community_size:
-                    clusters[cluster_id_counter] = list(comm)
-                    for feat in comm:
-                        feature_to_cluster[feat] = cluster_id_counter
-                    cluster_id_counter += 1
-
-            logger.info(f"Extracted {len(clusters)} retained Leiden feature communities.")
-            return FeatureClusterMap(clusters=clusters, feature_to_cluster=feature_to_cluster)
+            return self._run_leiden(d_sae, edges, edge_weights, seed)
 
         N, d_sae = matrices.C_freq.shape
         block = self.block_size
 
-        # 1. Union firing probabilities via a single streaming row pass (peak RAM ~0).
-        p1 = matrices.union_p1(d_sae)
-
-        # Stash the union firing probabilities for reuse by the B.2 pipeline's
-        # response-feature retention filter (r_counts = p1 * N), avoiding a
-        # second full union computation. Persisted so separate runs at the same
-        # extraction state reuse it too.
-        matrices._union_p1 = p1
+        # 1. Stash union_p1 for reuse by Appendix B.2 response retention filter
+        union_p1 = matrices.union_p1(d_sae)
+        matrices._union_p1 = union_p1
         if mi_graph_path:
             np.savez(
                 os.path.join(os.path.dirname(mi_graph_path), "union_p1.npz"),
-                p1=p1.astype(np.float32),
+                p1=union_p1.astype(np.float32),
                 N=np.array([N], dtype=np.int64),
                 d_sae=np.array([d_sae], dtype=np.int64),
             )
 
+        # 2. Compute single-stream firing probabilities p1 over 2N independent streams (C and R).
+        c_counts = np.array((matrices.C_freq > 0).sum(axis=0)).ravel()
+        r_counts = np.array((matrices.R_freq > 0).sum(axis=0)).ravel()
+        p1 = (c_counts + r_counts) / float(2 * N)
         p0 = 1.0 - p1
 
         active_indices = np.where(p1 > self.min_firing_freq)[0]
@@ -199,15 +199,14 @@ class LeidenFeatureClusterer:
         H = - np.where(p0_act > 0, p0_act * np.log(p0_act + 1e-12), 0.0) \
             - np.where(p1_act > 0, p1_act * np.log(p1_act + 1e-12), 0.0)
 
-        logger.info(f"Computing block-wise binary MI over D_act={D_act} active features (N={N})...")
+        logger.info(f"Computing block-wise binary MI over D_act={D_act} active features across 2N={2*N} single-text streams...")
         n_pairs = D_act * (D_act - 1) // 2
 
         # Upper-triangle (i<j) linear index: idx = i*(2*D - i - 1)//2 + (j - i - 1)
         def tri_idx(i, j):
             return i * (2 * D_act - i - 1) // 2 + (j - i - 1)
 
-        # Write the norm-MI memmap on the NVMe scratch/checkpoint disk (the root
-        # fs where /tmp lives is ~99% full); it is deleted after the edge pass.
+        # Write the norm-MI memmap on the NVMe scratch/checkpoint disk
         scratch_dir = os.environ.get("PDD_SCRATCH_DIR")
         if not scratch_dir and mi_graph_path:
             scratch_dir = os.path.dirname(os.path.abspath(mi_graph_path))
@@ -219,30 +218,30 @@ class LeidenFeatureClusterer:
         n_blocks = (D_act + block - 1) // block
         logger.info(f"Building binary MI graph over {n_blocks} feature blocks (block_size={block})...")
 
-        # 2. Co-occurrence p11 = U^T U / N via dense BLAS over row-chunks. The
-        #    binary union is streamed one row-chunk at a time from the mmap'd
-        #    C_freq/R_freq (never materialized in full, ~34GB dense or ~15GB
-        #    sparse), and per-block-pair products accumulate into float32 buffers.
+        # 3. Co-occurrence p11 = (C^T C + R^T R) / 2N via dense BLAS over row-chunks.
         chunk_rows = 4096
         widths = [min(block, D_act - b * block) for b in range(n_blocks)]
         p11 = [
             [np.zeros((widths[bi], widths[bj]), dtype=np.float32) for bj in range(bi, n_blocks)]
             for bi in range(n_blocks)
         ]
-        for r0 in tqdm(range(0, N, chunk_rows), desc="MI co-occurrence (dense BLAS)"):
+        for r0 in tqdm(range(0, N, chunk_rows), desc="MI co-occurrence (2N single streams)"):
             r1 = min(r0 + chunk_rows, N)
-            Uc = matrices.union_chunk_dense(r0, r1, active_indices)
-            UcT = np.ascontiguousarray(Uc.T)
+            Cc = (matrices.C_freq[r0:r1, active_indices] > 0).toarray().astype(np.float32)
+            Rc = (matrices.R_freq[r0:r1, active_indices] > 0).toarray().astype(np.float32)
+            CcT = np.ascontiguousarray(Cc.T)
+            RcT = np.ascontiguousarray(Rc.T)
             for bi in range(n_blocks):
                 i0, i1 = bi * block, min((bi + 1) * block, D_act)
-                Ai = UcT[i0:i1]
+                Ai_C = CcT[i0:i1]
+                Ai_R = RcT[i0:i1]
                 for bj in range(bi, n_blocks):
                     j0, j1 = bj * block, min((bj + 1) * block, D_act)
-                    p11[bi][bj - bi] += Ai @ Uc[:, j0:j1]
-        del Uc, UcT
-        gc.collect()
+                    p11[bi][bj - bi] += (Ai_C @ Cc[:, j0:j1]) + (Ai_R @ Rc[:, j0:j1])
+            del Cc, Rc, CcT, RcT
+            gc.collect()
 
-        # 4. Per block-pair: normalize, compute MI / norm-MI, sorted write to memmap.
+        # 4. Per block-pair: normalize by 2N, compute MI / norm-MI, sorted write to memmap.
         for bi in tqdm(range(n_blocks), desc="Writing norm-MI blocks"):
             i0, i1 = bi * block, min((bi + 1) * block, D_act)
             p1_i = p1_act[i0:i1][:, None]
@@ -251,7 +250,7 @@ class LeidenFeatureClusterer:
 
             for bj in range(bi, n_blocks):
                 j0, j1 = bj * block, min((bj + 1) * block, D_act)
-                p11_blk = p11[bi][bj - bi] / np.float32(N)
+                p11_blk = p11[bi][bj - bi] / np.float32(2 * N)
 
                 p1_j = p1_act[j0:j1][None, :]
                 p0_j = p0_act[j0:j1][None, :]
@@ -362,27 +361,4 @@ class LeidenFeatureClusterer:
         edges = list(zip(global_i.tolist(), global_j.tolist()))
         edge_weights = weights.tolist()
 
-        g = ig.Graph(n=d_sae, edges=edges, edge_attrs={"weight": edge_weights})
-
-        logger.info(f"Running Leiden community detection (RBConfiguration, res={self.resolution_parameter}) on graph with {len(edges):,} edges...")
-        partition = la.find_partition(
-            g,
-            la.RBConfigurationVertexPartition,
-            weights="weight",
-            resolution_parameter=self.resolution_parameter,
-            seed=seed,
-        )
-
-        clusters: Dict[int, List[int]] = {}
-        feature_to_cluster: Dict[int, int] = {feat: 0 for feat in range(d_sae)}
-
-        cluster_id_counter = 1
-        for comm in partition:
-            if len(comm) >= self.min_community_size:
-                clusters[cluster_id_counter] = list(comm)
-                for feat in comm:
-                    feature_to_cluster[feat] = cluster_id_counter
-                cluster_id_counter += 1
-
-        logger.info(f"Extracted {len(clusters)} retained Leiden feature communities.")
-        return FeatureClusterMap(clusters=clusters, feature_to_cluster=feature_to_cluster)
+        return self._run_leiden(d_sae, edges, edge_weights, seed)
