@@ -108,7 +108,10 @@ class SAEBackend:
     def _load_qwen_scope(self) -> Any:
         from sae_lens import SAE
 
-        path = hf_hub_download(self.cfg.repo, f"layer{self.cfg.layer}.sae.pt")
+        try:
+            path = hf_hub_download(self.cfg.repo, f"layer{self.cfg.layer}.sae.pt", local_files_only=True)
+        except Exception:
+            path = hf_hub_download(self.cfg.repo, f"layer{self.cfg.layer}.sae.pt")
         state = torch.load(path, map_location="cpu", weights_only=True)
 
         weights = {
@@ -117,12 +120,14 @@ class SAEBackend:
             "b_enc": state["b_enc"].contiguous(),
             "b_dec": state["b_dec"].contiguous(),
         }
+        d_in = int(weights["W_enc"].shape[0])
+        d_sae = int(weights["W_enc"].shape[1])
         k_val = self.cfg.k if self.cfg.k is not None else 50
         target_device = "cpu" if self.cfg.sae_cpu else self.cfg.device
         cfg_dict = {
             "architecture": "topk",
-            "d_in": self.cfg.d_in,
-            "d_sae": self.cfg.d_sae,
+            "d_in": d_in,
+            "d_sae": d_sae,
             "activation_fn_str": "topk",
             "activation_fn_kwargs": {"k": k_val},
             "apply_b_dec_to_input": True,

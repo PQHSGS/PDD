@@ -10,9 +10,11 @@ Replicates Goodfire's paper (arXiv:2606.12360, §3, §4 & App. B):
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import time
+from dataclasses import asdict
 import numpy as np
 import torch
 
@@ -28,7 +30,7 @@ from pdd.feature_conditioned import FeatureConditionedPipeline
 from pdd.feature_matrices import FeatureMatrices
 from pdd.logger import get_logger
 from pdd.sae import ModelBackend, SAEBackend
-from pdd.validation import compute_prediction_validation_metrics
+from pdd.validation import ValidationMetrics, compute_prediction_validation_metrics
 
 logger = get_logger("PDD.Exp.P4")
 
@@ -134,8 +136,12 @@ def apply_pure_pytorch_lora(model: torch.nn.Module, r: int = 8, alpha: float = 1
     return model
 
 
-def train_dpo_model(model, tokenizer, dataset, device: str, batch_size: int = 1, grad_accum: int = 4, beta: float = 0.1, lr: float = 1e-5, epochs: int = 1):
-    """Fine-tunes the base model using DPO loss in PyTorch with VRAM offloading & gradient accumulation."""
+def train_dpo_model(model, tokenizer, dataset, device: str, batch_size: int = 1, grad_accum: int = 4, beta: float = 0.1, lr: float = 1e-5, epochs: int = 1, lora_rank: int = 16, on_epoch_end=None):
+    """Fine-tunes the base model using DPO loss in PyTorch with VRAM offloading & gradient accumulation.
+
+    on_epoch_end(epoch_num, model) is invoked after each completed epoch (e.g. to sample rollouts
+    and compute per-epoch validation metrics). The model is set back to train() mode afterwards.
+    """
     logger.info(f"=== Starting Real DPO Fine-Tuning on GPU ({len(dataset):,} examples, batch_size={batch_size}, grad_accum={grad_accum}, lr={lr}, beta={beta}) ===")
     
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
@@ -175,7 +181,7 @@ def train_dpo_model(model, tokenizer, dataset, device: str, batch_size: int = 1,
         torch.cuda.empty_cache()
 
     # 2. Wrap policy model with LoRA across ALL layers
-    model = apply_pure_pytorch_lora(model, r=8, alpha=16.0)
+    model = apply_pure_pytorch_lora(model, r=lora_rank, alpha=16.0)
     model.train()
 
     if hasattr(model, "enable_input_require_grads"):
@@ -236,6 +242,10 @@ def train_dpo_model(model, tokenizer, dataset, device: str, batch_size: int = 1,
             if step % 50 == 0 and torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
+        if on_epoch_end is not None:
+            on_epoch_end(epoch + 1, model)
+            model.train()
+
     t1 = time.time()
     logger.info(f"=== DPO Fine-Tuning Complete in {t1-t0:.2f}s! Final Loss: {total_loss/max(1, step):.4f} ===")
     if torch.cuda.is_available():
@@ -243,11 +253,14 @@ def train_dpo_model(model, tokenizer, dataset, device: str, batch_size: int = 1,
     return model
 
 
-def sample_rollout_activations(model, tokenizer, sae, hook_layer: int, prompts: list[str], device: str, max_new_tokens: int = 128, tau: float = 0.01):
-    """Generates deterministic (greedy) text rollouts and returns mean SAE feature firing frequency.
+def sample_rollout_activations(model, tokenizer, sae, hook_layer: int, prompts: list[str], device: str, max_new_tokens: int = 128, tau: float = 0.01, seed: int = 0):
+    """Samples paired stochastic text rollouts and returns (mean_freq, per_prompt_freq).
 
-    Greedy decoding removes sampling noise so the measured pre-vs-post-DPO rollout shift
-    reflects only the model's learned distribution change.
+    per_prompt_freq is (n_prompts, d_sae) mean firing frequency per rollout. Each prompt index
+    gets a fixed seed and the pre- and post-DPO passes iterate the same prompt list, so both draw
+    identical sampling noise; the paired difference isolates the model's learned change rather
+    than decoding noise. Per-prompt arrays are kept so the measurement noise floor and all
+    statistics can be computed offline (no extra GPU passes).
     """
     model.eval()
     all_feature_means = []
@@ -263,10 +276,15 @@ def sample_rollout_activations(model, tokenizer, sae, hook_layer: int, prompts: 
 
     handle = target_layer.register_forward_hook(hook_fn)
     try:
-        for p in tqdm(prompts, desc="Sampling text rollouts"):
+        for i, p in enumerate(tqdm(prompts, desc="Sampling text rollouts")):
             inputs = tokenizer(p, max_length=256, truncation=True, return_tensors="pt").to(device)
             with torch.inference_mode():
-                gen_tokens = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False, pad_token_id=pad_id)
+                torch.manual_seed(seed + i)
+                torch.cuda.manual_seed(seed + i)
+                gen_tokens = model.generate(
+                    **inputs, max_new_tokens=max_new_tokens,
+                    do_sample=True, temperature=0.7, top_p=0.9, pad_token_id=pad_id,
+                )
 
             activations.clear()
             with torch.inference_mode():
@@ -289,7 +307,59 @@ def sample_rollout_activations(model, tokenizer, sae, hook_layer: int, prompts: 
     finally:
         handle.remove()
 
-    return np.mean(all_feature_means, axis=0) if all_feature_means else None
+    if not all_feature_means:
+        return None, None
+    per_prompt_freq = np.stack(all_feature_means, axis=0)  # (n_prompts, d_sae)
+    return per_prompt_freq.mean(axis=0), per_prompt_freq
+
+
+def compute_reward_margin(model, tokenizer, examples, device: str, n: int = 200, seed: int = 0, batch_size: int = 8) -> tuple[float, float, int]:
+    """Mean (logp_chosen - logp_rejected) over n held-out pairs.
+
+    Positive control: if DPO learned the preference signal, this margin widens after training.
+    """
+    rng = np.random.RandomState(seed)
+    idx = rng.choice(len(examples), size=min(n, len(examples)), replace=False)
+    subset = [examples[i] for i in idx]
+    ds = DPODataset(subset, tokenizer)
+    dl = DataLoader(ds, batch_size=batch_size, shuffle=False)
+    model.eval()
+    margins = []
+    with torch.inference_mode():
+        for batch in dl:
+            c_ids = batch["chosen_ids"].to(device)
+            c_mask = batch["chosen_mask"].to(device)
+            c_lbls = batch["chosen_labels"].to(device)
+            r_ids = batch["rejected_ids"].to(device)
+            r_mask = batch["rejected_mask"].to(device)
+            r_lbls = batch["rejected_labels"].to(device)
+            c_lp = compute_sequence_logps(model, c_ids, c_mask, c_lbls)
+            r_lp = compute_sequence_logps(model, r_ids, r_mask, r_lbls)
+            margins.append((c_lp - r_lp).detach().cpu().numpy())
+    margins = np.concatenate(margins)
+    return float(margins.mean()), float(margins.std()), int(len(margins))
+
+
+def compute_cluster_validation(delta_empirical_all: np.ndarray, cluster_ids, cluster_map, u_bar_global: np.ndarray, num_features: int) -> tuple[ValidationMetrics, np.ndarray, np.ndarray]:
+    """Ranks feature clusters by predicted disparity and returns R^2/Pearson plus the ranked arrays."""
+    sorted_cluster_indices = np.argsort(-np.abs(u_bar_global))
+    if num_features > 0:
+        sorted_cluster_indices = sorted_cluster_indices[:num_features]
+
+    delta_predicted = []
+    delta_empirical = []
+    for col_idx in sorted_cluster_indices:
+        cid = cluster_ids[col_idx]
+        feats = cluster_map.clusters[cid]
+        if not feats:
+            continue
+        delta_predicted.append(float(u_bar_global[col_idx]))
+        delta_empirical.append(float(np.mean(delta_empirical_all[feats])))
+
+    delta_pred_arr = np.array(delta_predicted, dtype=np.float64)
+    delta_emp_arr = np.array(delta_empirical, dtype=np.float64)
+    metrics = compute_prediction_validation_metrics(delta_pred_arr, delta_emp_arr)
+    return metrics, delta_pred_arr, delta_emp_arr
 
 
 def main():
@@ -304,6 +374,8 @@ def main():
     parser.add_argument("--eval_prompts", type=int, default=200, help="Number of evaluation prompts for rollout comparison")
     parser.add_argument("--epochs", type=int, default=1, help="Number of DPO training epochs")
     parser.add_argument("--max_new_tokens", type=int, default=128, help="Max new tokens generated per rollout")
+    parser.add_argument("--lora_rank", type=int, default=16, help="LoRA rank for DPO fine-tuning")
+    parser.add_argument("--margin_pairs", type=int, default=200, help="Number of held-out pairs for the reward-margin positive control")
     args = parser.parse_args()
 
     cfg = PipelineConfig.load_json(args.config)
@@ -325,14 +397,19 @@ def main():
         ex_dicts = json.load(f)
     examples = [PreferenceExample.from_dict(d) for d in ex_dicts]
 
-    if args.train_samples <= 0 or args.train_samples >= len(examples):
-        raise ValueError(f"--train_samples must be in (0, {len(examples)}) so held-out eval prompts exist; got {args.train_samples}")
+    if args.train_samples <= 0 or args.train_samples + args.eval_prompts > len(examples):
+        raise ValueError(f"--train_samples ({args.train_samples}) + --eval_prompts ({args.eval_prompts}) must be within the {len(examples)} cached examples so eval prompts are held out")
 
-    n_train = args.train_samples
-    held_out_examples = examples[n_train:]
+    rng = np.random.RandomState(cfg.seed)
+    perm = rng.permutation(len(examples))
+    train_indices = perm[: args.train_samples]
+    eval_indices = perm[args.train_samples : args.train_samples + args.eval_prompts]
+    train_examples = [examples[i] for i in train_indices]
+    eval_examples = [examples[i] for i in eval_indices]
+    eval_prompts = [ex.prompt for ex in eval_examples]
 
-    n_eval = min(args.eval_prompts, len(held_out_examples))
-    eval_prompts = [ex.prompt for ex in held_out_examples[:n_eval]]
+    output_dir = os.path.join(cfg.output_dir, "p4_validation")
+    os.makedirs(output_dir, exist_ok=True)
 
     # 2. Load Model & SAE
     logger.info("Loading Base Model and SAE for DPO Fine-Tuning & Rollout extraction...")
@@ -342,36 +419,16 @@ def main():
     sae_backend = SAEBackend(cfg.sae)
     sae = sae_backend.load()
 
-    # 3. Capture Pre-DPO (SFT) Rollout SAE Feature Activations (on held-out evaluation prompts)
-    logger.info(f"Sampling Pre-DPO (SFT) text rollouts over {len(eval_prompts)} held-out evaluation prompts...")
-    sft_act_mean = sample_rollout_activations(model, tokenizer, sae, cfg.sae.layer, eval_prompts, cfg.model.device, tau=cfg.feature_conditioned.tau)
+    # 3. Positive control (pre-DPO): reward margin on held-out pairs
+    pre_margin_mean, pre_margin_std, n_margin = compute_reward_margin(model, tokenizer, eval_examples, cfg.model.device, n=args.margin_pairs, seed=cfg.seed)
+    logger.info(f"Pre-DPO reward margin (held-out): {pre_margin_mean:.4f} +/- {pre_margin_std:.4f} (n={n_margin})")
 
-    # 4. Fine-Tune Model on DPO Loss (move SAE to CPU to free VRAM during training)
-    train_examples = examples[:n_train]
-    logger.info(f"Training DPO model on all {len(train_examples):,} preference examples...")
-    if hasattr(sae, "to"):
-        sae.to("cpu")
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    # 4. Capture Pre-DPO rollout SAE feature activations (paired sampling; per-prompt saved)
+    logger.info(f"Sampling Pre-DPO text rollouts over {len(eval_prompts)} held-out evaluation prompts...")
+    sft_act_mean, sft_per_prompt = sample_rollout_activations(model, tokenizer, sae, cfg.sae.layer, eval_prompts, cfg.model.device, tau=cfg.feature_conditioned.tau, seed=cfg.seed)
+    np.save(os.path.join(output_dir, "per_prompt_pre.npy"), sft_per_prompt)
 
-    dpo_dataset = DPODataset(train_examples, tokenizer)
-    dpo_model = train_dpo_model(
-        model, tokenizer, dpo_dataset, cfg.model.device,
-        batch_size=args.batch_size, grad_accum=args.grad_accum,
-        beta=args.beta, lr=args.lr, epochs=args.epochs
-    )
-
-    if hasattr(sae, "to"):
-        sae.to(cfg.sae.device)
-
-    # 5. Capture Post-DPO Rollout SAE Feature Activations
-    logger.info(f"Sampling Post-DPO text rollouts over {len(eval_prompts)} held-out evaluation prompts...")
-    dpo_act_mean = sample_rollout_activations(dpo_model, tokenizer, sae, cfg.sae.layer, eval_prompts, cfg.model.device, tau=cfg.feature_conditioned.tau)
-
-    # Compute Empirical Rollout Feature Shift: delta_empirical = mean(f(y_DPO)) - mean(f(y_SFT))
-    delta_empirical_all = dpo_act_mean - sft_act_mean
-
-    # 6. Compute Global Feature Cluster Disparity u_bar_m (Paper Fig. 4a & App. B.1)
+    # 5. Compute Global Feature Cluster Disparity u_bar_m once (TRAIN examples only; static dataset signal)
     clusters_path = os.path.join(subfolder, "clusters.json")
     with open(clusters_path, "r", encoding="utf-8") as f:
         clusters_data = json.load(f)
@@ -390,42 +447,82 @@ def main():
 
     fc_pipeline = FeatureConditionedPipeline(cfg.feature_conditioned)
     fc_res = fc_pipeline.run(mats, cluster_map, seed=cfg.seed)
-    u_matrix = fc_res.u_matrix  # (N, K_r)
-
-    # Compute global dataset-wide mean disparity per feature cluster m: u_bar_m = mean(u_{i,m})
+    u_bar_global = np.mean(fc_res.u_matrix[train_indices], axis=0)  # (K_r,) mean disparity over TRAIN examples only
     cluster_ids = sorted(cluster_map.clusters.keys())
-    u_bar_global = np.mean(u_matrix, axis=0)  # (K_r,)
+    with open(os.path.join(output_dir, "cluster_ids.json"), "w", encoding="utf-8") as f:
+        json.dump(cluster_ids, f)
+    np.save(os.path.join(output_dir, "u_bar_global.npy"), u_bar_global)
 
-    # Rank feature clusters by total magnitude of predicted disparity
-    sorted_cluster_indices = np.argsort(-np.abs(u_bar_global))
-    if args.num_features > 0:
-        sorted_cluster_indices = sorted_cluster_indices[:args.num_features]
+    # Per-feature predicted disparity over train examples (feature-level Spearman in offline analysis)
+    tau = cfg.feature_conditioned.tau
+    c_bin = mats.C_freq[train_indices] > tau
+    r_bin = mats.R_freq[train_indices] > tau
+    u_feature = np.asarray(c_bin.mean(axis=0) - r_bin.mean(axis=0)).ravel().astype(np.float32)
+    del c_bin, r_bin
+    gc.collect()
+    np.save(os.path.join(output_dir, "u_feature.npy"), u_feature)
 
-    delta_predicted = []
-    delta_empirical = []
+    # 6. Fine-Tune Model on DPO Loss, computing R^2 after every epoch (move SAE to CPU to free VRAM during training)
+    logger.info(f"Training DPO model on all {len(train_examples):,} preference examples...")
+    if hasattr(sae, "to"):
+        sae.to("cpu")
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
-    for col_idx in sorted_cluster_indices:
-        cid = cluster_ids[col_idx]
-        feats = cluster_map.clusters[cid]
-        if not feats:
-            continue
-        pred_delta = float(u_bar_global[col_idx])
-        emp_delta = float(np.mean(delta_empirical_all[feats]))
-        delta_predicted.append(pred_delta)
-        delta_empirical.append(emp_delta)
+    dpo_dataset = DPODataset(train_examples, tokenizer)
+    per_epoch_metrics = []
 
-    delta_pred_arr = np.array(delta_predicted, dtype=np.float64)
-    delta_emp_arr = np.array(delta_empirical, dtype=np.float64)
+    def eval_epoch(epoch: int, current_model):
+        if hasattr(sae, "to"):
+            sae.to(cfg.sae.device)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        logger.info(f"Sampling Post-DPO text rollouts for epoch {epoch}/{args.epochs} over {len(eval_prompts)} held-out evaluation prompts...")
+        dpo_act_mean, dpo_per_prompt = sample_rollout_activations(current_model, tokenizer, sae, cfg.sae.layer, eval_prompts, cfg.model.device, tau=cfg.feature_conditioned.tau, seed=cfg.seed)
+        np.save(os.path.join(output_dir, f"per_prompt_post_epoch{epoch}.npy"), dpo_per_prompt)
+        delta_empirical_all = dpo_act_mean - sft_act_mean  # mean(f(y_DPO)) - mean(f(y_SFT))
+        logger.info(f"Empirical shift magnitude: max|Δ|={np.abs(delta_empirical_all).max():.2e}, mean|Δ|={np.abs(delta_empirical_all).mean():.2e}")
 
-    metrics = compute_prediction_validation_metrics(delta_pred_arr, delta_emp_arr)
+        # Full per-cluster empirical shift over ALL retained clusters (for offline top-k / negative control)
+        delta_emp_full = np.full(len(cluster_ids), np.nan, dtype=np.float32)
+        for k, cid in enumerate(cluster_ids):
+            feats = cluster_map.clusters[cid]
+            if feats:
+                delta_emp_full[k] = float(np.mean(delta_empirical_all[feats]))
+        np.save(os.path.join(output_dir, f"delta_emp_full_epoch{epoch}.npy"), delta_emp_full)
+        np.save(os.path.join(output_dir, f"delta_all_epoch{epoch}.npy"), delta_empirical_all)
 
-    output_dir = os.path.join(cfg.output_dir, "p4_validation")
-    os.makedirs(output_dir, exist_ok=True)
+        metrics, _, _ = compute_cluster_validation(delta_empirical_all, cluster_ids, cluster_map, u_bar_global, args.num_features)
+        margin_mean, margin_std, _ = compute_reward_margin(current_model, tokenizer, eval_examples, cfg.model.device, n=args.margin_pairs, seed=cfg.seed)
+        per_epoch_metrics.append({"epoch": epoch, **asdict(metrics), "reward_margin": margin_mean, "reward_margin_std": margin_std})
+        logger.info(f"Epoch {epoch}/{args.epochs} R^2 = {metrics.r2_score:.4f} | Pearson r: {metrics.pearson_r:.4f} | reward margin: {margin_mean:.4f} (pre={pre_margin_mean:.4f})")
+        if hasattr(sae, "to"):
+            sae.to("cpu")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    train_dpo_model(
+        model, tokenizer, dpo_dataset, cfg.model.device,
+        batch_size=args.batch_size, grad_accum=args.grad_accum,
+        beta=args.beta, lr=args.lr, epochs=args.epochs, lora_rank=args.lora_rank, on_epoch_end=eval_epoch
+    )
+
+    # 7. Save per-epoch R^2 track, reward margins, and final metrics
+    with open(os.path.join(output_dir, "p4_r2_by_epoch.json"), "w", encoding="utf-8") as f:
+        json.dump(per_epoch_metrics, f, indent=2)
+    with open(os.path.join(output_dir, "reward_margin.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            "pre_dpo": {"mean": pre_margin_mean, "std": pre_margin_std, "n": n_margin},
+            "per_epoch": [{"epoch": m["epoch"], "mean": m["reward_margin"], "std": m["reward_margin_std"]} for m in per_epoch_metrics],
+        }, f, indent=2)
+
+    final_metrics = ValidationMetrics(**{k: v for k, v in per_epoch_metrics[-1].items() if k not in ("epoch", "reward_margin", "reward_margin_std")})
     metrics_file = os.path.join(output_dir, "p4_r2_metrics.json")
-    metrics.save_json(metrics_file)
+    final_metrics.save_json(metrics_file)
 
+    track = ", ".join(f"ep{m['epoch']}: R2={m['r2_score']:.4f}" for m in per_epoch_metrics)
     logger.info(f"=== [Phase P4 100% Real DPO Validation Completed!] ===")
-    logger.info(f"R^2 score: {metrics.r2_score:.4f} | Pearson r: {metrics.pearson_r:.4f}. Saved to '{metrics_file}'")
+    logger.info(f"Per-epoch track -> {track}. Final R^2: {final_metrics.r2_score:.4f}. Saved to '{output_dir}'")
 
 
 if __name__ == "__main__":

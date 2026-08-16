@@ -18,11 +18,17 @@ LaTeX source) — read the relevant appendix section before touching a module.
 
 - Base: `Qwen/Qwen3-1.7B-Base` or `google/gemma-2-2b`.
 - SAE: Qwen-Scope TopK (`Qwen/SAE-Res-Qwen3-1.7B-Base-W32K-L0_50`, k=50) or Gemma-Scope TopK (`gemma-scope-2b-pt-res-canonical`, layer 12).
-- The paper's SAE is a BatchTopK trained on the SFT model; Qwen-Scope / Gemma-Scope is our stand-in. Document any fidelity deviations in code.
+## Server & Hardware Context (CPU Load & Mechanical HDD)
+
+- **High System Load (50+)**: The server frequently runs heavy background training jobs (e.g. `ST_train.py`, meteorological ViT models), causing CPU run queues and load averages to reach 50–60.
+- **Mechanical HDD on `/mnt/disk4`**: Conda environment (`pdd`), models, checkpoints, and datasets reside on `/mnt/disk4` (`/dev/sdb1`), which is a mechanical hard drive under heavy I/O contention. Python imports and file reads can take 15–30s due to disk wait (`wait_on_page_bit_common`, `STAT=Dl+`).
+- **RAM & Swap Pressure**: System RAM cache is near capacity with ~2GB pushed to swap.
+- **DIAGNOSTIC FIRST PRINCIPLE**: If a command or server startup is slow, hanging, or delayed, **ALWAYS check system load, disk I/O wait, and swap FIRST (`uptime`, `vmstat 1 2`, `ps aux`) before assuming there is a code bug**. Do NOT immediately assume code is broken or rewrite logic when the bottleneck is server I/O contention. Keep startup reads lazy and lightweight to prevent I/O blocking.
 
 ## Strict Dev Rules & Coding Guidelines
 
 - **CRITICAL RULE: IMMEDIATE & PROACTIVE USER COMMUNICATION.** ALWAYS answer user questions and provide status updates in visible natural text FIRST before executing background tool calls or diagnostic scripts. NEVER remain silent or execute background tool loops without informing the user.
+- **STRICT RULE: NO POLLING OR REPETITIVE STATUS CHECK LOOPS.** When a background task (e.g. conda environment cloning, package installation, long-running data preprocessing, model training) is running, NEVER poll or execute repetitive status checking loops (`manage_task status`, schedule timers, repeated `ls`, `ps aux`). Simply stop calling tools and wait quietly for the system notification when the task completes.
 - **CRITICAL RULE: DATA PRESERVATION & SAFETY.** NEVER delete, overwrite, or touch pre-extracted feature matrix checkpoints, activation datasets (`matrices_mmap`), or long-running feature extraction artifacts without explicit user confirmation.
 - **CRITICAL RULE: FILE I/O & CHECKPOINT MUTATION CONFIRMATION.** ALWAYS ask the user for explicit confirmation before making any code modifications or running scripts that alter saved checkpoint files, metadata schemas, directory structures, or file I/O formatting. Explicitly ask the user if they want to update any specific checkpoint subfolders.
 - **STRICT RULE: ZERO MOCK OR SYNTHETIC CODE.** NEVER write placeholder, random, or mock code under any circumstances. All pipeline stages and experiment scripts (`p4_dpo_validation.py`, `p5_interventions.py`, `p6_autolabeling.py`) MUST execute 100% real GPU model training, real SAE rollout extraction, real dataset inoculation, and real data analysis.

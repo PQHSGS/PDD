@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import numpy as np
@@ -63,7 +64,9 @@ class PreferencePairInspectionRequest(BaseModel):
 class ViewerState:
     """Manages the target run directory, linked checkpoints, and hypothesis indices."""
 
-    def __init__(self, run_dir: str = "runs/gemma2_2b_dolci"):
+    def __init__(self, run_dir: Optional[str] = None):
+        if run_dir is None:
+            run_dir = os.environ.get("PDD_RUN_DIR", "runs/gemma2_2b_dolci")
         self.run_dir = Path(run_dir)
         self.summary: Dict[str, Any] = {}
         self.checkpoint_dir: Optional[Path] = None
@@ -90,8 +93,11 @@ class ViewerState:
         # 1. Load PDD Summary
         sum_path = self.run_dir / "pdd_summary.json"
         if sum_path.exists():
-            with open(sum_path, "r", encoding="utf-8") as f:
-                self.summary = json.load(f)
+            try:
+                with open(sum_path, "r", encoding="utf-8") as f:
+                    self.summary = json.load(f)
+            except Exception as e:
+                logger.warning(f"Error reading summary: {e}")
 
         # 2. Resolve Checkpoint Subfolder for Cluster Maps
         ckpt_path_str = self.summary.get("checkpoint_subfolder")
@@ -115,39 +121,55 @@ class ViewerState:
             except Exception:
                 pass
 
-        # 4. Load & Pre-Index Hypotheses
-        fc_file = self.run_dir / "feature_conditioned_hypotheses.json"
-        if fc_file.exists():
-            try:
-                with open(fc_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.fc_hypos = data.get("hypotheses", data) if isinstance(data, dict) else data
-                    self.k_to_fc = {}
-                    for h in self.fc_hypos:
-                        k = h.get("k")
-                        if k is not None:
-                            self.k_to_fc.setdefault(k, []).append(h)
-            except Exception as e:
-                logger.warning(f"Error reading fc hypotheses: {e}")
-
-        pc_file = self.run_dir / "prompt_conditioned_hypotheses.json"
-        if pc_file.exists():
-            try:
-                with open(pc_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.pc_hypos = data.get("hypotheses", data) if isinstance(data, dict) else data
-                    self.k_to_pc = {}
-                    for h in self.pc_hypos:
-                        k = h.get("k")
-                        if k is not None:
-                            self.k_to_pc.setdefault(k, []).append(h)
-            except Exception as e:
-                logger.warning(f"Error reading pc hypotheses: {e}")
+        # 4. Instant Seed from Summary
+        # Seed with summary top hypotheses initially
+        self.fc_hypos = self.summary.get("top_feature_conditioned_hypotheses", [])
+        self.pc_hypos = self.summary.get("top_prompt_conditioned_hypotheses", [])
 
         logger.info(
             f"ViewerState initialized for '{self.run_dir.name}': "
-            f"{len(self.fc_hypos)} FC hypotheses, {len(self.pc_hypos)} PC hypotheses, {len(self.feature_clusters)} feature clusters."
+            f"{len(self.feature_clusters)} feature clusters, ready for instant requests."
         )
+
+    @property
+    def prompt_hypotheses_map(self) -> Dict[int, List[Dict[str, Any]]]:
+        """Lazy load and cache prompt hypotheses map on demand."""
+        if not self.k_to_pc:
+            pc_file = self.run_dir / "prompt_conditioned_hypotheses.json"
+            if pc_file.exists():
+                try:
+                    with open(pc_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        self.pc_hypos = data.get("hypotheses", data) if isinstance(data, dict) else data
+                        k_to_pc = {}
+                        for h in self.pc_hypos:
+                            k = h.get("k")
+                            if k is not None:
+                                k_to_pc.setdefault(k, []).append(h)
+                        self.k_to_pc = k_to_pc
+                except Exception as e:
+                    logger.warning(f"Error reading pc hypotheses: {e}")
+        return self.k_to_pc
+
+    @property
+    def feature_hypotheses_map(self) -> Dict[int, List[Dict[str, Any]]]:
+        """Lazy load and cache feature hypotheses map on demand."""
+        if not self.k_to_fc:
+            fc_file = self.run_dir / "feature_conditioned_hypotheses.json"
+            if fc_file.exists():
+                try:
+                    with open(fc_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        self.fc_hypos = data.get("hypotheses", data) if isinstance(data, dict) else data
+                        k_to_fc = {}
+                        for h in self.fc_hypos:
+                            k = h.get("k")
+                            if k is not None:
+                                k_to_fc.setdefault(k, []).append(h)
+                        self.k_to_fc = k_to_fc
+                except Exception as e:
+                    logger.warning(f"Error reading fc hypotheses: {e}")
+        return self.k_to_fc
 
     def get_inspector(self):
         """Get or initialize the NeuralInspector configured for this target run."""
@@ -158,31 +180,50 @@ class ViewerState:
 
             model_path = model_cfg.get("path", "google/gemma-2-2b")
             sae_repo = sae_cfg.get("repo", "gemma-scope-2b-pt-res-canonical")
-            sae_id = sae_cfg.get("sae_id", "layer_12/width_16k/canonical")
+            sae_id = sae_cfg.get("sae_id")
             layer = sae_cfg.get("layer", 12)
+            d_in = sae_cfg.get("d_in")
+            d_sae = sae_cfg.get("d_sae")
+            k = sae_cfg.get("k")
 
-            self.inspector = get_neural_inspector(model_path=model_path, sae_repo=sae_repo, sae_id=sae_id, layer=layer)
+            self.inspector = get_neural_inspector(
+                model_path=model_path,
+                sae_repo=sae_repo,
+                sae_id=sae_id,
+                layer=layer,
+                d_in=d_in,
+                d_sae=d_sae,
+                k=k,
+            )
         return self.inspector
 
 
-# Global target state
-STATE = ViewerState()
+_STATE: Optional[ViewerState] = None
+
+
+def get_state() -> ViewerState:
+    """Lazy global state accessor."""
+    global _STATE
+    if _STATE is None:
+        _STATE = ViewerState()
+    return _STATE
 
 
 @app.get("/api/runs")
 def list_runs() -> Dict[str, Any]:
     """Return the active target run details."""
-    metrics = STATE.summary.get("metrics", {})
+    state = get_state()
+    metrics = state.summary.get("metrics", {})
     return {
         "runs": [{
-            "name": STATE.run_dir.name,
-            "path": str(STATE.run_dir),
-            "timestamp": STATE.summary.get("timestamp", "N/A"),
-            "config_name": STATE.summary.get("config", {}).get("name", STATE.run_dir.name),
-            "model": STATE.summary.get("config", {}).get("model", {}).get("path", "N/A"),
-            "sae": STATE.summary.get("config", {}).get("sae", {}).get("repo", "N/A"),
+            "name": state.run_dir.name,
+            "path": str(state.run_dir),
+            "timestamp": state.summary.get("timestamp", "N/A"),
+            "config_name": state.summary.get("config", {}).get("name", state.run_dir.name),
+            "model": state.summary.get("config", {}).get("model", {}).get("path", "N/A"),
+            "sae": state.summary.get("config", {}).get("sae", {}).get("repo", "N/A"),
             "num_examples": metrics.get("num_examples", 0),
-            "num_clusters": metrics.get("num_sae_feature_clusters", len(STATE.feature_clusters)),
+            "num_clusters": metrics.get("num_sae_feature_clusters", len(state.feature_clusters)),
         }]
     }
 
@@ -190,7 +231,8 @@ def list_runs() -> Dict[str, Any]:
 @app.get("/api/run_data")
 def get_run_data(run_dir: Optional[str] = Query(None)) -> Dict[str, Any]:
     """Retrieve summary, validation metrics, cluster labels, and top hypotheses for the active run."""
-    val_file = STATE.run_dir / "p4_validation" / "p4_r2_metrics.json"
+    state = get_state()
+    val_file = state.run_dir / "p4_validation" / "p4_r2_metrics.json"
     validation_metrics = {}
     if val_file.exists():
         try:
@@ -200,32 +242,33 @@ def get_run_data(run_dir: Optional[str] = Query(None)) -> Dict[str, Any]:
             pass
 
     return {
-        "summary": STATE.summary,
+        "summary": state.summary,
         "validation_metrics": validation_metrics,
-        "cluster_labels": STATE.cluster_labels,
-        "top_feature_conditioned_hypotheses": STATE.fc_hypos[:100],
-        "top_prompt_conditioned_hypotheses": STATE.pc_hypos[:100],
+        "cluster_labels": state.cluster_labels,
+        "top_feature_conditioned_hypotheses": state.fc_hypos[:100],
+        "top_prompt_conditioned_hypotheses": state.pc_hypos[:100],
     }
 
 
 @app.post("/api/inspect_prompt")
 def inspect_prompt(req: PromptInspectionRequest) -> Dict[str, Any]:
     """Mode A: Inspect prompt through live GPU Model + SAE forward pass and predict downstream behavioral shifts."""
+    state = get_state()
     prompt_text = req.prompt.strip()
     if not prompt_text:
         return {"prompt": "", "matched_clusters": [], "predicted_behavior_shifts": []}
 
     # 1. Real GPU Forward Pass -> SAE Features P(x)
-    inspector = STATE.get_inspector()
+    inspector = state.get_inspector()
     p_feat = inspector.extract_prompt_features(prompt_text)
 
     # 2. Score Prompt Clusters A_k
-    label_map = {cl.get("cluster_id"): cl for cl in STATE.cluster_labels}
+    label_map = {cl.get("cluster_id"): cl for cl in state.cluster_labels}
     top_sae_indices = np.argsort(p_feat)[-5:][::-1]
     top_sae_kws = [f"SAE-Feat_{idx} (act={p_feat[idx]:.2f})" for idx in top_sae_indices]
 
     scored_clusters = []
-    for k, hypos in STATE.k_to_pc.items():
+    for k, hypos in state.prompt_hypotheses_map.items():
         max_delta = max(abs(float(h.get("delta", 0.0))) for h in hypos)
         cl_info = label_map.get(k, {})
         title = cl_info.get("title", f"Prompt Cluster A_{k}")
@@ -295,6 +338,7 @@ def inspect_prompt(req: PromptInspectionRequest) -> Dict[str, Any]:
 @app.post("/api/inspect_preference_pair")
 def inspect_preference_pair(req: PreferencePairInspectionRequest) -> Dict[str, Any]:
     """Mode B: Batched GPU forward pass on preference pair to measure exact SAE disparity u = 1(C>0.01) - 1(R>0.01)."""
+    state = get_state()
     prompt_text = req.prompt.strip()
     chosen_text = req.chosen.strip()
     rejected_text = req.rejected.strip()
@@ -303,16 +347,16 @@ def inspect_preference_pair(req: PreferencePairInspectionRequest) -> Dict[str, A
         return {"matched_clusters": [], "promoted_concepts": [], "suppressed_concepts": []}
 
     # 1. Batched GPU Forward Pass -> Chosen (C), Rejected (R), and Disparity (u)
-    inspector = STATE.get_inspector()
+    inspector = state.get_inspector()
     c_p, r_p, u = inspector.extract_pair_features(prompt_text, chosen_text, rejected_text)
 
     # 2. Score Data Clusters B_k
-    label_map = {cl.get("cluster_id"): cl for cl in STATE.cluster_labels}
+    label_map = {cl.get("cluster_id"): cl for cl in state.cluster_labels}
     top_pair_indices = np.argsort(c_p + r_p)[-5:][::-1]
     top_pair_kws = [f"SAE-Feat_{idx} (act={(c_p+r_p)[idx]:.2f})" for idx in top_pair_indices]
 
     scored_clusters = []
-    for k, hypos in STATE.k_to_fc.items():
+    for k, hypos in state.feature_hypotheses_map.items():
         max_delta = max(abs(float(h.get("delta", 0.0))) for h in hypos)
         cl_info = label_map.get(k, {})
         title = cl_info.get("title", f"Data Topic B_{k}")
@@ -395,14 +439,14 @@ def serve_index():
 
 def main():
     parser = argparse.ArgumentParser(description="Launch PDD Interactive Web Viewer")
-    parser.add_argument("--run_dir", type=str, default="runs/gemma2_2b_dolci", help="Path to target PDD run directory")
+    parser.add_argument("--run_dir", type=str, default="runs/qwen3_1.7b_dolci", help="Path to target PDD run directory")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host address")
     parser.add_argument("--port", type=int, default=7000, help="Port to bind server")
     args = parser.parse_args()
 
-    # Re-initialize state with user-specified run directory
-    global STATE
-    STATE = ViewerState(run_dir=args.run_dir)
+    os.environ["PDD_RUN_DIR"] = args.run_dir
+    global _STATE
+    _STATE = ViewerState(run_dir=args.run_dir)
 
     logger.info(f"Starting PDD Viewer for '{args.run_dir}' at http://localhost:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port)

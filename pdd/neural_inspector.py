@@ -26,8 +26,11 @@ class NeuralInspector:
         self,
         model_path: str = "google/gemma-2-2b",
         sae_repo: str = "gemma-scope-2b-pt-res-canonical",
-        sae_id: str = "layer_12/width_16k/canonical",
+        sae_id: Optional[str] = "layer_12/width_16k/canonical",
         layer: int = 12,
+        d_in: Optional[int] = None,
+        d_sae: Optional[int] = None,
+        k: Optional[int] = None,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         dtype: str = "bfloat16",
     ):
@@ -35,6 +38,9 @@ class NeuralInspector:
         self.sae_repo = sae_repo
         self.sae_id = sae_id
         self.layer = layer
+        self.d_in = d_in
+        self.d_sae = d_sae
+        self.k = k
         self.device = device
         self.dtype = dtype
 
@@ -59,6 +65,9 @@ class NeuralInspector:
             repo=self.sae_repo,
             sae_id=self.sae_id,
             layer=self.layer,
+            d_in=self.d_in if self.d_in is not None else 2048,
+            d_sae=self.d_sae if self.d_sae is not None else 16384,
+            k=self.k if self.k is not None else 50,
             device=self.device,
         )
         sae_backend = SAEBackend(sae_cfg)
@@ -160,8 +169,11 @@ _INSPECTOR_INSTANCE: Optional[NeuralInspector] = None
 def get_neural_inspector(
     model_path: str = "google/gemma-2-2b",
     sae_repo: str = "gemma-scope-2b-pt-res-canonical",
-    sae_id: str = "layer_12/width_16k/canonical",
+    sae_id: Optional[str] = "layer_12/width_16k/canonical",
     layer: int = 12,
+    d_in: Optional[int] = None,
+    d_sae: Optional[int] = None,
+    k: Optional[int] = None,
 ) -> NeuralInspector:
     """Singleton getter that automatically swaps models and frees GPU VRAM upon run selection switch."""
     global _INSPECTOR_INSTANCE
@@ -181,5 +193,8 @@ def get_neural_inspector(
             sae_repo=sae_repo,
             sae_id=sae_id,
             layer=layer,
+            d_in=d_in,
+            d_sae=d_sae,
+            k=k,
         )
     return _INSPECTOR_INSTANCE
