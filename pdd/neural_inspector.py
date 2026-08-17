@@ -50,7 +50,12 @@ class NeuralInspector:
         self._is_loaded = False
 
     def load(self) -> None:
-        """Load Model, Tokenizer, and SAE via SAEBackend and warm up CUDA kernels."""
+        """Load Model, Tokenizer, and SAE via SAEBackend and warm up CUDA kernels.
+
+        Enforces a single device for both model and SAE: if loading on CUDA fails
+        (or the SAE silently falls back to CPU while the model stays on GPU), the
+        whole stack is retried on CPU so inference never runs on mismatched devices.
+        """
         if self._is_loaded:
             return
 
@@ -70,54 +75,91 @@ class NeuralInspector:
                 logger.warning(f"Could not query CUDA memory: {e}")
 
         try:
-            logger.info(f"Loading Tokenizer & Model ({self.model_path}) on {self.device}...")
-            model_cfg = ModelConfig(path=self.model_path, dtype=self.dtype, device=self.device)
-            model_backend = ModelBackend(model_cfg)
-            self.model, self.tokenizer = model_backend.load()
-
-            logger.info(f"Loading SAE ({self.sae_repo}) via SAEBackend on {self.device}...")
-            sae_cfg = SAEConfig(
-                type="auto",
-                repo=self.sae_repo,
-                sae_id=self.sae_id,
-                layer=self.layer,
-                d_in=self.d_in if self.d_in is not None else 2048,
-                d_sae=self.d_sae if self.d_sae is not None else 16384,
-                k=self.k if self.k is not None else 50,
-                device=self.device,
-            )
-            sae_backend = SAEBackend(sae_cfg)
-            self.sae = sae_backend.load()
-            self._is_loaded = True
-            logger.info(f"NeuralInspector successfully initialized via SAEBackend on {self.device}.")
+            self._load_components()
         except (torch.OutOfMemoryError, RuntimeError) as e:
-            if "CUDA out of memory" in str(e) or isinstance(e, torch.OutOfMemoryError):
-                logger.warning(f"Caught CUDA OOM during model load. Retrying on CPU: {e}")
+            if self._is_cuda_failure(e):
+                logger.warning(f"Caught CUDA failure during load ({e}). Retrying the full model+SAE load on CPU...")
+                self._release_components()
                 self.device = "cpu"
                 self.dtype = "float32"
                 torch.cuda.empty_cache()
                 gc.collect()
-
-                model_cfg = ModelConfig(path=self.model_path, dtype=self.dtype, device=self.device)
-                model_backend = ModelBackend(model_cfg)
-                self.model, self.tokenizer = model_backend.load()
-
-                sae_cfg = SAEConfig(
-                    type="auto",
-                    repo=self.sae_repo,
-                    sae_id=self.sae_id,
-                    layer=self.layer,
-                    d_in=self.d_in if self.d_in is not None else 2048,
-                    d_sae=self.d_sae if self.d_sae is not None else 16384,
-                    k=self.k if self.k is not None else 50,
-                    device=self.device,
-                )
-                sae_backend = SAEBackend(sae_cfg)
-                self.sae = sae_backend.load()
-                self._is_loaded = True
-                logger.info(f"NeuralInspector successfully initialized on CPU fallback.")
+                self._load_components()
             else:
                 raise e
+
+        if not self._devices_consistent():
+            logger.warning(
+                f"Model/SAE device mismatch after load (model on {self._model_device()}, SAE on {self._sae_device()}). "
+                f"Reloading both on CPU..."
+            )
+            self._release_components()
+            self.device = "cpu"
+            self.dtype = "float32"
+            torch.cuda.empty_cache()
+            gc.collect()
+            self._load_components()
+
+        self._is_loaded = True
+        logger.info(f"NeuralInspector successfully initialized via SAEBackend on {self.device}.")
+
+    def _load_components(self) -> None:
+        logger.info(f"Loading Tokenizer & Model ({self.model_path}) on {self.device}...")
+        model_cfg = ModelConfig(path=self.model_path, dtype=self.dtype, device=self.device)
+        model_backend = ModelBackend(model_cfg)
+        self.model, self.tokenizer = model_backend.load()
+
+        logger.info(f"Loading SAE ({self.sae_repo}) via SAEBackend on {self.device}...")
+        sae_cfg = SAEConfig(
+            type="auto",
+            repo=self.sae_repo,
+            sae_id=self.sae_id,
+            layer=self.layer,
+            d_in=self.d_in if self.d_in is not None else 2048,
+            d_sae=self.d_sae if self.d_sae is not None else 16384,
+            k=self.k if self.k is not None else 50,
+            device=self.device,
+        )
+        sae_backend = SAEBackend(sae_cfg)
+        self.sae = sae_backend.load()
+
+    def _release_components(self) -> None:
+        for attr in ("model", "tokenizer", "sae"):
+            obj = getattr(self, attr, None)
+            if obj is not None:
+                try:
+                    del obj
+                except Exception:
+                    pass
+            setattr(self, attr, None)
+
+    @staticmethod
+    def _is_cuda_failure(e: Exception) -> bool:
+        if isinstance(e, torch.OutOfMemoryError):
+            return True
+        msg = str(e).lower()
+        return "cuda out of memory" in msg or "cublas" in msg or "cuda error" in msg
+
+    def _model_device(self) -> str:
+        if self.model is None:
+            return "None"
+        try:
+            return str(next(self.model.parameters()).device)
+        except (StopIteration, AttributeError):
+            return "unknown"
+
+    def _sae_device(self) -> str:
+        if self.sae is None:
+            return "None"
+        try:
+            return str(next(self.sae.parameters()).device)
+        except (StopIteration, AttributeError):
+            return "unknown"
+
+    def _devices_consistent(self) -> bool:
+        if self.model is None or self.sae is None:
+            return False
+        return self._model_device().split(":")[0] == self._sae_device().split(":")[0]
 
     @torch.inference_mode()
     def extract_prompt_features(self, prompt: str) -> np.ndarray:
@@ -225,7 +267,11 @@ def get_neural_inspector(
         if (
             _INSPECTOR_INSTANCE.model_path != model_path
             or _INSPECTOR_INSTANCE.sae_repo != sae_repo
+            or _INSPECTOR_INSTANCE.sae_id != sae_id
             or _INSPECTOR_INSTANCE.layer != layer
+            or _INSPECTOR_INSTANCE.d_sae != d_sae
+            or _INSPECTOR_INSTANCE.d_in != d_in
+            or _INSPECTOR_INSTANCE.k != k
         ):
             logger.info(f"Model switch detected ({_INSPECTOR_INSTANCE.model_path} -> {model_path}). Releasing GPU VRAM...")
             _INSPECTOR_INSTANCE.unload()

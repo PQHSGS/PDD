@@ -81,9 +81,14 @@ class PromptConditionedPipeline:
         Rf = _to_csr(matrices.R_freq)
         N, d_sae = P.shape
 
-        effective_min_p = min(self.cfg.min_prompt_count, max(2, int(0.01 * N)))
-        effective_min_r = min(self.cfg.min_resp_count, max(2, int(0.01 * N)))
-        logger.info(f"Filtering features for prompt-conditioned pipeline (effective min_prompt_count={effective_min_p}, min_resp_count={effective_min_r})...")
+        # Strict config-driven filters: honor min_prompt_count / min_resp_count
+        # as-is (only a >= 2 floor to keep k-means/SVD feasible). No auto-cap.
+        effective_min_p = max(2, int(self.cfg.min_prompt_count))
+        effective_min_r = max(2, int(self.cfg.min_resp_count))
+        logger.info(
+            f"Filtering features for prompt-conditioned pipeline "
+            f"(strict min_prompt_count={effective_min_p}, min_resp_count={effective_min_r} from config; no auto-cap)..."
+        )
 
         if sp.issparse(P):
             p_counts = np.bincount(P.indices, minlength=d_sae).astype(np.int64)

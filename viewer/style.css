@@ -103,7 +103,7 @@ body {
   color: var(--text-muted);
 }
 
-.run-selector {
+.run-name {
   padding: 8px 14px;
   font-family: var(--font-mono);
   font-size: 0.875rem;
@@ -111,8 +111,6 @@ body {
   border-radius: var(--radius-md);
   background: var(--bg-card);
   color: var(--text-main);
-  outline: none;
-  cursor: pointer;
 }
 
 .btn {
@@ -525,6 +523,10 @@ body {
   padding-top: 24px;
 }
 
+.hidden {
+  display: none !important;
+}
+
 .inspector-results.hidden {
   display: none;
 }
@@ -602,4 +604,22 @@ body {
   font-family: var(--font-mono);
   margin-right: 4px;
   margin-bottom: 4px;
+}
+
+.cluster-tag {
+  cursor: pointer;
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+.cluster-tag:hover {
+  background: var(--color-accent);
+  color: #fff;
+}
+.pc-cluster-link {
+  cursor: pointer;
+  color: var(--color-accent);
+  text-decoration: underline dotted;
+}
+.pc-cluster-link:hover {
+  color: var(--color-primary);
 }

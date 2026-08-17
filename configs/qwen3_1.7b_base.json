@@ -53,5 +53,16 @@
     "n_svd": 128,
     "n_prompt_clusters": 512,
     "n_resp_clusters": 512
+  },
+  "auto_label": {
+    "enabled": true,
+    "label_model": "Qwen/Qwen3-1.7B",
+    "heuristic": false,
+    "num_clusters": -1,
+    "skip_feature_clusters": false,
+    "skip_pc_examples": false,
+    "pc_n_top": 12,
+    "max_prompt_chars": 600,
+    "max_examples": 10
   }
 }

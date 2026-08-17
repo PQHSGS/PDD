@@ -1,6 +1,6 @@
 // Reactive Client Logic for PDD Interactive Viewer
 document.addEventListener("DOMContentLoaded", () => {
-  const runSelect = document.getElementById("run-select");
+  const runNameEl = document.getElementById("run-name");
   const refreshBtn = document.getElementById("refresh-btn");
   const tabBtns = document.querySelectorAll(".tab-btn");
   const tabContents = document.querySelectorAll(".tab-content");
@@ -28,10 +28,18 @@ document.addEventListener("DOMContentLoaded", () => {
   const inspectorResults = document.getElementById("inspector-results");
   const matchedClustersList = document.getElementById("matched-clusters-list");
   const predictedShiftsList = document.getElementById("predicted-shifts-list");
+  const saeFeaturesList = document.getElementById("sae-features-list");
 
   let currentRunData = null;
   let allFcHypotheses = [];
   let allPcHypotheses = [];
+
+  // Escape backend-provided strings before injecting into innerHTML (XSS guard)
+  function esc(v) {
+    return String(v == null ? "" : v).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+  }
 
   // Tab Switching
   tabBtns.forEach(btn => {
@@ -45,43 +53,137 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  // 1. Fetch available runs
+  // Shared dropdown: whole-cluster interpretation for SAE feature clusters T_m.
+  // Clicking a T_m tag (in the inspector feature list or the B.1 FC table) toggles
+  // a dropdown with the LLM whole-cluster label + top member SAE features
+  // (Neuronpedia) + the real dataset examples firing the cluster.
+  let activeClusterM = null;
+  async function loadClusterInfo(clusterM, area) {
+    if (!area) area = document.getElementById("cluster-examples-area");
+    if (!area) return;
+    if (activeClusterM === clusterM) { area.innerHTML = ""; activeClusterM = null; return; }
+    activeClusterM = clusterM;
+    area.innerHTML = `<div class="shift-item" style="font-size:0.85rem;">Loading interpretation for T_${esc(clusterM)}...</div>`;
+    try {
+      const res = await fetch(`/api/feature_cluster_info?m=${encodeURIComponent(clusterM)}&top_n=5`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const lab = data.label || {};
+      const feats = data.top_features || [];
+      const exs = data.examples || [];
+      const head = `<div class="shift-item" style="font-size:0.9rem;">
+          <strong>T_${esc(clusterM)} — ${esc(lab.title || "No LLM label")}</strong>
+          <span class="keyword-tag">${esc(data.n_features)} features</span>
+          ${(lab.keywords || []).map(k => `<span class="keyword-tag">${esc(k)}</span>`).join("")}
+        </div>`;
+      const desc = lab.description
+        ? `<div class="shift-item" style="font-size:0.82rem; color:var(--text-muted);">${esc(lab.description)}</div>` : "";
+      const featHtml = feats.length
+        ? `<div class="shift-item" style="font-size:0.82rem;"><strong>Top member SAE features:</strong> ${
+            feats.map(f => {
+              const local = f.local_label;
+              const link = f.neuronpedia_url
+                ? `<a href="${esc(f.neuronpedia_url)}" target="_blank" rel="noopener noreferrer" class="keyword-tag" style="text-decoration:none;" title="Open Neuronpedia dashboard">SAE ${esc(f.feature_index)}</a>`
+                : `<span class="keyword-tag">SAE ${esc(f.feature_index)}</span>`;
+              const localHtml = local
+                ? `<span class="keyword-tag" style="background:var(--color-accent-soft,#2a2f45);" title="${esc(local.description || '')}">${esc(local.title || '')}</span>`
+                : "";
+              const kws = (local && local.keywords && local.keywords.length)
+                ? local.keywords.slice(0, 3).map(k => `<span class="keyword-tag">${esc(k)}</span>`).join("") : "";
+              return `${link}${localHtml}${kws}`;
+            }).join("")}
+          </div>` : "";
+      const exHtml = exs.length
+        ? `<div class="shift-item" style="font-size:0.82rem;"><strong>Real examples firing T_${esc(clusterM)}:</strong></div>${
+            exs.map(e => `
+              <div class="shift-item" style="font-size:0.8rem; border-left:3px solid var(--color-accent); padding-left:8px; margin-top:6px;">
+                <div style="font-weight:600;">#${esc(e.index)} · score ${Number(e.score).toFixed(1)}</div>
+                <div style="color:var(--text-muted); margin-top:2px;"><strong>Prompt:</strong> ${esc(e.prompt)}</div>
+                <div style="color:var(--color-chosen); margin-top:2px;"><strong>Chosen:</strong> ${esc(e.chosen)}</div>
+                <div style="color:var(--color-rejected); margin-top:2px;"><strong>Rejected:</strong> ${esc(e.rejected)}</div>
+              </div>`).join("")}` : "";
+      area.innerHTML = head + desc + featHtml + exHtml;
+    } catch (err) {
+      area.innerHTML = `<div class="shift-item" style="font-size:0.85rem;">Failed to load interpretation: ${esc(err.message)}</div>`;
+    }
+  }
+  document.addEventListener("click", (ev) => {
+    const tag = ev.target.closest(".cluster-tag");
+    if (tag && tag.dataset.cluster !== undefined) {
+      // T_m tags in the B.1 table (Stat tab) render below the table; tags in the
+      // inspector feature list render into the inspector's own dropdown area.
+      const area = tag.closest(".table-card")
+        ? document.getElementById("fc-cluster-examples-area")
+        : document.getElementById("cluster-examples-area");
+      loadClusterInfo(tag.dataset.cluster, area);
+    }
+  });
+
+  // A_k / R_m meaning: real examples that express each cluster (no SAE breakdown).
+  async function loadPcExamples(ctype, cid) {
+    const area = document.getElementById("pc-examples-area");
+    const label = (ctype === "prompt" ? "A_" : "R_") + cid;
+    area.innerHTML = `<div class="shift-item" style="font-size:0.85rem;">Loading real examples for ${esc(label)}...</div>`;
+    try {
+      const res = await fetch(`/api/pc_cluster_examples?cluster_type=${encodeURIComponent(ctype)}&cid=${encodeURIComponent(cid)}&top_n=4`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const exs = data.examples || [];
+      const toks = data.tokens || [];
+      if (exs.length === 0) { area.innerHTML = `<div class="shift-item" style="font-size:0.85rem;">No cached examples express ${esc(label)}.</div>`; return; }
+      const tokHtml = toks.length
+        ? `<div class="shift-item" style="font-size:0.82rem;"><strong>Top contributing tokens:</strong> ${
+            toks.map(t => `<span class="keyword-tag">${esc(t)}</span>`).join("")}</div>`
+        : "";
+      area.innerHTML = `
+        <div class="shift-item" style="font-size:0.85rem;"><strong>Meaning of ${esc(label)} — strongest real dataset examples:</strong></div>
+        ${tokHtml}
+        ${exs.map(e => `
+          <div class="shift-item" style="font-size:0.8rem; border-left:3px solid var(--color-accent); padding-left:8px; margin-top:6px;">
+            <div style="font-weight:600;">#${esc(e.index)}</div>
+            <div style="color:var(--text-muted); margin-top:2px;"><strong>Prompt:</strong> ${esc(e.prompt)}</div>
+            <div style="color:var(--color-chosen); margin-top:2px;"><strong>Chosen:</strong> ${esc(e.chosen)}</div>
+            <div style="color:var(--color-rejected); margin-top:2px;"><strong>Rejected:</strong> ${esc(e.rejected)}</div>
+          </div>
+        `).join("")}`;
+    } catch (err) {
+      area.innerHTML = `<div class="shift-item" style="font-size:0.85rem;">No examples available for ${esc(label)}.</div>`;
+    }
+  }
+  pcTbody.addEventListener("click", (ev) => {
+    const link = ev.target.closest(".pc-cluster-link");
+    if (link) loadPcExamples(link.dataset.type, link.dataset.cid);
+  });
+
+  // 1. Fetch the single targeted run (set via --run_dir on the server)
   async function loadRuns() {
     try {
       const res = await fetch("/api/runs");
       const data = await res.json();
       const runs = data.runs || [];
 
-      runSelect.innerHTML = "";
       if (runs.length === 0) {
-        runSelect.innerHTML = "<option value=''>No PDD runs found</option>";
+        if (runNameEl) runNameEl.textContent = "No PDD run found";
         return;
       }
 
-      runs.forEach(r => {
-        const opt = document.createElement("option");
-        opt.value = r.path;
-        opt.textContent = `${r.name} (${r.model || "PDD Run"})`;
-        runSelect.appendChild(opt);
-      });
-
-      if (runs.length > 0) {
-        loadRunData(runs[0].path);
-      }
+      const r = runs[0];
+      if (runNameEl) runNameEl.textContent = `${r.name} (${r.model || "PDD Run"})`;
+      loadRunData();
     } catch (err) {
       console.error("Failed to load runs:", err);
-      runSelect.innerHTML = "<option value=''>Error loading runs</option>";
+      if (runNameEl) runNameEl.textContent = "Error loading run";
     }
   }
 
-  // 2. Fetch data for selected run
-  async function loadRunData(runPath) {
+  // 2. Fetch data for the targeted run
+  async function loadRunData() {
     fcTbody.innerHTML = '<tr><td colspan="8" class="loading-cell">Loading hypotheses...</td></tr>';
     pcTbody.innerHTML = '<tr><td colspan="7" class="loading-cell">Loading prompt-conditioned hypotheses...</td></tr>';
     labelsContainer.innerHTML = '<p class="loading-cell">Loading cluster labels...</p>';
 
     try {
-      const res = await fetch(`/api/run_data?run_dir=${encodeURIComponent(runPath)}`);
+      const res = await fetch("/api/run_data");
       const data = await res.json();
       currentRunData = data;
 
@@ -98,12 +200,12 @@ document.addEventListener("DOMContentLoaded", () => {
         elR2.textContent = "N/A";
       }
 
-      allFcHypotheses = data.top_feature_conditioned_hypotheses || data.summary?.top_feature_conditioned_hypotheses || [];
-      allPcHypotheses = data.top_prompt_conditioned_hypotheses || data.summary?.top_prompt_conditioned_hypotheses || [];
+      allFcHypotheses = data.top_feature_conditioned_hypotheses || [];
+      allPcHypotheses = data.top_prompt_conditioned_hypotheses || [];
 
       renderFcTable();
       renderPcTable();
-      renderLabels(data.cluster_labels || []);
+      renderLabels(data.cluster_labels || [], data.feature_cluster_labels || {});
     } catch (err) {
       console.error("Failed to load run data:", err);
       fcTbody.innerHTML = '<tr><td colspan="8" class="loading-cell">Error loading run data</td></tr>';
@@ -134,7 +236,7 @@ document.addEventListener("DOMContentLoaded", () => {
     fcTbody.innerHTML = filtered.map(h => `
       <tr>
         <td><strong>B_${h.k}</strong> (n=${h.n_k || '-'})</td>
-        <td><strong>T_${h.m}</strong> (size=${h.t_m || '-'})</td>
+        <td><strong class="cluster-tag" data-cluster="${esc(h.m)}" title="Show label + member features + examples for T_${esc(h.m)}">T_${h.m}</strong> <span class="keyword-tag">size=${h.t_m || '-'}</span></td>
         <td>${h.delta ? (h.delta > 0 ? '+' : '') + h.delta.toFixed(4) : '-'}</td>
         <td>
           <span class="pill ${h.is_chosen_leaning ? 'pill-chosen' : 'pill-rejected'}">
@@ -167,8 +269,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     pcTbody.innerHTML = filtered.map(h => `
       <tr>
-        <td><strong>A_${h.k}</strong></td>
-        <td><strong>R_${h.m}</strong></td>
+        <td><strong class="pc-cluster-link" data-type="prompt" data-cid="${esc(h.k)}" title="Show real examples expressing A_${esc(h.k)}">A_${h.k}</strong></td>
+        <td><strong class="pc-cluster-link" data-type="response" data-cid="${esc(h.m)}" title="Show real examples expressing R_${esc(h.m)}">R_${h.m}</strong></td>
         <td>${h.n_prompt_feats || '-'}</td>
         <td>${h.n_resp_feats || '-'}</td>
         <td>${h.delta ? (h.delta > 0 ? '+' : '') + h.delta.toFixed(5) : '-'}</td>
@@ -178,22 +280,46 @@ document.addEventListener("DOMContentLoaded", () => {
     `).join("");
   }
 
-  // Render Cluster Labels
-  function renderLabels(labels) {
-    if (!labels || labels.length === 0) {
+  // Render Cluster Labels (B_k cards + T_m cards, covering all four cluster families)
+  function renderLabels(labels, fcLabels) {
+    const hasBk = labels && labels.length > 0;
+    const hasTm = fcLabels && Object.keys(fcLabels).length > 0;
+    if (!hasBk && !hasTm) {
       labelsContainer.innerHTML = '<p class="loading-cell">No auto-interpreted labels available for this run.</p>';
       return;
     }
 
-    labelsContainer.innerHTML = labels.map(l => `
-      <div class="label-card">
-        <div class="label-title">B_${l.cluster_id}: ${l.title || "Topic Cluster"}</div>
-        <div class="label-desc">${l.description || "No description"}</div>
-        <div class="keywords-wrap">
-          ${(l.keywords || []).map(k => `<span class="keyword-tag">${k}</span>`).join("")}
-        </div>
-      </div>
-    `).join("");
+    let html = "";
+    if (hasBk) {
+      html += `<h3 class="section-title" style="margin-top:0;">Data Clusters (B_k) — LLM labels</h3>
+        <div class="labels-grid">${labels.map(l => `
+          <div class="label-card">
+            <div class="label-title">B_${esc(l.cluster_id)}: ${esc(l.title || "Topic Cluster")}</div>
+            <div class="label-desc">${esc(l.description || "No description")}</div>
+            <div class="keywords-wrap">
+              ${(l.keywords || []).map(k => `<span class="keyword-tag">${esc(k)}</span>`).join("")}
+            </div>
+          </div>`).join("")}</div>`;
+    }
+
+    if (hasTm) {
+      html += `<h3 class="section-title">Feature Clusters (T_m) — whole-cluster LLM labels</h3>
+        <div class="labels-grid">${Object.entries(fcLabels).map(([m, l]) => `
+          <div class="label-card">
+            <div class="label-title">T_${esc(m)}: ${esc(l.title || "No label")}</div>
+            <div class="label-desc">${esc(l.description || "No description")}</div>
+            <div class="keywords-wrap">
+              ${(l.keywords || []).map(k => `<span class="keyword-tag">${esc(k)}</span>`).join("")}
+            </div>
+          </div>`).join("")}</div>`;
+    }
+
+    html += `<p class="section-desc" style="margin-top:14px;">
+      Prompt clusters (A_k) and response-delta clusters (R_m) have no separate LLM label — open them from the
+      <strong>Stat (B.1 + B.2)</strong> table (A_k / R_m links) to see their strongest real examples and
+      top contributing tokens.
+    </p>`;
+    labelsContainer.innerHTML = html;
   }
 
   // Mode Switcher & Elements
@@ -329,24 +455,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       let endpoint = "/api/inspect_prompt";
-      let selectedRun = runSelect.value;
-      if (!selectedRun && runSelect.options.length > 0) {
-        selectedRun = runSelect.options[0].value;
-      }
-      if (!selectedRun) {
-        alert("Please select a PDD run from the dropdown first.");
-        inspectBtn.disabled = false;
-        inspectBtn.textContent = "⚡ Inspect & Debug";
-        if (inspectorStatus) inspectorStatus.textContent = "";
-        return;
-      }
-
       let payload = {
         prompt: prompt,
-        run_dir: selectedRun,
-        top_k: 5,
-        apply_chat_template: applyTemplateCheck ? applyTemplateCheck.checked : false,
-        template_type: templateSelect ? templateSelect.value : "gemma"
+        top_k: 5
       };
 
       if (currentInspectorMode === "pair") {
@@ -395,12 +506,39 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         matchedClustersList.innerHTML = clusters.map(c => `
           <li class="cluster-item">
-            <strong>${c.title || `Cluster ${c.cluster_id}`}</strong>
-            <p>${c.description || ""}</p>
-            <div style="margin-top:4px;">Matched Keywords: ${(c.matched_keywords || []).map(k => `<span class="keyword-tag">${k}</span>`).join("")}</div>
+            <strong>${esc(c.title || `Cluster ${c.cluster_id}`)}</strong>
+            <p>${esc(c.description || "")}</p>
+            <div style="margin-top:4px;">Matched Keywords: ${(c.matched_keywords || []).map(k => `<span class="keyword-tag">${esc(k)}</span>`).join("")}</div>
           </li>
         `).join("");
       }
+
+      // Top Fired SAE Features (drill-down to individual features, Neuronpedia-linked)
+      const feats = data.top_sae_features || [];
+      if (feats.length === 0) {
+        saeFeaturesList.innerHTML = '<li class="cluster-item">No strong single-feature activations.</li>';
+      } else {
+        saeFeaturesList.innerHTML = feats.map(f => `
+          <li class="cluster-item">
+            ${f.neuronpedia_url
+              ? `<strong><a href="${esc(f.neuronpedia_url)}" target="_blank" rel="noopener noreferrer">SAE Feature ${esc(f.feature_index)}</a></strong>`
+              : `<strong>SAE Feature ${esc(f.feature_index)}</strong>`}
+            <div style="margin-top:4px;">
+              <span class="keyword-tag">act=${Number(f.activation).toFixed(3)}</span>
+              ${f.dp_direction === "amplified"
+                ? `<span class="keyword-tag" title="This DPO run fires the feature more in chosen than rejected responses (u>0)">DPO: amplified +${Number(f.dp_delta).toFixed(4)}</span>`
+                : f.dp_direction === "suppressed"
+                ? `<span class="keyword-tag" title="This DPO run fires the feature more in rejected responses (u<0)">DPO: suppressed ${Number(f.dp_delta).toFixed(4)}</span>`
+                : ""}
+              ${f.cluster_m != null ? `<span class="keyword-tag cluster-tag" data-cluster="${esc(f.cluster_m)}" title="Show LLM label + member features + examples for T_${esc(f.cluster_m)}">→ T_${esc(f.cluster_m)}</span>` : ""}
+              ${f.neuronpedia_url ? "" : '<span class="keyword-tag">no Neuronpedia dashboard</span>'}
+            </div>
+          </li>
+        `).join("");
+      }
+
+      // Clicking a T_m tag opens the shared whole-cluster interpretation dropdown
+      // (registered once at init above).
 
       // Render Predicted Shifts / Promoted Concepts
       if (currentInspectorMode === "pair") {
@@ -415,12 +553,12 @@ document.addEventListener("DOMContentLoaded", () => {
             html += `
               <div class="shift-item chosen">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                  <strong>Promoted Concept T_${p.feature_cluster_m} (Data Topic B_${p.data_cluster_k})</strong>
+                  <strong>Promoted Concept T_${esc(p.feature_cluster_m)}${p.data_cluster_k != null ? ` (Data Topic B_${esc(p.data_cluster_k)})` : ""}</strong>
                   <span class="pill pill-chosen">✅ Promoted (Reward)</span>
                 </div>
-                <p style="font-size:0.9rem; line-height:1.45; color:var(--text-main); margin-bottom:8px;">${p.explanation}</p>
+                <p style="font-size:0.9rem; line-height:1.45; color:var(--text-main); margin-bottom:8px;">${esc(p.explanation)}</p>
                 <div style="font-family:var(--font-mono); font-size:0.75rem; color:var(--text-muted);">
-                  Disparity Δ: <strong>${(p.delta > 0 ? '+' : '') + p.delta.toFixed(4)}</strong> | Welch z: <strong>${p.z_score.toFixed(2)}</strong> | Strength: <strong>${p.signal_strength}</strong>
+                  Disparity Δ: <strong>${(p.delta > 0 ? '+' : '') + p.delta.toFixed(4)}</strong> | Welch z: <strong>${p.z_score.toFixed(2)}</strong> | Strength: <strong>${esc(p.signal_strength)}</strong>
                 </div>
               </div>
             `;
@@ -429,12 +567,12 @@ document.addEventListener("DOMContentLoaded", () => {
             html += `
               <div class="shift-item rejected">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                  <strong>Suppressed Concept T_${s.feature_cluster_m} (Data Topic B_${s.data_cluster_k})</strong>
+                  <strong>Suppressed Concept T_${esc(s.feature_cluster_m)}${s.data_cluster_k != null ? ` (Data Topic B_${esc(s.data_cluster_k)})` : ""}</strong>
                   <span class="pill pill-rejected">❌ Suppressed (Penalty)</span>
                 </div>
-                <p style="font-size:0.9rem; line-height:1.45; color:var(--text-main); margin-bottom:8px;">${s.explanation}</p>
+                <p style="font-size:0.9rem; line-height:1.45; color:var(--text-main); margin-bottom:8px;">${esc(s.explanation)}</p>
                 <div style="font-family:var(--font-mono); font-size:0.75rem; color:var(--text-muted);">
-                  Disparity Δ: <strong>${(s.delta > 0 ? '+' : '') + s.delta.toFixed(4)}</strong> | Welch z: <strong>${s.z_score.toFixed(2)}</strong> | Strength: <strong>${s.signal_strength}</strong>
+                  Disparity Δ: <strong>${(s.delta > 0 ? '+' : '') + s.delta.toFixed(4)}</strong> | Welch z: <strong>${s.z_score.toFixed(2)}</strong> | Strength: <strong>${esc(s.signal_strength)}</strong>
                 </div>
               </div>
             `;
@@ -451,12 +589,12 @@ document.addEventListener("DOMContentLoaded", () => {
           predictedShiftsList.innerHTML = shifts.map(s => `
             <div class="shift-item ${s.delta > 0 ? 'chosen' : 'rejected'}">
               <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                <strong>Response Concept R_${s.response_cluster_m} (Prompt Category A_${s.prompt_cluster_k})</strong>
-                <span class="pill ${s.delta > 0 ? 'pill-chosen' : 'pill-rejected'}">${s.effect_direction}</span>
+                <strong>Response Concept T_${esc(s.response_cluster_m)} (Data Topic B_${esc(s.prompt_cluster_k)})</strong>
+                <span class="pill ${s.delta > 0 ? 'pill-chosen' : 'pill-rejected'}">${esc(s.effect_direction)}</span>
               </div>
-              <p style="font-size:0.9rem; line-height:1.45; color:var(--text-main); margin-bottom:8px;">${s.interpretation || ""}</p>
+              <p style="font-size:0.9rem; line-height:1.45; color:var(--text-main); margin-bottom:8px;">${esc(s.interpretation || "")}</p>
               <div style="font-family:var(--font-mono); font-size:0.75rem; color:var(--text-muted);">
-                Effect Δ: <strong>${(s.delta > 0 ? '+' : '') + s.delta.toFixed(5)}</strong> | Welch z: <strong>${s.z_score.toFixed(2)}</strong> | Cohen's d: <strong>${s.cohens_d.toFixed(2)}</strong>
+                Effect Δ: <strong>${(s.delta > 0 ? '+' : '') + s.delta.toFixed(5)}</strong> | Welch z: <strong>${s.z_score.toFixed(2)}</strong> | Cohen's d: <strong>${s.cohens_d.toFixed(2)}</strong>${s.live_activity != null ? ` | Live activity: <strong>${s.live_activity.toFixed(3)}</strong>` : ""}
               </div>
             </div>
           `).join("");
@@ -477,8 +615,9 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // Event Listeners
-  runSelect.addEventListener("change", () => loadRunData(runSelect.value));
-  refreshBtn.addEventListener("click", () => loadRunData(runSelect.value));
+  refreshBtn.addEventListener("click", () => {
+    loadRunData();
+  });
   fcSearch.addEventListener("input", renderFcTable);
   fcChosenOnly.addEventListener("change", renderFcTable);
   fcRejectedOnly.addEventListener("change", renderFcTable);

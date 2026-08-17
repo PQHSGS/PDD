@@ -7,12 +7,19 @@ Points directly to a target run directory and its linked checkpoint artifacts.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
+
+from .autolabeling import (
+    cluster_labels_path,
+    feature_cluster_labels_path,
+    pc_cluster_examples_path,
+)
 
 try:
     from fastapi import FastAPI, HTTPException, Query
@@ -37,7 +44,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -47,17 +54,13 @@ VIEWER_DIR = Path(__file__).parent.parent / "viewer"
 
 class PromptInspectionRequest(BaseModel):
     prompt: str
-    run_dir: Optional[str] = None
     top_k: int = 5
-    apply_chat_template: bool = False
-    template_type: str = "gemma"
 
 
 class PreferencePairInspectionRequest(BaseModel):
     prompt: str
     chosen: str
     rejected: str
-    run_dir: Optional[str] = None
     top_k: int = 5
 
 
@@ -66,7 +69,7 @@ class ViewerState:
 
     def __init__(self, run_dir: Optional[str] = None):
         if run_dir is None:
-            run_dir = os.environ.get("PDD_RUN_DIR", "runs/gemma2_2b_dolci")
+            run_dir = os.environ.get("PDD_RUN_DIR", "runs/qwen3_1.7b_dolci")
         self.run_dir = Path(run_dir)
         self.summary: Dict[str, Any] = {}
         self.checkpoint_dir: Optional[Path] = None
@@ -77,6 +80,14 @@ class ViewerState:
         self.k_to_fc: Dict[int, List[Dict[str, Any]]] = {}
         self.k_to_pc: Dict[int, List[Dict[str, Any]]] = {}
         self.inspector = None
+        self._feat_to_cluster: Optional[Dict[int, int]] = None
+        self._feature_matrices = None
+        self._examples = None
+        self._feat_delta: Optional[np.ndarray] = None
+        self._pc_cluster_examples = None
+        self._feature_cluster_labels: Optional[Dict[int, Dict[str, Any]]] = None
+        self._feature_labels: Optional[Dict[int, Dict[str, Any]]] = None
+        self._np_set: Optional[Tuple[str, str]] = None
 
         self.load()
 
@@ -113,7 +124,7 @@ class ViewerState:
                     logger.warning(f"Error loading clusters.json: {e}")
 
         # 3. Load Auto-Labels
-        lbl_file = self.run_dir / "p6_autolabeling" / "cluster_labels.json"
+        lbl_file = Path(cluster_labels_path(str(self.run_dir)))
         if lbl_file.exists():
             try:
                 with open(lbl_file, "r", encoding="utf-8") as f:
@@ -171,6 +182,374 @@ class ViewerState:
                     logger.warning(f"Error reading fc hypotheses: {e}")
         return self.k_to_fc
 
+    def _cluster_signals(self, activations: np.ndarray, mode: str = "sum") -> Dict[int, float]:
+        """Map a (d_sae,) live activation vector onto per-feature-cluster signals.
+
+        ``sum`` mirrors the paper's s = C + R cluster aggregate; ``mean`` mirrors
+        the per-cluster disparity u = (C>tau - R>tau)/|T_m|. Keys are feature
+        cluster ids (T_m) from the checkpoint clusters.json map.
+        """
+        signals: Dict[int, float] = {}
+        if activations is None or len(activations) == 0:
+            return signals
+        for m, feats in self.feature_clusters.items():
+            idx = np.asarray(feats, dtype=np.int64)
+            idx = idx[idx < len(activations)]
+            if len(idx) == 0:
+                signals[m] = 0.0
+                continue
+            vals = activations[idx]
+            signals[m] = float(vals.mean()) if mode == "mean" else float(vals.sum())
+        return signals
+
+    @staticmethod
+    def _hypothesis_evidence(hypos: List[Dict[str, Any]], signals: Dict[int, float]) -> List[Tuple[Dict[str, Any], float]]:
+        """Score each hypothesis by |delta| x live per-feature-cluster signal."""
+        ev: List[Tuple[Dict[str, Any], float]] = []
+        for h in hypos:
+            m = h.get("m")
+            sig = signals.get(m, 0.0) if m is not None else 0.0
+            ev.append((h, abs(float(h.get("delta", 0.0))) * abs(sig)))
+        return ev
+
+    def _cluster_keywords(self, activations: np.ndarray, feature_ms, top_n: int = 3) -> List[str]:
+        """Top individual SAE features by live activation within the given feature clusters."""
+        if activations is None or len(activations) == 0:
+            return []
+        feats: List[int] = []
+        for m in feature_ms:
+            feats.extend(self.feature_clusters.get(m, []))
+        if not feats:
+            return []
+        idx = np.asarray(feats, dtype=np.int64)
+        idx = idx[idx < len(activations)]
+        if len(idx) == 0:
+            return []
+        vals = activations[idx]
+        order = np.argsort(vals)[-top_n:][::-1]
+        return [f"SAE-Feat_{int(idx[i])} (act={vals[i]:.2f})" for i in order]
+
+    def _score_data_clusters(self, signal: Dict[int, float], feat_for_keywords: np.ndarray) -> List[Dict[str, Any]]:
+        """Shared scorer for both inspect modes: rank data clusters B_k by live-evidence-weighted hypotheses.
+
+        ``signal`` is the live per-feature-cluster activity (Mode A: sum over prompt
+        features; Mode B: mean of per-feature u). Each scored cluster carries its
+        hypotheses + best hypothesis for the downstream shift extraction.
+        """
+        label_map = {cl.get("cluster_id"): cl for cl in self.cluster_labels}
+        scored = []
+        for k, hypos in self.feature_hypotheses_map.items():
+            ev = self._hypothesis_evidence(hypos, signal)
+            if not ev:
+                continue
+            best_h, best_ev = max(ev, key=lambda t: t[1])
+            if best_ev <= 0:
+                continue
+            cl_info = label_map.get(k, {})
+            title = cl_info.get("title", f"Data Topic B_{k}")
+            desc = cl_info.get("description", f"Active dataset topic cluster with {len(hypos)} verified hypotheses.")
+            feature_ms = {h.get("m") for h in hypos if h.get("m") is not None}
+            scored.append({
+                "cluster_id": k,
+                "title": title,
+                "description": desc,
+                "matched_keywords": self._cluster_keywords(feat_for_keywords, feature_ms),
+                "relevance_score": float(best_ev),
+                "best_hypothesis": best_h,
+                "hypos": hypos,
+            })
+        return sorted(scored, key=lambda x: x["relevance_score"], reverse=True)
+
+    @staticmethod
+    def _project_clusters(scored: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Drop the internal hypos/best_hypothesis payload before sending to the client."""
+        return [{
+            "cluster_id": c["cluster_id"],
+            "title": c["title"],
+            "description": c["description"],
+            "matched_keywords": c["matched_keywords"],
+            "relevance_score": c["relevance_score"],
+        } for c in scored]
+
+    @property
+    def feature_to_cluster_map(self) -> Dict[int, int]:
+        """Inverse map feature index -> feature cluster T_m (lazy, cached)."""
+        if self._feat_to_cluster is None:
+            m: Dict[int, int] = {}
+            for cl, feats in self.feature_clusters.items():
+                for f in feats:
+                    m[int(f)] = cl
+            self._feat_to_cluster = m
+        return self._feat_to_cluster
+
+    @staticmethod
+    def _neuronpedia_sae_set(sae_cfg: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+        """Map the run's SAE to a (model_id, sae_set) Neuronpedia pair, or None."""
+        repo = sae_cfg.get("repo", "")
+        layer = sae_cfg.get("layer")
+        if not layer:
+            return None
+        d_sae = int(sae_cfg.get("d_sae") or 0)
+        width = {16384: "16k", 32768: "32k", 65536: "65k", 131072: "131k",
+                 262144: "262k", 524288: "524k", 1048576: "1m"}.get(d_sae, "16k")
+        if repo == "gemma-scope-2b-pt-res-canonical":
+            return ("gemma-2-2b", f"{layer}-gemmascope-res-{width}")
+        if "SAE-Res-Qwen3-1.7B-Base" in repo:
+            return ("qwen3-1.7b", f"{layer}-qwen-scope-res-{width}")
+        return None
+
+    @staticmethod
+    @functools.lru_cache(maxsize=16)
+    def _neuronpedia_verified(model_id: str, sae_set: str) -> bool:
+        """One-time, cached check that the Neuronpedia slug actually resolves."""
+        try:
+            import urllib.request
+            url = f"https://www.neuronpedia.org/api/feature/{model_id}/{sae_set}/100"
+            req = urllib.request.Request(
+                url, method="GET",
+                headers={"User-Agent": "PDD-Viewer/1.0", "Accept": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status == 200
+        except Exception:
+            return False
+
+    def _neuronpedia_set(self) -> Optional[Tuple[str, str]]:
+        """Cached (model_id, sae_set) pair only if the Neuronpedia slug was runtime-verified."""
+        if self._np_set is None:
+            slug = self._neuronpedia_sae_set(self.summary.get("config", {}).get("sae", {}))
+            if slug and self._neuronpedia_verified(*slug):
+                self._np_set = slug
+        return self._np_set
+
+    def _neuronpedia_url(self, feature_index: int) -> Optional[str]:
+        np_set = self._neuronpedia_set()
+        if np_set is None:
+            return None
+        return f"https://www.neuronpedia.org/{np_set[0]}/{np_set[1]}/{feature_index}"
+
+    def _top_sae_features(self, activations: np.ndarray, top_n: int = 8) -> List[Dict[str, Any]]:
+        """Top individual SAE features by activation, with cluster membership + Neuronpedia link.
+
+        Only emits a Neuronpedia URL when the slug was runtime-verified, so we never
+        surface 404 links. When the SAE has no dashboard, cluster-membership + activation
+        remain for the example-based interpretation fallback.
+        """
+        if activations is None or len(activations) == 0:
+            return []
+        order = np.argsort(activations)[-top_n:][::-1]
+        ftoc = self.feature_to_cluster_map
+        feat_delta = self._feature_delta()
+        out: List[Dict[str, Any]] = []
+        for i in order:
+            i = int(i)
+            val = float(activations[i])
+            if val == 0.0:
+                continue
+            item: Dict[str, Any] = {"feature_index": i, "activation": val, "cluster_m": ftoc.get(i)}
+            url = self._neuronpedia_url(i)
+            if url:
+                item["neuronpedia_url"] = url
+            if feat_delta is not None and i < feat_delta.shape[0]:
+                d = float(feat_delta[i])
+                item["dp_delta"] = d
+                item["dp_direction"] = "amplified" if d > 1e-4 else ("suppressed" if d < -1e-4 else "neutral")
+            out.append(item)
+        return out
+
+    def _feature_delta(self) -> Optional[np.ndarray]:
+        """Per-feature DPO-push signal: u_f = P(fires in chosen) - P(fires in rejected).
+
+        Computed lazily (one column-mean pass over the cached C_max/R_max sparse
+        matrices, ~d_sae floats) and cached. Positive => DPO amplifies the feature,
+        negative => DPO suppresses it. The paper's per-feature primitive `u` (B.1).
+        """
+        if self._feat_delta is None:
+            mats = self._load_feature_matrices()
+            if mats is None:
+                return None
+            try:
+                c_rate = (mats.C_max > 0.01).mean(axis=0)
+                r_rate = (mats.R_max > 0.01).mean(axis=0)
+                self._feat_delta = (
+                    np.asarray(c_rate).ravel() - np.asarray(r_rate).ravel()
+                ).astype(np.float32)
+            except Exception as e:
+                logger.warning(f"Error computing per-feature delta: {e}")
+                return None
+        return self._feat_delta
+
+    def _load_feature_matrices(self):
+        """Lazily mmap the cached per-example feature matrices for example-based cluster interpretation."""
+        if self._feature_matrices is None and self.checkpoint_dir is not None:
+            from pdd.feature_matrices import FeatureMatrices
+            mmap_dir = self.checkpoint_dir / "matrices_mmap"
+            npz = self.checkpoint_dir / "matrices.npz"
+            try:
+                if mmap_dir.is_dir():
+                    self._feature_matrices = FeatureMatrices.load_mmap_dir(str(mmap_dir))
+                elif npz.exists():
+                    self._feature_matrices = FeatureMatrices.load_npz(str(npz))
+            except Exception as e:
+                logger.warning(f"Error loading feature matrices for interpretation: {e}")
+        return self._feature_matrices
+
+    def _load_examples(self):
+        """Lazily load the cached dataset examples for example-based cluster interpretation."""
+        if self._examples is None and self.checkpoint_dir is not None:
+            from pdd.data import PreferenceExample
+            ex_path = self.checkpoint_dir / "examples.json"
+            if ex_path.exists():
+                try:
+                    with open(ex_path, "r", encoding="utf-8") as f:
+                        self._examples = [PreferenceExample.from_dict(d) for d in json.load(f)]
+                except Exception as e:
+                    logger.warning(f"Error loading examples for interpretation: {e}")
+        return self._examples
+
+    def _load_pc_cluster_examples(self):
+        """Lazily load per-cluster top example indices for prompt clusters A_k / response-delta clusters R_m.
+
+        Written by the auto-labeling pipeline stage (prompt_conditioned_cluster_examples.json);
+        gives each A_k/R_m a concrete, readable meaning via the real examples that
+        express it (no SAE feature breakdown).
+        """
+        if self._pc_cluster_examples is None:
+            pc_path = Path(pc_cluster_examples_path(str(self.run_dir)))
+            if pc_path.exists():
+                try:
+                    with open(pc_path, "r", encoding="utf-8") as f:
+                        self._pc_cluster_examples = json.load(f)
+                except Exception as e:
+                    logger.warning(f"Error loading prompt-conditioned cluster examples: {e}")
+        return self._pc_cluster_examples
+
+    def _pc_cluster_tokens(self, cluster_type: str, cid: int) -> List[str]:
+        """Score-weighted top content tokens expressing prompt cluster A_k / response-delta cluster R_m."""
+        pc = self._load_pc_cluster_examples()
+        if pc is None:
+            return []
+        key = f"{cluster_type}_cluster_tokens"
+        return pc.get(key, {}).get(str(cid), [])
+
+    def _pc_cluster_top_examples(self, cluster_type: str, cid: int, top_n: int = 5) -> List[Dict[str, Any]]:
+        """Real examples expressing prompt cluster A_k or response-delta cluster R_m."""
+        pc = self._load_pc_cluster_examples()
+        examples = self._load_examples()
+        if pc is None or examples is None:
+            return []
+        key = f"{cluster_type}_cluster_examples"
+        idxs = pc.get(key, {}).get(str(cid), [])
+        if not idxs:
+            return []
+        out = []
+        for i in idxs[:top_n]:
+            ex = examples[i]
+            if cluster_type == "response":
+                desc = f"chosen-vs-rejected SAE delta signal (cluster R_{cid})"
+            else:
+                desc = f"prompt expressing A_{cid}"
+            out.append({
+                "index": i,
+                "prompt": ex.prompt,
+                "chosen": ex.chosen,
+                "rejected": ex.rejected,
+                "note": desc,
+            })
+        return out
+
+    def _load_feature_cluster_labels(self) -> Dict[int, Dict[str, Any]]:
+        """Lazily load whole-cluster LLM labels for SAE feature clusters T_m + per-feature labels."""
+        if self._feature_cluster_labels is None:
+            self._feature_cluster_labels = {}
+            self._feature_labels = {}
+            lbl_file = Path(feature_cluster_labels_path(str(self.run_dir)))
+            if lbl_file.exists():
+                try:
+                    with open(lbl_file, "r", encoding="utf-8") as f:
+                        raw = json.load(f)
+                        self._feature_cluster_labels = {int(k): v for k, v in raw.get("feature_clusters", {}).items()}
+                        self._feature_labels = {int(k): v for k, v in raw.get("feature_labels", {}).items()}
+                except Exception as e:
+                    logger.warning(f"Error loading feature cluster labels: {e}")
+        return self._feature_cluster_labels
+
+    def _top_cluster_features(self, m: int, top_n: int = 8) -> List[Dict[str, Any]]:
+        """Top SAE features inside feature cluster T_m, ranked by firing over the cached matrices."""
+        mats = self._load_feature_matrices()
+        feats = self.feature_clusters.get(m)
+        if mats is None or not feats:
+            return []
+        d_sae = mats.C_max.shape[1]
+        feats = [f for f in feats if 0 <= f < d_sae]
+        if not feats:
+            return []
+        A = mats.C_max[:, feats] + mats.R_max[:, feats]
+        colsum = np.asarray(A.sum(axis=0)).ravel()
+        order = np.argsort(colsum)[-top_n:][::-1]
+        out = []
+        for j in order:
+            f_idx = int(feats[j])
+            out.append({
+                "feature_index": f_idx,
+                "firing": float(colsum[j]),
+                "neuronpedia_url": self._neuronpedia_url(f_idx),
+            })
+        return out
+
+    def _feature_cluster_info(self, m: int, top_n_examples: int = 5) -> Optional[Dict[str, Any]]:
+        """One payload for the T_m dropdown: whole-cluster label + top member features + real examples."""
+        if m not in self.feature_clusters:
+            return None
+        label = self._load_feature_cluster_labels().get(m)
+        info: Dict[str, Any] = {
+            "cluster_m": m,
+            "label": label,
+            "n_features": len(self.feature_clusters[m]),
+            "top_features": self._top_cluster_features(m, top_n=8),
+            "examples": self._cluster_top_examples(m, top_n=top_n_examples),
+        }
+        # Local LLM per-feature labels as the Neuronpedia fallback (no dashboard needed).
+        feat_labels = self._feature_labels or {}
+        for f in info["top_features"]:
+            fl = feat_labels.get(f["feature_index"])
+            if fl:
+                f["local_label"] = {
+                    "title": fl.get("title", ""),
+                    "keywords": fl.get("keywords", []),
+                }
+        return info
+
+    def _cluster_top_examples(self, m: int, top_n: int = 5) -> List[Dict[str, Any]]:
+        """Top dataset examples firing feature cluster T_m (rows of C_max + R_max over its members)."""
+        mats = self._load_feature_matrices()
+        examples = self._load_examples()
+        feats = self.feature_clusters.get(m)
+        if mats is None or examples is None or not feats:
+            return []
+        d_sae = mats.C_max.shape[1]
+        feats = [f for f in feats if 0 <= f < d_sae]
+        if not feats:
+            return []
+        A = mats.C_max[:, feats] + mats.R_max[:, feats]
+        scores = np.asarray(A.sum(axis=1)).ravel()
+        order = np.argsort(scores)[::-1]
+        out: List[Dict[str, Any]] = []
+        for i in order:
+            if scores[i] <= 0:
+                break
+            ex = examples[int(i)]
+            out.append({
+                "index": int(i),
+                "score": float(scores[i]),
+                "prompt": (ex.prompt or "")[-600:],
+                "chosen": (ex.chosen or "")[-400:],
+                "rejected": (ex.rejected or "")[-400:],
+            })
+            if len(out) >= top_n:
+                break
+        return out
+
     def get_inspector(self):
         """Get or initialize the NeuralInspector configured for this target run."""
         if self.inspector is None:
@@ -202,7 +581,7 @@ _STATE: Optional[ViewerState] = None
 
 
 def get_state() -> ViewerState:
-    """Lazy global state accessor."""
+    """Lazy global state accessor for the single targeted run (set via --run_dir)."""
     global _STATE
     if _STATE is None:
         _STATE = ViewerState()
@@ -211,7 +590,7 @@ def get_state() -> ViewerState:
 
 @app.get("/api/runs")
 def list_runs() -> Dict[str, Any]:
-    """Return the active target run details."""
+    """Return the active targeted run only (single-run mode)."""
     state = get_state()
     metrics = state.summary.get("metrics", {})
     return {
@@ -223,14 +602,14 @@ def list_runs() -> Dict[str, Any]:
             "model": state.summary.get("config", {}).get("model", {}).get("path", "N/A"),
             "sae": state.summary.get("config", {}).get("sae", {}).get("repo", "N/A"),
             "num_examples": metrics.get("num_examples", 0),
-            "num_clusters": metrics.get("num_sae_feature_clusters", len(state.feature_clusters)),
+            "num_clusters": metrics.get("num_sae_feature_clusters", 0),
         }]
     }
 
 
 @app.get("/api/run_data")
-def get_run_data(run_dir: Optional[str] = Query(None)) -> Dict[str, Any]:
-    """Retrieve summary, validation metrics, cluster labels, and top hypotheses for the active run."""
+def get_run_data() -> Dict[str, Any]:
+    """Retrieve summary, validation metrics, cluster labels, and top hypotheses for the targeted run."""
     state = get_state()
     val_file = state.run_dir / "p4_validation" / "p4_r2_metrics.json"
     validation_metrics = {}
@@ -241,18 +620,75 @@ def get_run_data(run_dir: Optional[str] = Query(None)) -> Dict[str, Any]:
         except Exception:
             pass
 
+    # Pull the full hypothesis lists (cached per run) so tables show top-100
+    # ranked by the pipeline's saved ordering instead of only the summary top-10.
+    try:
+        state.feature_hypotheses_map
+    except Exception as e:
+        logger.warning(f"Error loading feature hypotheses for run_data: {e}")
+    try:
+        state.prompt_hypotheses_map
+    except Exception as e:
+        logger.warning(f"Error loading prompt hypotheses for run_data: {e}")
+
     return {
         "summary": state.summary,
         "validation_metrics": validation_metrics,
         "cluster_labels": state.cluster_labels,
+        "feature_cluster_labels": state._load_feature_cluster_labels(),
         "top_feature_conditioned_hypotheses": state.fc_hypos[:100],
         "top_prompt_conditioned_hypotheses": state.pc_hypos[:100],
     }
 
 
+@app.get("/api/feature_cluster_info")
+def get_feature_cluster_info(m: int = Query(..., description="Feature cluster id T_m"),
+                             top_n: int = Query(5)) -> Dict[str, Any]:
+    """Whole-cluster interpretation for SAE feature cluster T_m.
+
+    Combines the LLM whole-cluster label, the top member SAE features (each with a
+    Neuronpedia link), and the real dataset examples that fire the cluster — so a
+    cluster has meaning even when Neuronpedia has no dashboard for the run's SAE.
+    """
+    state = get_state()
+    info = state._feature_cluster_info(m, top_n_examples=top_n)
+    if info is None:
+        raise HTTPException(404, f"Unknown feature cluster T_{m}.")
+    return info
+
+
+@app.get("/api/pc_cluster_examples")
+def get_pc_cluster_examples(cluster_type: str = Query(..., description="'prompt' for A_k or 'response' for R_m"),
+                            cid: int = Query(..., description="Cluster id"),
+                            top_n: int = Query(5)) -> Dict[str, Any]:
+    """Meaning for prompt cluster A_k / response-delta cluster R_m: the real examples that express them.
+
+    No SAE feature breakdown — just the strongest real dataset examples per cluster
+    (top c_matrix examples per A_k; top |u_matrix| examples per R_m) plus the
+    score-weighted top content tokens of those examples.
+    """
+    state = get_state()
+    if cluster_type not in ("prompt", "response"):
+        raise HTTPException(400, "cluster_type must be 'prompt' or 'response'.")
+    examples = state._pc_cluster_top_examples(cluster_type, cid, top_n=top_n)
+    if not examples:
+        raise HTTPException(404, f"No examples found for {cluster_type} cluster {cid}.")
+    return {
+        "cluster_type": cluster_type,
+        "cluster_id": cid,
+        "tokens": state._pc_cluster_tokens(cluster_type, cid),
+        "examples": examples,
+    }
+
+
 @app.post("/api/inspect_prompt")
 def inspect_prompt(req: PromptInspectionRequest) -> Dict[str, Any]:
-    """Mode A: Inspect prompt through live GPU Model + SAE forward pass and predict downstream behavioral shifts."""
+    """Mode A: Inspect prompt through live GPU Model + SAE forward pass and predict downstream behavioral shifts.
+
+    Cluster matching is driven by the *live* prompt activation: each hypothesis
+    (k, m) is scored by |delta_{k,m}| x (prompt's per-feature-cluster T_m signal),
+    so different prompts genuinely match different data clusters / concepts.
+    """
     state = get_state()
     prompt_text = req.prompt.strip()
     if not prompt_text:
@@ -262,82 +698,62 @@ def inspect_prompt(req: PromptInspectionRequest) -> Dict[str, Any]:
     inspector = state.get_inspector()
     p_feat = inspector.extract_prompt_features(prompt_text)
 
-    # 2. Score Prompt Clusters A_k
-    label_map = {cl.get("cluster_id"): cl for cl in state.cluster_labels}
-    top_sae_indices = np.argsort(p_feat)[-5:][::-1]
-    top_sae_kws = [f"SAE-Feat_{idx} (act={p_feat[idx]:.2f})" for idx in top_sae_indices]
+    # 2. Per-feature-cluster activity of the live prompt (T_m <- sum of P(x) members)
+    act = state._cluster_signals(p_feat, mode="sum")
 
-    scored_clusters = []
-    for k, hypos in state.prompt_hypotheses_map.items():
-        max_delta = max(abs(float(h.get("delta", 0.0))) for h in hypos)
-        cl_info = label_map.get(k, {})
-        title = cl_info.get("title", f"Prompt Cluster A_{k}")
-        desc = cl_info.get("description", f"Active prompt cluster with {len(hypos)} verified hypotheses.")
-        scored_clusters.append({
-            "cluster_id": k,
-            "title": title,
-            "description": desc,
-            "matched_keywords": top_sae_kws,
-            "relevance_score": float(max_delta),
-            "hypos": hypos,
-        })
+    scored_clusters = state._score_data_clusters(act, p_feat)[:req.top_k]
+    matched_clusters = state._project_clusters(scored_clusters)
 
-    scored_clusters = sorted(scored_clusters, key=lambda x: x["relevance_score"], reverse=True)[:req.top_k]
-
-    matched_clusters = [{
-        "cluster_id": c["cluster_id"],
-        "title": c["title"],
-        "description": c["description"],
-        "matched_keywords": c["matched_keywords"],
-        "relevance_score": c["relevance_score"],
-    } for c in scored_clusters]
-
-    # 3. Extract Predicted Shifts from Genuine SAE Hypotheses
+    # 3. Extract Predicted Shifts from live-evidence-ranked hypotheses
     predicted_shifts = []
     for c in scored_clusters:
-        for h in c["hypos"][:2]:
+        ordered = sorted(c["hypos"], key=lambda h: abs(float(h.get("delta", 0.0))) * abs(act.get(h.get("m"), 0.0)), reverse=True)
+        for h in ordered[:2]:
             k = h.get("k")
             m = h.get("m")
             delta = float(h.get("delta", 0.0))
             z = float(h.get("z_score", 0.0))
             d = float(h.get("cohens_d", 0.0))
+            evidence = act.get(m, 0.0)
             is_amplified = delta > 0
 
             direction_word = "AMPLIFIED (Boosted)" if is_amplified else "SUPPRESSED (Inhibited)"
             interpretation = (
-                f"When given this prompt type (A_{k}), the DPO model will produce Response Concept R_{m} "
-                f"significantly MORE ({direction_word}) compared to the base SFT model "
-                f"(Predicted Shift Δ = {delta:+.5f}, Welch z = {z:.2f})."
-                if is_amplified else
-                f"When given this prompt type (A_{k}), the DPO model will produce Response Concept R_{m} "
-                f"significantly LESS ({direction_word}) compared to the base SFT model "
-                f"(Predicted Shift Δ = {delta:+.5f}, Welch z = {z:.2f})."
+                f"This prompt fires SAE feature cluster T_{m} with live activity {evidence:.3f}. "
+                f"In the training data, examples of type B_{k} are chosen-leaning on this cluster "
+                f"(Δ = {delta:+.5f}, Welch z = {z:.2f}), so post-training will likely {direction_word} "
+                f"this response behavior for similar prompts."
             )
 
             predicted_shifts.append({
                 "prompt_cluster_k": k,
                 "response_cluster_m": m,
-                "data_cluster_k": k,
-                "feature_cluster_m": m,
                 "delta": delta,
                 "effect_direction": "Amplified after DPO" if is_amplified else "Suppressed after DPO",
                 "z_score": z,
                 "cohens_d": d,
+                "live_activity": evidence,
                 "interpretation": interpretation,
             })
 
-    predicted_shifts = sorted(predicted_shifts, key=lambda s: abs(s["delta"]), reverse=True)[:10]
+    predicted_shifts.sort(key=lambda s: abs(float(s["delta"])) * abs(float(s.get("live_activity", 0.0))), reverse=True)
+    predicted_shifts = predicted_shifts[:10]
 
     return {
         "prompt": prompt_text,
         "matched_clusters": matched_clusters,
         "predicted_behavior_shifts": predicted_shifts,
+        "top_sae_features": state._top_sae_features(p_feat),
     }
 
 
 @app.post("/api/inspect_preference_pair")
 def inspect_preference_pair(req: PreferencePairInspectionRequest) -> Dict[str, Any]:
-    """Mode B: Batched GPU forward pass on preference pair to measure exact SAE disparity u = 1(C>0.01) - 1(R>0.01)."""
+    """Mode B: Batched GPU forward pass on preference pair to measure exact SAE disparity u = 1(C>0.01) - 1(R>0.01).
+
+    Promoted/suppressed concepts are selected by the *live* per-feature-cluster
+    disparity aggregated from u, not by precomputed hypothesis deltas alone.
+    """
     state = get_state()
     prompt_text = req.prompt.strip()
     chosen_text = req.chosen.strip()
@@ -350,67 +766,57 @@ def inspect_preference_pair(req: PreferencePairInspectionRequest) -> Dict[str, A
     inspector = state.get_inspector()
     c_p, r_p, u = inspector.extract_pair_features(prompt_text, chosen_text, rejected_text)
 
-    # 2. Score Data Clusters B_k
-    label_map = {cl.get("cluster_id"): cl for cl in state.cluster_labels}
-    top_pair_indices = np.argsort(c_p + r_p)[-5:][::-1]
-    top_pair_kws = [f"SAE-Feat_{idx} (act={(c_p+r_p)[idx]:.2f})" for idx in top_pair_indices]
+    # 2. Per-feature-cluster live disparity: u_m = mean over T_m members of u
+    u_sig = state._cluster_signals(u, mode="mean")
+    pair_act = c_p + r_p
 
-    scored_clusters = []
+    # 3. Score Data Clusters B_k by live-evidence-weighted hypotheses
+    scored_clusters = state._score_data_clusters(u_sig, pair_act)[:req.top_k]
+    matched_clusters = state._project_clusters(scored_clusters)
+
+    # 4. Extract Promoted vs. Suppressed Concepts from the LIVE disparity
+    # Map feature cluster m -> strongest hypothesis referencing it (for context).
+    best_by_m: Dict[int, Dict[str, Any]] = {}
     for k, hypos in state.feature_hypotheses_map.items():
-        max_delta = max(abs(float(h.get("delta", 0.0))) for h in hypos)
-        cl_info = label_map.get(k, {})
-        title = cl_info.get("title", f"Data Topic B_{k}")
-        desc = cl_info.get("description", f"Active dataset topic cluster with {len(hypos)} verified hypotheses.")
-        scored_clusters.append({
-            "cluster_id": k,
-            "title": title,
-            "description": desc,
-            "matched_keywords": top_pair_kws,
-            "relevance_score": float(max_delta),
-            "hypos": hypos,
-        })
+        for h in hypos:
+            m = h.get("m")
+            if m is None:
+                continue
+            d = abs(float(h.get("delta", 0.0)))
+            if d > best_by_m.get(m, {}).get("_abs_delta", 0.0):
+                best_by_m[m] = dict(h, _abs_delta=d)
 
-    scored_clusters = sorted(scored_clusters, key=lambda x: x["relevance_score"], reverse=True)[:req.top_k]
-
-    matched_clusters = [{
-        "cluster_id": c["cluster_id"],
-        "title": c["title"],
-        "description": c["description"],
-        "matched_keywords": c["matched_keywords"],
-        "relevance_score": c["relevance_score"],
-    } for c in scored_clusters]
-
-    # 3. Extract Promoted vs. Suppressed Concepts
     promoted_concepts = []
     suppressed_concepts = []
+    for m, uval in sorted(u_sig.items(), key=lambda t: abs(t[1]), reverse=True):
+        if uval == 0.0:
+            continue
+        h = best_by_m.get(m, {})
+        k = h.get("k")
+        z = float(h.get("z_score", 0.0))
+        is_chosen = uval > 0
+        item = {
+            "feature_cluster_m": m,
+            "data_cluster_k": k,
+            "delta": float(uval),
+            "hypothesis_delta": float(h.get("delta", 0.0)),
+            "z_score": z,
+            "signal_strength": "Strong" if abs(uval) > 0.15 else "Moderate",
+            "explanation": (
+                f"Live SAE disparity: the chosen response fires feature cluster T_{m} "
+                f"more than the rejected (net u = {uval:+.3f})."
+                + (f" Consistent with training hypothesis B_{k} (Δ = {h.get('delta', 0.0):+.4f}, Welch z = {z:.2f})." if k is not None else "")
+            ),
+        }
+        if is_chosen:
+            promoted_concepts.append(item)
+        else:
+            suppressed_concepts.append(item)
 
-    for c in scored_clusters:
-        for h in c["hypos"]:
-            k = h.get("k")
-            m = h.get("m")
-            delta = float(h.get("delta", 0.0))
-            z = float(h.get("z_score", 0.0))
-            is_chosen = h.get("is_chosen_leaning", delta > 0)
-
-            item = {
-                "feature_cluster_m": m,
-                "data_cluster_k": k,
-                "delta": delta,
-                "z_score": z,
-                "signal_strength": "Strong" if abs(z) > 3.0 else "Moderate",
-                "explanation": (
-                    f"Real SAE Disparity u > 0: Chosen response fires concept features significantly more than rejected."
-                    if is_chosen else
-                    f"Real SAE Disparity u < 0: Rejected response fires concept features, teaching the model to suppress it."
-                ),
-            }
-            if is_chosen:
-                promoted_concepts.append(item)
-            else:
-                suppressed_concepts.append(item)
-
-    promoted_concepts = sorted(promoted_concepts, key=lambda x: x["delta"], reverse=True)[:5]
-    suppressed_concepts = sorted(suppressed_concepts, key=lambda x: x["delta"])[:5]
+    promoted_concepts.sort(key=lambda x: x["delta"], reverse=True)
+    suppressed_concepts.sort(key=lambda x: x["delta"])
+    promoted_concepts = promoted_concepts[:5]
+    suppressed_concepts = suppressed_concepts[:5]
 
     return {
         "prompt": prompt_text,
@@ -421,6 +827,7 @@ def inspect_preference_pair(req: PreferencePairInspectionRequest) -> Dict[str, A
         "matched_clusters": matched_clusters,
         "promoted_concepts": promoted_concepts,
         "suppressed_concepts": suppressed_concepts,
+        "top_sae_features": state._top_sae_features(np.abs(u)),
     }
 
 

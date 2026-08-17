@@ -19,8 +19,9 @@ accelerate==1.14.0
 tqdm==4.68.4
 pyyaml==6.0.3
 
-# Needed only for SFT/DPO runs (install with --no-deps, pinned, to avoid
-# pulling in transformers>=5 which requires torch>=2.5):
+# Needed only for SFT/DPO runs — install with --no-deps and pinned versions if
+# only these are needed (plain `pip install peft/trl` drags in transformers>=5
+# + torch>=2.5; upgrade the whole stack deliberately if you want that):
 # peft
 # trl
 # bitsandbytes

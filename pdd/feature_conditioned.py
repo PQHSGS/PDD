@@ -129,9 +129,15 @@ class FeatureConditionedPipeline:
 
         cluster_assignments = np.zeros(N, dtype=np.int32)
         if N_act > 0 and self.cfg.n_data_clusters > 0:
-            n_clusters = min(self.cfg.n_data_clusters, max(2, N_act // 10))
+            # Strictly honor the configured number of data clusters. Only a hard
+            # feasibility clamp (cannot cluster more groups than active samples)
+            # applies; otherwise the user's config decides.
+            n_clusters = min(self.cfg.n_data_clusters, N_act)
             if n_clusters < self.cfg.n_data_clusters:
-                logger.info(f"Adjusted data clusters K={n_clusters} (from configured {self.cfg.n_data_clusters}) for active sample size N_act={N_act}.")
+                logger.info(
+                    f"Clamped data clusters K={n_clusters} (configured {self.cfg.n_data_clusters} "
+                    f"exceeds active sample count N_act={N_act}); no auto-tuning applied."
+                )
             logger.info(f"Running Spherical K-Means (K={n_clusters}) on {N_act} active examples...")
             s_act = s_matrix[active_indices]
             s_act_norms = np.linalg.norm(s_act, axis=1, keepdims=True)
@@ -167,7 +173,13 @@ class FeatureConditionedPipeline:
         unique_clusters = set(cluster_assignments)
         unique_clusters.discard(0)
         num_active_clusters = max(1, len(unique_clusters))
-        effective_min_cluster_size = min(self.cfg.min_data_cluster_size, max(2, N_act // (num_active_clusters * 4)))
+        # Strict paper filter: only hypotheses on data clusters with n_k >= the
+        # configured minimum survive. No auto-cap relaxes this for small datasets.
+        effective_min_cluster_size = self.cfg.min_data_cluster_size
+        logger.info(
+            f"Using strict data cluster min size n_k >= {effective_min_cluster_size} "
+            f"(paper filter; no auto-cap) across {num_active_clusters} active data clusters."
+        )
 
         for k in tqdm(sorted(unique_clusters), desc="Testing feature-data pairs"):
             in_mask = (cluster_assignments == k)

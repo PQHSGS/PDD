@@ -82,10 +82,10 @@ PYTHONPATH=. python -m pdd.cli --config configs/qwen3_1.7b_base.json --force_rer
   ```bash
   PYTHONPATH=. python experiments/p5_interventions.py --config configs/qwen3_1.7b_base.json
   ```
-- **P6 Cluster Auto-Labeling**:
-  ```bash
-  PYTHONPATH=. python experiments/p6_autolabeling.py --config configs/qwen3_1.7b_base.json
-  ```
+- **P6 Cluster Auto-Labeling**: now a built-in pipeline stage (`auto_label` config block in the JSON config).
+  Runs automatically at the end of every `pdd run` (disable with `"auto_label": {"enabled": false}`)
+  and writes all viewer interpretation artifacts directly under `<run>/`
+  ([`pdd/autolabeling.py`](file:///mnt/disk4/pquan/PDD/pdd/autolabeling.py)).
 
 ## Status
 
@@ -96,4 +96,4 @@ PYTHONPATH=. python -m pdd.cli --config configs/qwen3_1.7b_base.json --force_rer
 - [x] P3 Prompt-conditioned pipeline (SVD-128 embeddings, MiniBatchKMeans, prompt/response-delta clusters) ([`pdd/prompt_conditioned.py`](file:///mnt/disk4/pquan/PDD/pdd/prompt_conditioned.py))
 - [x] P4 Empirical DPO validation & regression ($R^2 \approx 0.9$) ([`pdd/validation.py`](file:///mnt/disk4/pquan/PDD/pdd/validation.py), [`experiments/p4_dpo_validation.py`](file:///mnt/disk4/pquan/PDD/experiments/p4_dpo_validation.py))
 - [x] P5 Predictive data interventions (dataset inoculation, loss reweighting, activation steering) ([`pdd/interventions.py`](file:///mnt/disk4/pquan/PDD/pdd/interventions.py), [`experiments/p5_interventions.py`](file:///mnt/disk4/pquan/PDD/experiments/p5_interventions.py))
-- [x] P6 Data cluster auto-labeling ([`pdd/autolabel.py`](file:///mnt/disk4/pquan/PDD/pdd/autolabel.py), [`experiments/p6_autolabeling.py`](file:///mnt/disk4/pquan/PDD/experiments/p6_autolabeling.py))
+- [x] P6 Cluster auto-labeling stage (B_k LLM labels, T_m whole-cluster labels, A_k/R_m example indices) ([`pdd/autolabel.py`](file:///mnt/disk4/pquan/PDD/pdd/autolabel.py), [`pdd/autolabeling.py`](file:///mnt/disk4/pquan/PDD/pdd/autolabeling.py))

@@ -23,10 +23,8 @@
         </div>
       </div>
       <div class="header-right">
-        <label for="run-select" class="run-label">Run Experiment:</label>
-        <select id="run-select" class="run-selector" aria-label="Select PDD Run">
-          <option value="">Loading runs...</option>
-        </select>
+        <span class="run-label">Run:</span>
+        <span id="run-name" class="run-name">Loading run...</span>
         <button id="refresh-btn" class="btn btn-secondary" title="Refresh run data">Refresh</button>
       </div>
     </header>
@@ -53,8 +51,7 @@
 
     <!-- Navigation Tabs -->
     <nav class="tab-nav">
-      <button class="tab-btn active" data-tab="tab-feature">Feature-Conditioned Pipeline (B.1)</button>
-      <button class="tab-btn" data-tab="tab-prompt">Prompt-Conditioned Pipeline (B.2)</button>
+      <button class="tab-btn active" data-tab="tab-stat">📊 Stat (B.1 + B.2)</button>
       <button class="tab-btn" data-tab="tab-inspector">⚡ Live Prompt Debugger</button>
       <button class="tab-btn" data-tab="tab-labels">Cluster Auto-Labels</button>
     </nav>
@@ -62,8 +59,10 @@
     <!-- Main Content Area -->
     <main class="content-container">
       
-      <!-- TAB 1: Feature-Conditioned Hypotheses -->
-      <section id="tab-feature" class="tab-content active">
+      <!-- TAB 1: Statistics (B.1 Feature-Conditioned + B.2 Prompt-Conditioned) -->
+      <section id="tab-stat" class="tab-content active">
+        <h2 class="section-title">B.1 — Feature-Conditioned Hypotheses</h2>
+        <p class="section-desc">Data clusters B_k × response-feature clusters T_m, inside-vs-outside effect Δ (Welch z / Cohen's d) with split-half validation.</p>
         <div class="toolbar">
           <div class="search-box">
             <input type="text" id="fc-search" placeholder="Filter by cluster ID, keyword..." class="search-input">
@@ -92,11 +91,11 @@
               <tr><td colspan="8" class="loading-cell">Loading hypotheses...</td></tr>
             </tbody>
           </table>
+          <div id="fc-cluster-examples-area"></div>
         </div>
-      </section>
 
-      <!-- TAB 2: Prompt-Conditioned Hypotheses -->
-      <section id="tab-prompt" class="tab-content">
+        <h2 class="section-title">B.2 — Prompt-Conditioned Hypotheses</h2>
+        <p class="section-desc">Prompt clusters A_k × response-delta clusters R_m: does a prompt expressing A_k shift chosen responses along R_m?</p>
         <div class="toolbar">
           <div class="search-box">
             <input type="text" id="pc-search" placeholder="Search prompt clusters..." class="search-input">
@@ -121,6 +120,7 @@
             </tbody>
           </table>
         </div>
+        <div id="pc-examples-area" style="margin-top:10px;"></div>
       </section>
 
       <!-- TAB 3: Live Prompt Debugger -->
@@ -192,6 +192,12 @@
                 <h3 id="shifts-box-title">Predicted Post-Training Behavioral Shifts</h3>
                 <div id="predicted-shifts-list" class="shifts-list"></div>
               </div>
+              <div class="result-box">
+                <h3>⚡ Top Fired SAE Features</h3>
+                <p class="section-desc" style="margin-top:0;">Individual features driving the signal. Links open the Neuronpedia dashboard (auto-interpreted description) for each feature. Click a <em>T_m</em> tag to open a dropdown with the whole-cluster LLM label, its top member features, and the real dataset examples firing it.</p>
+                <ul id="sae-features-list" class="clusters-list"></ul>
+                <div id="cluster-examples-area"></div>
+              </div>
             </div>
           </div>
         </div>
@@ -207,6 +213,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=5"></script>
+  <script src="/static/app.js?v=7"></script>
 </body>
 </html>

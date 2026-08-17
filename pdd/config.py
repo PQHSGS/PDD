@@ -96,6 +96,45 @@ class PromptConditionedConfig:
     def validate(self) -> None:
         if self.n_svd <= 0:
             raise ValueError("n_svd must be positive.")
+        if self.n_prompt_clusters <= 0:
+            raise ValueError("n_prompt_clusters must be positive.")
+        if self.n_resp_clusters <= 0:
+            raise ValueError("n_resp_clusters must be positive.")
+
+
+@dataclass
+class AutoLabelConfig:
+    """Final pipeline stage: auto-interpretation of every cluster level for the viewer.
+
+    Pass 1 labels data clusters B_k (LLM on real centroid/random sampled prompts),
+    Pass 2 labels SAE feature clusters T_m (LLM on real response examples firing
+    each cluster), Pass 3 maps prompt clusters A_k / response-delta clusters R_m to
+    their strongest real examples. All artifacts land in ``<run>/`` (cluster_labels.json,
+    feature_cluster_labels.json, prompt_conditioned_cluster_examples.json).
+    """
+    enabled: bool = True
+    label_model: str = "Qwen/Qwen3-1.7B"     # Local instruct model for LLM labels
+    heuristic: bool = False                    # Keyword labels instead of the local LLM
+    num_clusters: int = -1                     # Data clusters B_k to label (-1 = all active)
+    skip_feature_clusters: bool = False        # Skip Pass 2 (T_m whole-cluster labels)
+    skip_pc_examples: bool = False             # Skip Pass 3 (A_k / R_m example indices)
+    label_top_features: int = 6                # Per-T_m LLM labels for its top-N member features
+                                               # (Neuronpedia fallback for models without a dashboard; 0 = off)
+    pc_n_top: int = 12                         # Examples per A_k / R_m in Pass 3
+    max_prompt_chars: int = 600                # Max text length shown to the LLM
+    max_examples: int = 10                     # Max examples per cluster shown to the LLM
+
+    def validate(self) -> None:
+        if not self.label_model:
+            raise ValueError("AutoLabelConfig.label_model cannot be empty.")
+        if self.label_top_features < 0:
+            raise ValueError("label_top_features must be >= 0.")
+        if self.pc_n_top <= 0:
+            raise ValueError("pc_n_top must be positive.")
+        if self.max_prompt_chars <= 0:
+            raise ValueError("max_prompt_chars must be positive.")
+        if self.max_examples <= 0:
+            raise ValueError("max_examples must be positive.")
 
 
 @dataclass
@@ -138,6 +177,7 @@ class PipelineConfig:
     feature_clusters: FeatureClusterConfig = field(default_factory=FeatureClusterConfig)
     feature_conditioned: FeatureConditionedConfig = field(default_factory=FeatureConditionedConfig)
     prompt_conditioned: PromptConditionedConfig = field(default_factory=PromptConditionedConfig)
+    auto_label: AutoLabelConfig = field(default_factory=AutoLabelConfig)
 
     def validate(self) -> None:
         if not self.name:
@@ -148,6 +188,7 @@ class PipelineConfig:
         self.feature_clusters.validate()
         self.feature_conditioned.validate()
         self.prompt_conditioned.validate()
+        self.auto_label.validate()
 
 
     def to_dict(self) -> Dict[str, Any]:
@@ -166,8 +207,9 @@ class PipelineConfig:
         fc_cfg = FeatureClusterConfig(**data.get("feature_clusters", {}))
         fcd_cfg = FeatureConditionedConfig(**data.get("feature_conditioned", {}))
         pc_cfg = PromptConditionedConfig(**data.get("prompt_conditioned", {}))
+        al_cfg = AutoLabelConfig(**data.get("auto_label", {}))
 
-        top_kwargs = {k: v for k, v in data.items() if k not in ("model", "sae", "data", "feature_clusters", "feature_conditioned", "prompt_conditioned")}
+        top_kwargs = {k: v for k, v in data.items() if k not in ("model", "sae", "data", "feature_clusters", "feature_conditioned", "prompt_conditioned", "auto_label")}
 
         config = cls(
             model=model_cfg,
@@ -176,6 +218,7 @@ class PipelineConfig:
             feature_clusters=fc_cfg,
             feature_conditioned=fcd_cfg,
             prompt_conditioned=pc_cfg,
+            auto_label=al_cfg,
             **top_kwargs
         )
         config.validate()

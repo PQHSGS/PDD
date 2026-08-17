@@ -1,5 +1,9 @@
-"""Predictive Data Debugging (PDD) package."""
+"""Predictive Data Debugging (PDD) package.
 
+Kept import-light: only the config/logging surface is loaded eagerly so the
+viewer (and any `import pdd.*`) starts fast without pulling torch/datasets/
+scipy/sklearn. Heavy submodules are imported lazily on attribute access.
+"""
 from .config import (
     PipelineConfig,
     ModelConfig,
@@ -8,19 +12,6 @@ from .config import (
     FeatureConditionedConfig,
     PromptConditionedConfig,
 )
-try:
-    from .data import DatasetLoader, PreferenceExample
-    from .feature_matrices import FeatureMatrices, FeatureMatrixExtractor
-    from .feature_clusters import FeatureClusterMap, LeidenFeatureClusterer
-    from .feature_conditioned import FeatureConditionedPipeline, FeatureConditionedResult
-    from .prompt_conditioned import PromptConditionedPipeline, PromptConditionedResult
-    from .pipeline import PDDPipeline
-    from .sae import ModelBackend, SAEBackend
-    from .validation import ValidationMetrics, compute_prediction_validation_metrics
-    from .interventions import DatasetInoculator, LossReweighter, FeatureSteerer
-    from .autolabel import ClusterAutoLabeler, ClusterLabel
-except Exception:
-    pass
 from .logger import get_logger
 
 __all__ = [
@@ -50,5 +41,42 @@ __all__ = [
     "FeatureSteerer",
     "ClusterAutoLabeler",
     "ClusterLabel",
+    "AutoLabelConfig",
     "get_logger",
 ]
+
+_LAZY = {
+    "DatasetLoader": ("data", "DatasetLoader"),
+    "PreferenceExample": ("data", "PreferenceExample"),
+    "FeatureMatrices": ("feature_matrices", "FeatureMatrices"),
+    "FeatureMatrixExtractor": ("feature_matrices", "FeatureMatrixExtractor"),
+    "FeatureClusterMap": ("feature_clusters", "FeatureClusterMap"),
+    "LeidenFeatureClusterer": ("feature_clusters", "LeidenFeatureClusterer"),
+    "FeatureConditionedPipeline": ("feature_conditioned", "FeatureConditionedPipeline"),
+    "FeatureConditionedResult": ("feature_conditioned", "FeatureConditionedResult"),
+    "PromptConditionedPipeline": ("prompt_conditioned", "PromptConditionedPipeline"),
+    "PromptConditionedResult": ("prompt_conditioned", "PromptConditionedResult"),
+    "PDDPipeline": ("pipeline", "PDDPipeline"),
+    "ModelBackend": ("sae", "ModelBackend"),
+    "SAEBackend": ("sae", "SAEBackend"),
+    "ValidationMetrics": ("validation", "ValidationMetrics"),
+    "compute_prediction_validation_metrics": ("validation", "compute_prediction_validation_metrics"),
+    "DatasetInoculator": ("interventions", "DatasetInoculator"),
+    "LossReweighter": ("interventions", "LossReweighter"),
+    "FeatureSteerer": ("interventions", "FeatureSteerer"),
+    "ClusterAutoLabeler": ("autolabel", "ClusterAutoLabeler"),
+    "ClusterLabel": ("autolabel", "ClusterLabel"),
+    "AutoLabelConfig": ("config", "AutoLabelConfig"),
+}
+
+
+def __getattr__(name: str):
+    entry = _LAZY.get(name)
+    if entry is None:
+        raise AttributeError(f"module 'pdd' has no attribute '{name}'")
+    module_name, attr = entry
+    import importlib
+    module = importlib.import_module(f".{module_name}", __name__)
+    value = getattr(module, attr)
+    globals()[name] = value
+    return value

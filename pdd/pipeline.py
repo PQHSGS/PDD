@@ -6,7 +6,7 @@ import json
 import os
 import time
 import numpy as np
-from typing import Dict, Any, Optional
+from typing import Any, Dict
 
 from .config import PipelineConfig
 from .data import DatasetLoader, PreferenceExample
@@ -149,9 +149,22 @@ class PDDPipeline:
         pc_summary_file = os.path.join(self.cfg.output_dir, "prompt_conditioned_hypotheses.json")
         pc_res.save_summary(pc_summary_file)
 
-        # 6. Overall Run Summary Output
+        # 6. Auto-Interpretation Stage (B.1.7 labels + A_k/R_m example indices for the viewer)
+        if self.cfg.auto_label.enabled:
+            from .autolabeling import AutoLabelingPipeline
+
+            label_counts = AutoLabelingPipeline(self.cfg.auto_label, self.cfg.output_dir).run(
+                matrices=matrices,
+                cluster_map=cluster_map,
+                fc_res=fc_res,
+                pc_res=pc_res,
+                seed=self.cfg.seed,
+                checkpoint_dir=run_ckpt_dir,
+            )
+            logger.info(f"Auto-labeling stage complete: {label_counts}.")
+
+        # 7. Overall Run Summary Output
         summary_file = os.path.join(self.cfg.output_dir, "pdd_summary.json")
-        summary_tmp = summary_file + ".tmp"
         summary_data = {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "config": self.cfg.to_dict(),
@@ -184,8 +197,8 @@ class PDDPipeline:
             ]
             if matching_subdirs:
                 # Rank matching subfolders by actual progress:
-                # 1. Completed matrices.npz (score: 1,000,000,000)
-                # 2. Highest last_batch_idx in matrices_partial.npz (score: last_batch_idx + 10)
+                # 1. Completed matrices.npz / complete matrices_mmap dir (score: 1,000,000,000)
+                # 2. Surviving chunks dir (score: sum of chunk sizes)
                 # 3. Subfolder with examples.json (score: 1)
                 # 4. Fallback to newest timestamp
                 matching_subdirs.sort(reverse=True)  # Newest timestamp as tie-breaker
@@ -196,7 +209,6 @@ class PDDPipeline:
                     full_path = os.path.join(self.cfg.checkpoint_dir, d)
                     mat_ckpt = os.path.join(full_path, "matrices.npz")
                     mat_mmap_dir = os.path.join(full_path, "matrices_mmap")
-                    part_ckpt = os.path.join(full_path, "matrices_partial.npz")
                     chunks_dir = os.path.join(full_path, "chunks")
                     ex_ckpt = os.path.join(full_path, "examples.json")
                     score = 0
