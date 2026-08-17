@@ -33,7 +33,7 @@ LaTeX source) — read the relevant appendix section before touching a module.
 - **STRICT RULE: NO POLLING OR REPETITIVE STATUS CHECK LOOPS.** When a background task (e.g. conda environment cloning, package installation, long-running data preprocessing, model training) is running, NEVER poll or execute repetitive status checking loops (`manage_task status`, schedule timers, repeated `ls`, `ps aux`). Simply stop calling tools and wait quietly for the system notification when the task completes.
 - **CRITICAL RULE: DATA PRESERVATION & SAFETY.** NEVER delete, overwrite, or touch pre-extracted feature matrix checkpoints, activation datasets (`matrices_mmap`), or long-running feature extraction artifacts without explicit user confirmation.
 - **CRITICAL RULE: FILE I/O & CHECKPOINT MUTATION CONFIRMATION.** ALWAYS ask the user for explicit confirmation before making any code modifications or running scripts that alter saved checkpoint files, metadata schemas, directory structures, or file I/O formatting. Explicitly ask the user if they want to update any specific checkpoint subfolders.
-- **STRICT RULE: ZERO MOCK OR SYNTHETIC CODE.** NEVER write placeholder, random, or mock code under any circumstances. All pipeline stages and experiment scripts (`p4_dpo_validation.py`, `p5_interventions.py`, `pdd/autolabeling.py`) MUST execute 100% real GPU model training, real SAE rollout extraction, real dataset inoculation, and real data analysis.
+- **STRICT RULE: ZERO MOCK OR SYNTHETIC CODE.** NEVER write placeholder, random, or mock code under any circumstances. All pipeline stages and experiment scripts (`p4_dpo_validation.py`, `p5_interventions.py`, `pdd/autolabel.py`) MUST execute 100% real GPU model training, real SAE rollout extraction, real dataset inoculation, and real data analysis.
 - **STRICT RULE: TQDM PROGRESS BARS.** ALWAYS use `tqdm` progress bars for all batch precomputation, DPO training epochs, dataset feature extraction, and text rollout generation loops across all experiment scripts.
 - **STRICT RULE: GPU VRAM & CPU RAM SAFETY.** ALWAYS call `torch.cuda.empty_cache()` periodically during training and rollout extraction loops. Use sparse matrix operations for feature primitive calculations to keep RAM allocation < 1 MB and prevent OS OOM killer crashes. Store precomputed reference logps in 1D CPU numpy arrays (40 KB).
 - **Headless & Reproducible:** Run via `python -m pdd.cli --config configs/gemma2_2b_base.json` with dataclass/JSON configs in `configs/` and `pdd/config.py`, checkpoints in `checkpoints/`, run outputs under `runs/`. The pipeline ends with the auto-label stage (`auto_label` config block, default on): B_k LLM labels, T_m whole-cluster labels, and A_k/R_m example indices are written directly under `<run>/` (cluster_labels.json, feature_cluster_labels.json, prompt_conditioned_cluster_examples.json) so the viewer is fully interpretable after a single run. Launch the viewer with `python -m pdd.viewer --run_dir runs/<name>`; the viewer reads run artifacts lazily and never mutates checkpoints.
@@ -53,14 +53,14 @@ LaTeX source) — read the relevant appendix section before touching a module.
   A_k / R_m, scores c_{i,k} / u_{i,m}, top-n_top selection, Δ + Cohen's d + z.
 - Feature clusters: binary-MI graph (top 1% off-diagonal pairs, normalized MI),
   Leiden, keep communities ≥4 features.
-- Auto-labeling stage (B.1.7 + viewer interpretation, `pdd/autolabeling.py`, final
+- Auto-labeling stage (B.1.7 + viewer interpretation, `pdd/autolabel.py`, final
   pipeline stage): Pass 1 labels data clusters B_k from real centroid/random
   sampled prompts via the B.1 `s_matrix`; Pass 2 labels feature clusters T_m from
   the real response examples firing them (C_max+R_max), independent of Neuronpedia;
   Pass 3 maps prompt clusters A_k / response-delta clusters R_m to their strongest
   real examples (c_matrix / |u_matrix|). Reuses the in-memory fc/pc results — no
   recompute. Artifact paths are shared with the viewer via the helpers in
-  `pdd/autolabeling.py` (cluster_labels_path / feature_cluster_labels_path /
+  `pdd/autolabel.py` (cluster_labels_path / feature_cluster_labels_path /
   pc_cluster_examples_path).
 - Viewer (`pdd/viewer_server.py`, `viewer/`): single-run FastAPI + JS UI. T_m tags
   (inspector + B.1 table) open a whole-cluster dropdown (LLM label + Neuronpedia

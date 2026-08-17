@@ -1,17 +1,106 @@
-"""Auto-labeling module for Spherical K-Means data clusters (Appendix B.1.7)."""
+"""Auto-labeling and cluster interpretation module (Appendix B.1.7 + viewer interpretation).
+
+Contains:
+- ClusterLabel dataclass
+- ClusterAutoLabeler (keyword-heuristic labeler)
+- LLMClusterLabeler (local instruct model labeler with dense prompts and clean title/desc filters)
+- AutoLabelingPipeline (3-pass pipeline stage generating B_k, T_m, and A_k/R_m artifacts)
+- Shared artifact path helpers for the viewer (cluster_labels_path, feature_cluster_labels_path, pc_cluster_examples_path)
+"""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import json
+import os
 import re
-from typing import Any, Dict, List, Optional, Tuple
-import numpy as np
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
-from .data import PreferenceExample
+import numpy as np
+from tqdm import tqdm
+
+from .config import AutoLabelConfig, FeatureConditionedConfig, PromptConditionedConfig
+from .data import DatasetLoader, PreferenceExample
 from .logger import get_logger
 
 logger = get_logger("PDD.AutoLabel")
 
+
+# ---------------------------------------------------------------------------
+# Artifact Path Helpers (Shared single source of truth with viewer)
+# ---------------------------------------------------------------------------
+
+def cluster_labels_path(run_dir: Union[str, "os.PathLike[str]"]) -> str:
+    """LLM labels for data clusters B_k (title/description/keywords)."""
+    return os.path.join(run_dir, "cluster_labels.json")
+
+
+def feature_cluster_labels_path(run_dir: Union[str, "os.PathLike[str]"]) -> str:
+    """Whole-cluster LLM labels for SAE feature clusters T_m."""
+    return os.path.join(run_dir, "feature_cluster_labels.json")
+
+
+def pc_cluster_examples_path(run_dir: Union[str, "os.PathLike[str]"]) -> str:
+    """Real example indices expressing prompt clusters A_k / response-delta clusters R_m."""
+    return os.path.join(run_dir, "prompt_conditioned_cluster_examples.json")
+
+
+def _save_json(path: str, data: Dict[str, Any]) -> None:
+    """Atomic JSON write (tmp + replace) so a crash never corrupts an artifact."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp_path, path)
+    logger.info(f"Saved '{path}'.")
+
+
+def _load_examples(checkpoint_dir: str) -> List[Any]:
+    """Load the REAL cached preference examples using fast compiled C parser."""
+    ex_path = os.path.join(checkpoint_dir, "examples.json")
+    if not os.path.exists(ex_path):
+        raise FileNotFoundError(f"No cached examples.json in checkpoint '{checkpoint_dir}' for auto-labeling.")
+    return DatasetLoader.load_json_cache(ex_path)
+
+
+_STOPWORDS = frozenset({
+    "about", "after", "again", "against", "almost", "along", "already", "also",
+    "although", "always", "among", "another", "answer", "anyone", "anything",
+    "around", "because", "before", "behind", "being", "below", "between", "beyond",
+    "cannot", "could", "during", "either", "enough", "every", "except", "explain",
+    "first", "following", "further", "given", "giving", "having", "instead",
+    "itself", "little", "mainly", "making", "many", "might", "myself", "neither",
+    "never", "nothing", "number", "often", "other", "others", "please", "provide",
+    "rather", "really", "regarding", "several", "should", "since", "someone",
+    "something", "sometimes", "still", "their", "theirs", "them", "themselves",
+    "there", "these", "things", "those", "though", "through", "together", "toward",
+    "under", "until", "using", "various", "welcome", "where", "whether", "which",
+    "while", "whose", "within", "without", "would", "write", "writing", "yours",
+    "assistant", "human", "prompt", "response", "chosen", "rejected",
+})
+
+
+def _top_tokens(texts: Sequence[str], weights: Sequence[float], n_tokens: int = 8) -> List[str]:
+    """Score-weighted top content tokens across a cluster's strongest examples.
+
+    Higher-weight examples (stronger c_matrix / |u_matrix|) contribute more to a
+    token's total, so the returned tokens are the ones that most express the
+    cluster in the real data. Pure offline text statistics — no model calls.
+    """
+    counts: Dict[str, float] = {}
+    for text, w in zip(texts, weights):
+        if not text:
+            continue
+        for tok in re.split(r"[^\w']+", text.lower()):
+            tok = tok.strip("'")
+            if len(tok) > 4 and tok.isalpha() and tok not in _STOPWORDS:
+                counts[tok] = counts.get(tok, 0.0) + w
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [t for t, _ in ranked[:n_tokens]]
+
+
+# ---------------------------------------------------------------------------
+# Data Structures & Labelers
+# ---------------------------------------------------------------------------
 
 @dataclass
 class ClusterLabel:
@@ -88,7 +177,7 @@ class ClusterAutoLabeler:
 
         # Extract common words as keywords
         all_text = " ".join(centroid_prompts + sample_prompts).lower()
-        words = [w.strip(".,!?;:\"'") for w in all_text.split() if len(w) > 4]
+        words = [w.strip(".,!?;:\"'") for w in all_text.split() if len(w) > 4 and w not in _STOPWORDS]
 
         from collections import Counter
         word_counts = Counter(words)
@@ -209,6 +298,30 @@ class LLMClusterLabeler(ClusterAutoLabeler):
             start = text.find("{", start + 1)
         return None
 
+    @staticmethod
+    def _clean_title(title: str, fallback: str) -> str:
+        """Strip meta-echoes and verbose prefixes from generated titles."""
+        t = title.strip().strip('"\'')
+        for prefix in ("cluster of response texts on", "cluster of response texts", "cluster of user prompts on",
+                       "cluster of user prompts", "cluster of", "cluster on", "labeling clusters of",
+                       "labeling cluster of", "user_prompts", "response_texts"):
+            if t.lower().startswith(prefix):
+                t = t[len(prefix):].strip(" :-,")
+        return t.capitalize()[:120] if len(t) >= 3 else fallback
+
+    @staticmethod
+    def _clean_desc(desc: str, fallback: str) -> str:
+        """Strip filler prefixes from generated descriptions."""
+        d = desc.strip().strip('"\'')
+        for prefix in ("cluster of response texts discussing", "cluster of response texts related to",
+                       "cluster of response texts on", "cluster of responses related to",
+                       "cluster of responses discussing", "cluster of user prompts asking about",
+                       "cluster of user prompts related to", "cluster responses based on",
+                       "cluster containing responses associated with", "cluster of"):
+            if d.lower().startswith(prefix):
+                d = d[len(prefix):].strip(" :-,")
+        return d.capitalize()[:600] if len(d) >= 5 else fallback
+
     def _label_dict(self, texts: List[str], kind: str = "prompt") -> Optional[Dict[str, Any]]:
         """Ask the LLM to label a cluster of ``texts``, returning the raw parsed JSON dict.
 
@@ -221,20 +334,15 @@ class LLMClusterLabeler(ClusterAutoLabeler):
         if not texts:
             return None
         examples = "\n".join(f"{i}. {self._truncate(t, self.max_prompt_chars)}" for i, t in enumerate(texts, 1))
-        if kind == "response":
-            subject = "response texts"
-            what = "responses"
-        else:
-            subject = "user prompts"
-            what = "prompts"
+        what = "responses" if kind == "response" else "prompts"
         instruction = (
-            f"You are labeling clusters of {subject} sampled from an RLHF preference dataset. "
-            f"Each cluster groups similar {what}. Here are representative {what} from one cluster:\n\n"
+            f"Summarize the common theme of these representative {what} from an RLHF preference dataset into a dense semantic concept label.\n\n"
             f"{examples}\n\n"
-            'Reply with a single JSON object: {"title": "...", "description": "...", "keywords": ["...", "..."]}.\n'
-            'Do NOT reason. Do NOT explain. Output ONLY the JSON object, nothing else.\n\n'
-            'Example of the exact required format:\n'
-            '{"title": "Gardening Tips", "description": "Prompts asking about pruning, trimming and plant care.", "keywords": ["pruning", "gardening", "plants"]}'
+            "Rules:\n"
+            "- 'title': 2-5 words naming the specific topic/task. NEVER include meta words like 'Cluster', 'User Prompts', 'Response', or 'Labeling'.\n"
+            "- 'description': 1 concise sentence describing the core topic directly without filler phrases.\n"
+            "- 'keywords': 3-5 specific domain keywords (lowercase).\n\n"
+            'Output ONLY a valid JSON object: {"title": "...", "description": "...", "keywords": ["...", "..."]}'
         )
         messages = [{"role": "user", "content": instruction}]
         try:
@@ -283,12 +391,12 @@ class LLMClusterLabeler(ClusterAutoLabeler):
             logger.warning(f"LLM label for B_{cluster_id} was not valid JSON; using keyword fallback.")
             return fallback
 
-        title = str(parsed.get("title", "")).strip() or fallback.title
-        desc = str(parsed.get("description", "")).strip() or fallback.description
+        title = self._clean_title(str(parsed.get("title", "")), fallback.title)
+        desc = self._clean_desc(str(parsed.get("description", "")), fallback.description)
         kws = parsed.get("keywords", [])
         if isinstance(kws, str):
             kws = [kws]
-        kws = [str(k).strip() for k in kws if str(k).strip()][:5] or fallback.keywords
+        kws = [str(k).strip().lower() for k in kws if str(k).strip()][:5] or fallback.keywords
 
         return ClusterLabel(
             cluster_id=cluster_id,
@@ -298,3 +406,181 @@ class LLMClusterLabeler(ClusterAutoLabeler):
             centroid_prompts=centroid_prompts[:5],
             sample_prompts=sample_prompts[:5],
         )
+
+
+# ---------------------------------------------------------------------------
+# Auto-Labeling Pipeline Orchestrator (Pass 1, Pass 2, Pass 3)
+# ---------------------------------------------------------------------------
+
+class AutoLabelingPipeline:
+    """Runs the three auto-interpretation passes and writes them under the run directory."""
+
+    def __init__(self, cfg: AutoLabelConfig, run_dir: str):
+        self.cfg = cfg
+        self.run_dir = run_dir
+
+    def _labeler(self):
+        """Build the LLM or keyword labeler."""
+        if self.cfg.heuristic:
+            logger.info("Using keyword-heuristic labels (auto_label.heuristic).")
+            return ClusterAutoLabeler(max_prompt_chars=self.cfg.max_prompt_chars)
+        logger.info(f"Using local LLM labels ({self.cfg.label_model}).")
+        return LLMClusterLabeler(
+            model_path=self.cfg.label_model,
+            max_prompt_chars=self.cfg.max_prompt_chars,
+            max_examples=self.cfg.max_examples,
+        )
+
+    def _label_data_clusters(
+        self,
+        labeler: Any,
+        examples: List[Any],
+        fc_res: Any,
+        seed: int,
+    ) -> int:
+        """Pass 1: LLM (or keyword) labels for data clusters B_k."""
+        unique_clusters = sorted(set(fc_res.cluster_assignments.tolist()))
+        if self.cfg.num_clusters > 0:
+            unique_clusters = unique_clusters[: self.cfg.num_clusters]
+
+        out_path = cluster_labels_path(self.run_dir)
+        labels: List[Dict[str, Any]] = []
+        for idx, k in enumerate(tqdm(unique_clusters, desc="Pass 1: labeling data clusters", unit="cluster")):
+            centroid_p, sample_p = labeler.sample_cluster_prompts(
+                examples=examples,
+                cluster_assignments=fc_res.cluster_assignments,
+                s_matrix=fc_res.s_matrix,
+                cluster_id=k,
+                seed=seed,
+            )
+            labels.append(asdict(labeler.generate_label(k, centroid_p, sample_p)))
+            if (idx + 1) % 10 == 0:
+                _save_json(out_path, {"total_clusters": len(labels), "labels": labels})
+                logger.info(f"  ...{idx + 1}/{len(unique_clusters)} labeled (checkpoint saved).")
+
+        _save_json(out_path, {"total_clusters": len(labels), "labels": labels})
+        return len(labels)
+
+    def _label_feature_clusters(
+        self,
+        labeler: Any,
+        examples: List[Any],
+        matrices: Any,
+        clusters: Dict[int, Sequence[int]],
+    ) -> int:
+        """Pass 2: whole-cluster labels for SAE feature clusters T_m."""
+        d_sae = matrices.C_max.shape[1]
+        out_path = feature_cluster_labels_path(self.run_dir)
+        labels: Dict[str, Dict[str, Any]] = {}
+        for m in tqdm(sorted(clusters.keys()), desc="Pass 2: labeling feature clusters", unit="cluster"):
+            feats = [f for f in clusters[m] if 0 <= f < d_sae]
+            if not feats:
+                continue
+            firing = matrices.C_max[:, feats] + matrices.R_max[:, feats]
+            scores = np.asarray(firing.sum(axis=1)).ravel()
+
+            # Dynamic sample scaling: 10 to 20 representative firing examples based on cluster size
+            n_samples = min(20, max(10, len(feats) // 2))
+            idxs = [int(i) for i in np.argsort(scores)[-n_samples:][::-1] if scores[int(i)] > 0 and int(i) < len(examples)]
+            texts = [(examples[i].chosen or examples[i].rejected or examples[i].prompt or "").strip() for i in idxs]
+
+            fallback = labeler.generate_label(m, texts, []) if hasattr(labeler, "generate_label") else None
+            fallback_title = fallback.title if fallback else f"Feature cluster T_{m}"
+            fallback_desc = fallback.description if fallback else "Cluster of SAE features"
+
+            if isinstance(labeler, LLMClusterLabeler):
+                parsed = labeler._label_dict(texts, kind="response")
+                if parsed is None:
+                    title, desc, kws = fallback_title, fallback_desc, []
+                else:
+                    raw_title = str(parsed.get("title", ""))
+                    raw_desc = str(parsed.get("description", ""))
+                    title = labeler._clean_title(raw_title, fallback_title)
+                    desc = labeler._clean_desc(raw_desc, fallback_desc)
+                    kws = parsed.get("keywords", [])
+            else:
+                title, desc, kws = fallback_title, fallback_desc, fallback.keywords if fallback else []
+
+            if isinstance(kws, str):
+                kws = [kws]
+            labels[str(m)] = {
+                "title": str(title)[:120],
+                "description": str(desc)[:600],
+                "keywords": [str(k).strip().lower() for k in kws if str(k).strip()][:5],
+            }
+            logger.info(f"T_{m}: {labels[str(m)]['title']}")
+
+        payload: Dict[str, Any] = {"feature_clusters": labels}
+        _save_json(out_path, payload)
+        return len(labels)
+
+    def _pc_cluster_examples(self, pc_res: Any, examples: List[Any], n_top: int) -> int:
+        """Pass 3: real-example indices + top tokens for prompt clusters A_k and response-delta clusters R_m."""
+        prompt_ex: Dict[str, List[int]] = {}
+        prompt_tokens: Dict[str, List[str]] = {}
+        n_ex = len(examples)
+        for col, k in enumerate(sorted(pc_res.prompt_clusters.keys())):
+            scores = np.asarray(pc_res.c_matrix[:, col]).ravel()
+            idxs = [int(i) for i in np.argsort(scores)[-n_top:][::-1] if int(i) < n_ex]
+            prompt_ex[str(k)] = idxs
+            prompt_tokens[str(k)] = _top_tokens(
+                [examples[i].prompt or "" for i in idxs], [float(scores[i]) for i in idxs]
+            )
+
+        resp_ex: Dict[str, List[int]] = {}
+        resp_tokens: Dict[str, List[str]] = {}
+        for col, m in enumerate(sorted(pc_res.resp_clusters.keys())):
+            scores = np.abs(np.asarray(pc_res.u_matrix[:, col]).ravel())
+            idxs = [int(i) for i in np.argsort(scores)[-n_top:][::-1] if int(i) < n_ex]
+            resp_ex[str(m)] = idxs
+            resp_tokens[str(m)] = _top_tokens(
+                [examples[i].chosen or "" for i in idxs], [float(scores[i]) for i in idxs]
+            )
+
+        _save_json(pc_cluster_examples_path(self.run_dir), {
+            "n_top": n_top,
+            "prompt_cluster_examples": prompt_ex,
+            "response_cluster_examples": resp_ex,
+            "prompt_cluster_tokens": prompt_tokens,
+            "response_cluster_tokens": resp_tokens,
+        })
+        return len(prompt_ex) + len(resp_ex)
+
+    def run(
+        self,
+        matrices: Any,
+        cluster_map: Any,
+        fc_res: Optional[Any] = None,
+        pc_res: Optional[Any] = None,
+        seed: int = 0,
+        checkpoint_dir: Optional[str] = None,
+    ) -> Dict[str, int]:
+        """Execute all three passes."""
+        from .feature_conditioned import FeatureConditionedPipeline
+        from .prompt_conditioned import PromptConditionedPipeline
+
+        if checkpoint_dir is None:
+            raise ValueError("AutoLabelingPipeline.run requires checkpoint_dir to load the real cached examples.")
+        examples = _load_examples(checkpoint_dir)
+        labeler = self._labeler()
+
+        counts: Dict[str, int] = {}
+
+        if fc_res is None:
+            logger.info("Re-running B.1 feature-conditioned pipeline for auto-labeling (no precomputed result passed).")
+            fc_res = FeatureConditionedPipeline(FeatureConditionedConfig()).run(matrices, cluster_map, seed=seed)
+        counts["data_clusters"] = self._label_data_clusters(labeler, examples, fc_res, seed=seed)
+
+        if not self.cfg.skip_feature_clusters:
+            counts["feature_clusters"] = self._label_feature_clusters(
+                labeler, examples, matrices, cluster_map.clusters
+            )
+
+        if not self.cfg.skip_pc_examples:
+            if pc_res is None:
+                logger.info("Re-running B.2 prompt-conditioned pipeline for auto-labeling (no precomputed result passed).")
+                pc_cfg = PromptConditionedConfig()
+                pc_res = PromptConditionedPipeline(pc_cfg).run(matrices, seed=seed, checkpoint_dir=checkpoint_dir)
+            counts["pc_clusters"] = self._pc_cluster_examples(pc_res, examples, self.cfg.pc_n_top)
+
+        return counts

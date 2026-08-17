@@ -200,127 +200,381 @@ document.addEventListener("DOMContentLoaded", () => {
         elR2.textContent = "N/A";
       }
 
-      allFcHypotheses = data.top_feature_conditioned_hypotheses || [];
-      allPcHypotheses = data.top_prompt_conditioned_hypotheses || [];
+    allFcHypotheses = data.top_feature_conditioned_hypotheses || [];
+    allPcHypotheses = data.top_prompt_conditioned_hypotheses || [];
 
-      renderFcTable();
-      renderPcTable();
-      renderLabels(data.cluster_labels || [], data.feature_cluster_labels || {});
-    } catch (err) {
-      console.error("Failed to load run data:", err);
-      fcTbody.innerHTML = '<tr><td colspan="8" class="loading-cell">Error loading run data</td></tr>';
-    }
+    renderFcTable();
+    renderPcTable();
+    initClusterExplorer(data);
+  } catch (err) {
+    console.error("Failed to load run data:", err);
+    fcTbody.innerHTML = '<tr><td colspan="8" class="loading-cell">Error loading run data</td></tr>';
   }
+}
 
-  // Render Feature-Conditioned Table
-  function renderFcTable() {
-    const q = fcSearch.value.toLowerCase().trim();
-    const chosenOnly = fcChosenOnly.checked;
-    const rejectedOnly = fcRejectedOnly.checked;
+// --- CLUSTER INTERPRETATION EXPLORER (TAB 3) ---
+const clusterSearch = document.getElementById("cluster-search");
+const clustersMasterList = document.getElementById("clusters-master-list");
+const clusterDetailView = document.getElementById("cluster-detail-view");
+const paneListCount = document.getElementById("pane-list-count");
+const clusterPillsBar = document.getElementById("cluster-pills-bar");
 
-    let filtered = allFcHypotheses.filter(h => {
-      if (chosenOnly && !h.is_chosen_leaning) return false;
-      if (rejectedOnly && h.is_chosen_leaning) return false;
-      if (q) {
-        const text = `k${h.k} m${h.m} ${h.delta}`.toLowerCase();
-        if (!text.includes(q)) return false;
+let allUnifiedClusters = [];
+let currentClusterFilter = "all";
+let activeSelectedClusterKey = null;
+
+function initClusterExplorer(data) {
+  const bkLabels = data.cluster_labels || [];
+  const tmLabels = data.feature_cluster_labels || {};
+  const fcHypos = data.top_feature_conditioned_hypotheses || [];
+  const pcHypos = data.top_prompt_conditioned_hypotheses || [];
+
+  allUnifiedClusters = [];
+  const seenKeys = new Set();
+
+  // 1. Data Clusters (B_k)
+  bkLabels.forEach(l => {
+    const key = `B_${l.cluster_id}`;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      allUnifiedClusters.push({
+        key: key,
+        family: "B",
+        type: "data",
+        id: l.cluster_id,
+        badgeText: `B_${l.cluster_id}`,
+        title: l.title || `Data Cluster B_${l.cluster_id}`,
+        description: l.description || "Data topic cluster",
+        keywords: l.keywords || [],
+        meta: "Data Cluster",
+      });
+    }
+  });
+
+  // 2. Feature Clusters (T_m)
+  Object.entries(tmLabels).forEach(([m, l]) => {
+    const mId = parseInt(m);
+    const key = `T_${mId}`;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      allUnifiedClusters.push({
+        key: key,
+        family: "T",
+        type: "feature",
+        id: mId,
+        badgeText: `T_${mId}`,
+        title: l.title || `Feature Cluster T_${mId}`,
+        description: l.description || "SAE Feature Community",
+        keywords: l.keywords || [],
+        meta: "SAE Feature Community",
+      });
+    }
+  });
+
+  fcHypos.forEach(h => {
+    const key = `T_${h.m}`;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      allUnifiedClusters.push({
+        key: key,
+        family: "T",
+        type: "feature",
+        id: h.m,
+        badgeText: `T_${h.m}`,
+        title: `Feature Cluster T_${h.m}`,
+        description: `SAE Feature Community (${h.t_m || "multiple"} features)`,
+        keywords: [],
+        meta: `Size: ${h.t_m || "-"} features`,
+      });
+    }
+  });
+
+  // 3. Prompt Clusters (A_k)
+  pcHypos.forEach(h => {
+    const key = `A_${h.k}`;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      allUnifiedClusters.push({
+        key: key,
+        family: "A",
+        type: "prompt",
+        id: h.k,
+        badgeText: `A_${h.k}`,
+        title: `Prompt Cluster A_${h.k}`,
+        description: "Prompt feature subspace",
+        keywords: [],
+        meta: `${h.n_prompt_feats || "-"} prompt features`,
+      });
+    }
+  });
+
+  // 4. Response Delta Clusters (R_m)
+  pcHypos.forEach(h => {
+    const key = `R_${h.m}`;
+    if (!seenKeys.has(key)) {
+      seenKeys.add(key);
+      allUnifiedClusters.push({
+        key: key,
+        family: "R",
+        type: "response",
+        id: h.m,
+        badgeText: `R_${h.m}`,
+        title: `Response Delta R_${h.m}`,
+        description: "Response-delta disparity subspace",
+        keywords: [],
+        meta: `${h.n_resp_feats || "-"} response features`,
+      });
+    }
+  });
+
+  // Update Counts
+  const countAll = allUnifiedClusters.length;
+  const countBk = allUnifiedClusters.filter(c => c.family === "B").length;
+  const countTm = allUnifiedClusters.filter(c => c.family === "T").length;
+  const countAk = allUnifiedClusters.filter(c => c.family === "A").length;
+  const countRm = allUnifiedClusters.filter(c => c.family === "R").length;
+
+  const elCountAll = document.getElementById("count-all");
+  const elCountBk = document.getElementById("count-bk");
+  const elCountTm = document.getElementById("count-tm");
+  const elCountAk = document.getElementById("count-ak");
+  const elCountRm = document.getElementById("count-rm");
+
+  if (elCountAll) elCountAll.textContent = countAll;
+  if (elCountBk) elCountBk.textContent = countBk;
+  if (elCountTm) elCountTm.textContent = countTm;
+  if (elCountAk) elCountAk.textContent = countAk;
+  if (elCountRm) elCountRm.textContent = countRm;
+
+  renderExplorerList();
+
+  if (allUnifiedClusters.length > 0 && !activeSelectedClusterKey) {
+    selectCluster(allUnifiedClusters[0]);
+  }
+}
+
+function renderExplorerList() {
+  if (!clustersMasterList) return;
+  const q = (clusterSearch ? clusterSearch.value : "").trim().toLowerCase();
+
+  let filtered = allUnifiedClusters.filter(item => {
+    if (currentClusterFilter !== "all" && item.family !== currentClusterFilter) {
+      return false;
+    }
+    if (q) {
+      const matchKey = item.key.toLowerCase().includes(q) || item.badgeText.toLowerCase().includes(q);
+      const matchTitle = item.title.toLowerCase().includes(q);
+      const matchDesc = (item.description || "").toLowerCase().includes(q);
+      const matchKw = (item.keywords || []).some(k => k.toLowerCase().includes(k));
+      const matchId = String(item.id) === q;
+      if (!matchKey && !matchTitle && !matchDesc && !matchKw && !matchId) {
+        return false;
       }
-      return true;
-    });
-
-    if (filtered.length === 0) {
-      fcTbody.innerHTML = '<tr><td colspan="8" class="loading-cell">No matching hypotheses found</td></tr>';
-      return;
     }
+    return true;
+  });
 
-    fcTbody.innerHTML = filtered.map(h => `
-      <tr>
-        <td><strong>B_${h.k}</strong> (n=${h.n_k || '-'})</td>
-        <td><strong class="cluster-tag" data-cluster="${esc(h.m)}" title="Show label + member features + examples for T_${esc(h.m)}">T_${h.m}</strong> <span class="keyword-tag">size=${h.t_m || '-'}</span></td>
-        <td>${h.delta ? (h.delta > 0 ? '+' : '') + h.delta.toFixed(4) : '-'}</td>
-        <td>
-          <span class="pill ${h.is_chosen_leaning ? 'pill-chosen' : 'pill-rejected'}">
-            ${h.is_chosen_leaning ? 'Chosen' : 'Rejected'}
-          </span>
-        </td>
-        <td>${h.z_score ? h.z_score.toFixed(2) : '-'}</td>
-        <td>${h.cohens_d ? h.cohens_d.toFixed(2) : '-'}</td>
-        <td>${h.delta_min ? h.delta_min.toFixed(4) : '-'}</td>
-        <td>${h.sign_consistent ? '<span class="pill pill-chosen">SC=1</span>' : '<span class="pill pill-neutral">SC=0</span>'}</td>
-      </tr>
-    `).join("");
+  if (paneListCount) paneListCount.textContent = `${filtered.length} of ${allUnifiedClusters.length}`;
+
+  if (filtered.length === 0) {
+    clustersMasterList.innerHTML = '<div style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.85rem;">No matching clusters found.</div>';
+    return;
   }
 
-  // Render Prompt-Conditioned Table
-  function renderPcTable() {
-    const q = pcSearch.value.toLowerCase().trim();
-    let filtered = allPcHypotheses.filter(h => {
-      if (q) {
-        const text = `a${h.k} r${h.m}`.toLowerCase();
-        if (!text.includes(q)) return false;
-      }
-      return true;
-    });
+  clustersMasterList.innerHTML = filtered.map(item => {
+    const isActive = item.key === activeSelectedClusterKey ? "active" : "";
+    const badgeClass = `badge-${item.family.toLowerCase()}`;
+    return `
+      <div class="cluster-master-item ${isActive}" data-key="${esc(item.key)}">
+        <div class="cluster-item-head">
+          <span class="cluster-badge ${badgeClass}">${esc(item.badgeText)}</span>
+          <span class="cluster-item-meta">${esc(item.meta || "")}</span>
+        </div>
+        <div class="cluster-item-title" title="${esc(item.title)}">${esc(item.title)}</div>
+        ${item.keywords && item.keywords.length ? `
+          <div class="keywords-wrap" style="margin-top:2px;">
+            ${item.keywords.slice(0, 3).map(k => `<span class="keyword-tag" style="font-size:0.7rem; padding:1px 4px;">${esc(k)}</span>`).join("")}
+          </div>` : ""}
+      </div>
+    `;
+  }).join("");
+}
 
-    if (filtered.length === 0) {
-      pcTbody.innerHTML = '<tr><td colspan="7" class="loading-cell">No matching prompt-conditioned hypotheses found</td></tr>';
-      return;
-    }
+async function selectCluster(item) {
+  if (!item || !clusterDetailView) return;
+  activeSelectedClusterKey = item.key;
+  renderExplorerList();
 
-    pcTbody.innerHTML = filtered.map(h => `
-      <tr>
-        <td><strong class="pc-cluster-link" data-type="prompt" data-cid="${esc(h.k)}" title="Show real examples expressing A_${esc(h.k)}">A_${h.k}</strong></td>
-        <td><strong class="pc-cluster-link" data-type="response" data-cid="${esc(h.m)}" title="Show real examples expressing R_${esc(h.m)}">R_${h.m}</strong></td>
-        <td>${h.n_prompt_feats || '-'}</td>
-        <td>${h.n_resp_feats || '-'}</td>
-        <td>${h.delta ? (h.delta > 0 ? '+' : '') + h.delta.toFixed(5) : '-'}</td>
-        <td>${h.z_score ? h.z_score.toFixed(2) : '-'}</td>
-        <td>${h.cohens_d ? h.cohens_d.toFixed(2) : '-'}</td>
-      </tr>
-    `).join("");
+  clusterDetailView.innerHTML = `
+    <div style="padding:30px; text-align:center; color:var(--text-muted); font-size:0.9rem;">
+      Loading interpretation for <strong>${esc(item.badgeText)}</strong>...
+    </div>
+  `;
+
+  try {
+    const res = await fetch(`/api/cluster_detail?type=${encodeURIComponent(item.type)}&id=${encodeURIComponent(item.id)}&top_n=6`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderClusterDetail(item, data);
+  } catch (err) {
+    clusterDetailView.innerHTML = `
+      <div class="detail-header">
+        <div class="detail-badge-title-row">
+          <span class="cluster-badge badge-${item.family.toLowerCase()}">${esc(item.badgeText)}</span>
+          <h2 class="detail-title">${esc(item.title)}</h2>
+        </div>
+        <p class="detail-description">${esc(item.description)}</p>
+      </div>
+      <div style="color:var(--text-muted); font-size:0.85rem;">Interpretation details not cached for this cluster yet.</div>
+    `;
   }
+}
 
-  // Render Cluster Labels (B_k cards + T_m cards, covering all four cluster families)
-  function renderLabels(labels, fcLabels) {
-    const hasBk = labels && labels.length > 0;
-    const hasTm = fcLabels && Object.keys(fcLabels).length > 0;
-    if (!hasBk && !hasTm) {
-      labelsContainer.innerHTML = '<p class="loading-cell">No auto-interpreted labels available for this run.</p>';
-      return;
-    }
+function renderClusterDetail(item, data) {
+  if (!clusterDetailView) return;
+  const badgeClass = `badge-${item.family.toLowerCase()}`;
+  const title = data.title || item.title;
+  const desc = data.description || item.description || "No description";
+  const keywords = data.keywords || item.keywords || [];
 
-    let html = "";
-    if (hasBk) {
-      html += `<h3 class="section-title" style="margin-top:0;">Data Clusters (B_k) — LLM labels</h3>
-        <div class="labels-grid">${labels.map(l => `
-          <div class="label-card">
-            <div class="label-title">B_${esc(l.cluster_id)}: ${esc(l.title || "Topic Cluster")}</div>
-            <div class="label-desc">${esc(l.description || "No description")}</div>
-            <div class="keywords-wrap">
-              ${(l.keywords || []).map(k => `<span class="keyword-tag">${esc(k)}</span>`).join("")}
+  let bodyHtml = "";
+
+  if (item.family === "T") {
+    const topFeats = data.top_features || [];
+    const exs = data.examples || [];
+    bodyHtml += `
+      <div class="detail-section">
+        <div class="detail-section-title">⚡ Top Member SAE Features (${data.n_features || topFeats.length} total)</div>
+        <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:16px;">
+          ${topFeats.length ? topFeats.map(f => {
+            const link = f.neuronpedia_url
+              ? `<a href="${esc(f.neuronpedia_url)}" target="_blank" rel="noopener noreferrer" class="keyword-tag cluster-tag" style="text-decoration:none; font-weight:600;" title="Open Neuronpedia dashboard">SAE ${esc(f.feature_index)} ↗</a>`
+              : `<span class="keyword-tag" style="font-weight:600;">SAE ${esc(f.feature_index)}</span>`;
+            const score = `<span class="keyword-tag" style="color:var(--color-accent); font-family:var(--font-mono);">act=${Number(f.firing).toFixed(1)}</span>`;
+            return `<div style="display:inline-flex; align-items:center; background:var(--border-subtle); border-radius:4px; padding:2px;">${link}${score}</div>`;
+          }).join("") : `<span style="color:var(--text-muted); font-size:0.85rem;">No member features listed</span>`}
+        </div>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-section-title">📄 Real Dataset Response Examples Firing T_${esc(item.id)}</div>
+        <div class="detail-examples-list">
+          ${exs.length ? exs.map(e => `
+            <div class="detail-example-card firing">
+              <div class="detail-example-meta">Example #${esc(e.index)} · Firing Score ${Number(e.score).toFixed(2)}</div>
+              <div style="color:var(--text-muted); margin-bottom:4px;"><strong>Prompt:</strong> ${esc(e.prompt)}</div>
+              <div style="color:var(--color-chosen); margin-bottom:4px;"><strong>Chosen:</strong> ${esc(e.chosen)}</div>
+              <div style="color:var(--color-rejected);"><strong>Rejected:</strong> ${esc(e.rejected)}</div>
             </div>
-          </div>`).join("")}</div>`;
-    }
-
-    if (hasTm) {
-      html += `<h3 class="section-title">Feature Clusters (T_m) — whole-cluster LLM labels</h3>
-        <div class="labels-grid">${Object.entries(fcLabels).map(([m, l]) => `
-          <div class="label-card">
-            <div class="label-title">T_${esc(m)}: ${esc(l.title || "No label")}</div>
-            <div class="label-desc">${esc(l.description || "No description")}</div>
-            <div class="keywords-wrap">
-              ${(l.keywords || []).map(k => `<span class="keyword-tag">${esc(k)}</span>`).join("")}
+          `).join("") : `<div style="color:var(--text-muted); font-size:0.85rem;">No real examples cached for this feature cluster yet.</div>`}
+        </div>
+      </div>
+    `;
+  } else if (item.family === "B") {
+    const centroidPrompts = data.centroid_prompts || [];
+    const samplePrompts = data.sample_prompts || [];
+    bodyHtml += `
+      <div class="detail-section">
+        <div class="detail-section-title">🎯 Centroid Real Prompts (Most Representative)</div>
+        <div class="detail-examples-list">
+          ${centroidPrompts.length ? centroidPrompts.map((p, i) => `
+            <div class="detail-example-card">
+              <div class="detail-example-meta">Centroid Sample #${i + 1}</div>
+              <div style="color:var(--text-main); font-size:0.85rem;">${esc(p)}</div>
             </div>
-          </div>`).join("")}</div>`;
-    }
+          `).join("") : `<div style="color:var(--text-muted); font-size:0.85rem;">Centroid prompt samples not generated.</div>`}
+        </div>
+      </div>
 
-    html += `<p class="section-desc" style="margin-top:14px;">
-      Prompt clusters (A_k) and response-delta clusters (R_m) have no separate LLM label — open them from the
-      <strong>Stat (B.1 + B.2)</strong> table (A_k / R_m links) to see their strongest real examples and
-      top contributing tokens.
-    </p>`;
-    labelsContainer.innerHTML = html;
+      ${samplePrompts.length ? `
+      <div class="detail-section">
+        <div class="detail-section-title">🎲 Random Real Prompts in Cluster B_${esc(item.id)}</div>
+        <div class="detail-examples-list">
+          ${samplePrompts.map((p, i) => `
+            <div class="detail-example-card">
+              <div class="detail-example-meta">Random Sample #${i + 1}</div>
+              <div style="color:var(--text-muted); font-size:0.85rem;">${esc(p)}</div>
+            </div>
+          `).join("")}
+        </div>
+      </div>` : ""}
+    `;
+  } else {
+    const toks = data.tokens || [];
+    const exs = data.examples || [];
+    bodyHtml += `
+      <div class="detail-section">
+        <div class="detail-section-title">🏷️ Top Expressive Tokens</div>
+        <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:16px;">
+          ${toks.length ? toks.map(t => `<span class="keyword-tag" style="font-size:0.8rem; font-weight:600;">${esc(t)}</span>`).join("") : `<span style="color:var(--text-muted); font-size:0.85rem;">No statistical tokens extracted</span>`}
+        </div>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-section-title">📄 Real Dataset Examples Expressing ${esc(item.badgeText)}</div>
+        <div class="detail-examples-list">
+          ${exs.length ? exs.map(e => `
+            <div class="detail-example-card firing">
+              <div class="detail-example-meta">Example #${esc(e.index)} · ${esc(e.note || "")}</div>
+              <div style="color:var(--text-muted); margin-bottom:4px;"><strong>Prompt:</strong> ${esc(e.prompt)}</div>
+              <div style="color:var(--color-chosen); margin-bottom:4px;"><strong>Chosen:</strong> ${esc(e.chosen)}</div>
+              <div style="color:var(--color-rejected);"><strong>Rejected:</strong> ${esc(e.rejected)}</div>
+            </div>
+          `).join("") : `<div style="color:var(--text-muted); font-size:0.85rem;">No examples cached for this cluster.</div>`}
+        </div>
+      </div>
+    `;
   }
+
+  clusterDetailView.innerHTML = `
+    <div class="detail-header">
+      <div class="detail-badge-title-row">
+        <span class="cluster-badge ${badgeClass}" style="font-size:1rem; padding:4px 10px;">${esc(item.badgeText)}</span>
+        <h2 class="detail-title">${esc(title)}</h2>
+      </div>
+      <p class="detail-description">${esc(desc)}</p>
+      ${keywords.length ? `
+        <div class="keywords-wrap">
+          ${keywords.map(k => `<span class="keyword-tag" style="background:var(--bg-page); font-weight:500;">${esc(k)}</span>`).join("")}
+        </div>
+      ` : ""}
+    </div>
+    ${bodyHtml}
+  `;
+}
+
+// Event Listeners for Cluster Explorer
+if (clusterSearch) {
+  clusterSearch.addEventListener("input", () => {
+    renderExplorerList();
+    const q = clusterSearch.value.trim().toUpperCase();
+    const exact = allUnifiedClusters.find(c => c.key === q || c.badgeText === q || String(c.id) === q);
+    if (exact) {
+      selectCluster(exact);
+    }
+  });
+}
+
+if (clusterPillsBar) {
+  clusterPillsBar.addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".cluster-pill-btn");
+    if (!btn) return;
+    document.querySelectorAll(".cluster-pill-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    currentClusterFilter = btn.dataset.filter;
+    renderExplorerList();
+  });
+}
+
+if (clustersMasterList) {
+  clustersMasterList.addEventListener("click", (ev) => {
+    const itemEl = ev.target.closest(".cluster-master-item");
+    if (!itemEl) return;
+    const key = itemEl.dataset.key;
+    const item = allUnifiedClusters.find(c => c.key === key);
+    if (item) selectCluster(item);
+  });
+}
 
   // Mode Switcher & Elements
   const modePromptBtn = document.getElementById("mode-prompt-btn");

@@ -73,11 +73,16 @@ class SAEBackend:
 
         if self.cfg.type == "qwen_scope":
             self.sae = self._load_qwen_scope()
+        elif self.cfg.type == "batch_topk":
+            self.sae = self._load_batch_topk()
         elif self.cfg.type == "sae_lens":
             self.sae = self._load_sae_lens()
         elif self.cfg.type == "auto":
             # Auto-detection: check if Qwen repo format or try sae_lens from_pretrained
-            if "qwen" in self.cfg.repo.lower() and "sae-res" in self.cfg.repo.lower():
+            if "adamkarvonen" in self.cfg.repo.lower() or "batch_top_k" in self.cfg.repo.lower() or "batchtopk" in self.cfg.repo.lower():
+                logger.info("Auto-detected BatchTopK / dictionary_learning repository layout. Using BatchTopK loader.")
+                self.sae = self._load_batch_topk()
+            elif "qwen" in self.cfg.repo.lower() and "sae-res" in self.cfg.repo.lower():
                 logger.info("Auto-detected Qwen-Scope single-file (.sae.pt) repository layout. Using Qwen-Scope loader.")
                 self.sae = self._load_qwen_scope()
             else:
@@ -96,6 +101,12 @@ class SAEBackend:
                         self.cfg.device = saved_device
         else:
             raise ValueError(f"Unsupported SAE type: '{self.cfg.type}'")
+
+        if hasattr(self.sae, "cfg"):
+            if self.cfg.d_in is None:
+                self.cfg.d_in = getattr(self.sae.cfg, "d_in", None)
+            if self.cfg.d_sae is None:
+                self.cfg.d_sae = getattr(self.sae.cfg, "d_sae", None)
 
         target_device = "cpu" if self.cfg.sae_cpu else self.cfg.device
         logger.info(f"Setting SAE execution device to '{target_device}' (sae_cpu={self.cfg.sae_cpu})...")
@@ -144,6 +155,70 @@ class SAEBackend:
             "dtype": "float32",
             "device": target_device,
             "sae_lens_training_version": "qwen-scope-0.0.1",
+            "neuronpedia_id": None,
+            **weights,
+        }
+        return SAE.from_dict(cfg_dict)
+
+    def _load_batch_topk(self) -> Any:
+        from sae_lens import SAE
+
+        subpath = (
+            self.cfg.sae_id
+            or f"saes_Qwen_Qwen3-1.7B_batch_top_k/resid_post_layer_{self.cfg.layer}/trainer_0/ae.pt"
+        )
+        if not subpath.endswith(".pt"):
+            subpath = f"{subpath}/ae.pt"
+
+        try:
+            path = hf_hub_download(self.cfg.repo, subpath, local_files_only=True)
+        except Exception:
+            path = hf_hub_download(self.cfg.repo, subpath)
+
+        state = torch.load(path, map_location="cpu", weights_only=False)
+
+        if "encoder.weight" in state:
+            weights = {
+                "W_enc": state["encoder.weight"].T.contiguous(),
+                "W_dec": state["decoder.weight"].T.contiguous(),
+                "b_enc": state["encoder.bias"].contiguous(),
+                "b_dec": state["b_dec"].contiguous(),
+            }
+        else:
+            w_enc = state["W_enc"]
+            w_dec = state["W_dec"]
+            weights = {
+                "W_enc": w_enc.T.contiguous() if w_enc.shape[0] != 2048 else w_enc.contiguous(),
+                "W_dec": w_dec.T.contiguous() if w_dec.shape[1] != 2048 else w_dec.contiguous(),
+                "b_enc": state["b_enc"].contiguous(),
+                "b_dec": state["b_dec"].contiguous(),
+            }
+
+        d_in = int(weights["W_enc"].shape[0])
+        d_sae = int(weights["W_enc"].shape[1])
+        k_val = int(state.get("k", self.cfg.k or 80))
+        target_device = "cpu" if self.cfg.sae_cpu else self.cfg.device
+
+        cfg_dict = {
+            "architecture": "topk",
+            "d_in": d_in,
+            "d_sae": d_sae,
+            "activation_fn_str": "topk",
+            "activation_fn_kwargs": {"k": k_val},
+            "apply_b_dec_to_input": True,
+            "finetuning_scaling_factor": False,
+            "context_size": 2048,
+            "model_name": "qwen3-1.7b",
+            "hook_name": HOOK_FORMAT.format(layer=self.cfg.layer),
+            "hook_layer": self.cfg.layer,
+            "hook_head_index": None,
+            "prepend_bos": False,
+            "dataset_path": "",
+            "dataset_trust_remote_code": False,
+            "normalize_activations": "none",
+            "dtype": "float32",
+            "device": target_device,
+            "sae_lens_training_version": "0.0.1",
             "neuronpedia_id": None,
             **weights,
         }

@@ -151,7 +151,7 @@ class PDDPipeline:
 
         # 6. Auto-Interpretation Stage (B.1.7 labels + A_k/R_m example indices for the viewer)
         if self.cfg.auto_label.enabled:
-            from .autolabeling import AutoLabelingPipeline
+            from .autolabel import AutoLabelingPipeline
 
             label_counts = AutoLabelingPipeline(self.cfg.auto_label, self.cfg.output_dir).run(
                 matrices=matrices,

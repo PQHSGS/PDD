@@ -1,22 +1,22 @@
 {
-  "name": "qwen3_1.7b_dolci",
+  "name": "qwen3_1.7b_batchtopk_65k",
   "seed": 0,
-  "output_dir": "runs/qwen3_1.7b_dolci",
+  "output_dir": "runs/qwen3_1.7b_batchtopk_65k",
   "checkpoint_dir": "checkpoints/",
   "use_checkpoint": true,
   "model": {
-    "path": "Qwen/Qwen3-1.7B-Base",
+    "path": "Qwen/Qwen3-1.7B",
     "dtype": "bfloat16",
     "device": "cuda"
   },
   "sae": {
-    "type": "auto",
-    "repo": "Qwen/SAE-Res-Qwen3-1.7B-Base-W32K-L0_50",
-    "sae_id": null,
+    "type": "batch_topk",
+    "repo": "adamkarvonen/qwen3-1.7b-saes",
+    "sae_id": "saes_Qwen_Qwen3-1.7B_batch_top_k/resid_post_layer_14/trainer_0",
     "layer": 14,
     "d_in": 2048,
-    "d_sae": 32768,
-    "k": 50,
+    "d_sae": 16384,
+    "k": 80,
     "device": "cuda"
   },
   "data": {
@@ -26,15 +26,15 @@
     "chosen_col": "chosen",
     "rejected_col": "rejected",
     "max_samples": -1,
-    "batch_size": 2,
-    "save_every_batches": 5000
+    "batch_size": 4,
+    "save_every_batches": 1000
   },
   "feature_clusters": {
-    "top_pct": 0.25,
+    "top_pct": 1,
     "min_community_size": 4,
     "min_firing_freq": 0.001,
     "block_size": 2048,
-    "resolution_parameter": 15
+    "resolution_parameter": 10
   },
   "feature_conditioned": {
     "tau": 0.01,

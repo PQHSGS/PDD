@@ -203,10 +203,54 @@
         </div>
       </section>
 
-      <!-- TAB 4: Cluster Auto-Labels -->
+      <!-- TAB 3: Cluster Auto-Labels & Interpretation Explorer -->
       <section id="tab-labels" class="tab-content">
-        <div class="labels-grid" id="labels-container">
-          <p class="loading-cell">Loading auto-interpreted cluster labels...</p>
+        <div class="explorer-card">
+          <div class="explorer-header">
+            <div>
+              <h2 class="section-title">Cluster Interpretation Explorer</h2>
+              <p class="section-desc">Search across all 4 cluster families (B_k, T_m, A_k, R_m) by exact ID or keyword to inspect semantic interpretations, member features, and real dataset examples on demand.</p>
+            </div>
+          </div>
+
+          <!-- Interactive Search & Type Filter Toolbar -->
+          <div class="toolbar cluster-toolbar">
+            <div class="search-box cluster-search-box">
+              <input type="text" id="cluster-search" placeholder="🔍 Search ID (e.g. T_10, B_25, A_5, R_12) or keyword (math, code, security)..." class="search-input">
+            </div>
+            <div class="cluster-pills-bar" id="cluster-pills-bar">
+              <button class="cluster-pill-btn active" data-filter="all">All <span id="count-all" class="pill-count">-</span></button>
+              <button class="cluster-pill-btn" data-filter="B">B_k Data <span id="count-bk" class="pill-count">-</span></button>
+              <button class="cluster-pill-btn" data-filter="T">T_m Feature <span id="count-tm" class="pill-count">-</span></button>
+              <button class="cluster-pill-btn" data-filter="A">A_k Prompt <span id="count-ak" class="pill-count">-</span></button>
+              <button class="cluster-pill-btn" data-filter="R">R_m Response <span id="count-rm" class="pill-count">-</span></button>
+            </div>
+          </div>
+
+          <!-- Master-Detail Two-Column Layout -->
+          <div class="clusters-explorer-grid">
+            <!-- Left: Searchable Clusters List -->
+            <div class="clusters-list-pane">
+              <div class="pane-header">
+                <span class="pane-title" id="pane-list-title">Clusters</span>
+                <span class="pane-count" id="pane-list-count">-</span>
+              </div>
+              <div id="clusters-master-list" class="clusters-master-list">
+                <p class="loading-cell">Loading clusters...</p>
+              </div>
+            </div>
+
+            <!-- Right: Active Selected Cluster Detail -->
+            <div class="cluster-detail-pane">
+              <div id="cluster-detail-view" class="cluster-detail-view">
+                <div class="detail-placeholder">
+                  <div class="placeholder-icon">🔍</div>
+                  <h3>Select or search any cluster to view its full interpretation</h3>
+                  <p>Type an ID like <code>T_10</code> or <code>B_5</code> in the search bar or select an item on the left to inspect LLM labels, member SAE features, and real firing examples.</p>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 

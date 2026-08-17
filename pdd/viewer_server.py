@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
-from .autolabeling import (
+from .autolabel import (
     cluster_labels_path,
     feature_cluster_labels_path,
     pc_cluster_examples_path,
@@ -287,15 +287,13 @@ class ViewerState:
         """Map the run's SAE to a (model_id, sae_set) Neuronpedia pair, or None."""
         repo = sae_cfg.get("repo", "")
         layer = sae_cfg.get("layer")
-        if not layer:
-            return None
         d_sae = int(sae_cfg.get("d_sae") or 0)
         width = {16384: "16k", 32768: "32k", 65536: "65k", 131072: "131k",
                  262144: "262k", 524288: "524k", 1048576: "1m"}.get(d_sae, "16k")
         if repo == "gemma-scope-2b-pt-res-canonical":
             return ("gemma-2-2b", f"{layer}-gemmascope-res-{width}")
-        if "SAE-Res-Qwen3-1.7B-Base" in repo:
-            return ("qwen3-1.7b", f"{layer}-qwen-scope-res-{width}")
+        if "adamkarvonen" in repo.lower():
+            return ("qwen3-1.7b", f"{layer}-resid-batchtopk-65k__l0-80")
         return None
 
     @staticmethod
@@ -397,12 +395,11 @@ class ViewerState:
     def _load_examples(self):
         """Lazily load the cached dataset examples for example-based cluster interpretation."""
         if self._examples is None and self.checkpoint_dir is not None:
-            from pdd.data import PreferenceExample
+            from pdd.data import DatasetLoader
             ex_path = self.checkpoint_dir / "examples.json"
             if ex_path.exists():
                 try:
-                    with open(ex_path, "r", encoding="utf-8") as f:
-                        self._examples = [PreferenceExample.from_dict(d) for d in json.load(f)]
+                    self._examples = DatasetLoader.load_json_cache(str(ex_path))
                 except Exception as e:
                     logger.warning(f"Error loading examples for interpretation: {e}")
         return self._examples
@@ -444,13 +441,15 @@ class ViewerState:
             return []
         out = []
         for i in idxs[:top_n]:
-            ex = examples[i]
+            if int(i) >= len(examples):
+                continue
+            ex = examples[int(i)]
             if cluster_type == "response":
                 desc = f"chosen-vs-rejected SAE delta signal (cluster R_{cid})"
             else:
                 desc = f"prompt expressing A_{cid}"
             out.append({
-                "index": i,
+                "index": int(i),
                 "prompt": ex.prompt,
                 "chosen": ex.chosen,
                 "rejected": ex.rejected,
@@ -497,17 +496,19 @@ class ViewerState:
             })
         return out
 
-    def _feature_cluster_info(self, m: int, top_n_examples: int = 5) -> Optional[Dict[str, Any]]:
+    def _feature_cluster_info(self, m: int, top_n_examples: int = 5) -> Dict[str, Any]:
         """One payload for the T_m dropdown: whole-cluster label + top member features + real examples."""
-        if m not in self.feature_clusters:
-            return None
-        label = self._load_feature_cluster_labels().get(m)
+        m_int = int(m)
+        feats = self.feature_clusters.get(m_int) or self.feature_clusters.get(str(m), [])
+        label = self._load_feature_cluster_labels().get(m_int) or self._load_feature_cluster_labels().get(str(m))
+        if label is None and not feats:
+            label = {"title": f"Feature cluster T_{m}", "description": "SAE feature cluster", "keywords": []}
         info: Dict[str, Any] = {
-            "cluster_m": m,
-            "label": label,
-            "n_features": len(self.feature_clusters[m]),
-            "top_features": self._top_cluster_features(m, top_n=8),
-            "examples": self._cluster_top_examples(m, top_n=top_n_examples),
+            "cluster_m": m_int,
+            "label": label or {"title": f"Feature cluster T_{m}", "description": "", "keywords": []},
+            "n_features": len(feats),
+            "top_features": self._top_cluster_features(m_int, top_n=8),
+            "examples": self._cluster_top_examples(m_int, top_n=top_n_examples),
         }
         # Local LLM per-feature labels as the Neuronpedia fallback (no dashboard needed).
         feat_labels = self._feature_labels or {}
@@ -520,11 +521,38 @@ class ViewerState:
                 }
         return info
 
+    def _data_cluster_info(self, k: int, top_n_examples: int = 5) -> Dict[str, Any]:
+        """Interpretation for data cluster B_k: title, description, keywords, and sampled centroid/random prompts."""
+        k_int = int(k)
+        label_obj = None
+        for l in (self.cluster_labels or []):
+            if l.get("cluster_id") == k_int:
+                label_obj = l
+                break
+        if label_obj is None:
+            label_obj = {
+                "cluster_id": k_int,
+                "title": f"Data Cluster B_{k}",
+                "description": "",
+                "keywords": [],
+                "centroid_prompts": [],
+                "sample_prompts": [],
+            }
+        return {
+            "cluster_id": k_int,
+            "title": label_obj.get("title", f"Data Cluster B_{k}"),
+            "description": label_obj.get("description", ""),
+            "keywords": label_obj.get("keywords", []),
+            "centroid_prompts": label_obj.get("centroid_prompts", [])[:top_n_examples],
+            "sample_prompts": label_obj.get("sample_prompts", [])[:top_n_examples],
+        }
+
     def _cluster_top_examples(self, m: int, top_n: int = 5) -> List[Dict[str, Any]]:
         """Top dataset examples firing feature cluster T_m (rows of C_max + R_max over its members)."""
         mats = self._load_feature_matrices()
         examples = self._load_examples()
-        feats = self.feature_clusters.get(m)
+        m_int = int(m)
+        feats = self.feature_clusters.get(m_int) or self.feature_clusters.get(str(m))
         if mats is None or examples is None or not feats:
             return []
         d_sae = mats.C_max.shape[1]
@@ -538,6 +566,8 @@ class ViewerState:
         for i in order:
             if scores[i] <= 0:
                 break
+            if int(i) >= len(examples):
+                continue
             ex = examples[int(i)]
             out.append({
                 "index": int(i),
@@ -644,41 +674,57 @@ def get_run_data() -> Dict[str, Any]:
 @app.get("/api/feature_cluster_info")
 def get_feature_cluster_info(m: int = Query(..., description="Feature cluster id T_m"),
                              top_n: int = Query(5)) -> Dict[str, Any]:
-    """Whole-cluster interpretation for SAE feature cluster T_m.
-
-    Combines the LLM whole-cluster label, the top member SAE features (each with a
-    Neuronpedia link), and the real dataset examples that fire the cluster — so a
-    cluster has meaning even when Neuronpedia has no dashboard for the run's SAE.
-    """
+    """Whole-cluster interpretation for SAE feature cluster T_m."""
     state = get_state()
-    info = state._feature_cluster_info(m, top_n_examples=top_n)
-    if info is None:
-        raise HTTPException(404, f"Unknown feature cluster T_{m}.")
-    return info
+    return state._feature_cluster_info(m, top_n_examples=top_n)
 
 
 @app.get("/api/pc_cluster_examples")
 def get_pc_cluster_examples(cluster_type: str = Query(..., description="'prompt' for A_k or 'response' for R_m"),
                             cid: int = Query(..., description="Cluster id"),
                             top_n: int = Query(5)) -> Dict[str, Any]:
-    """Meaning for prompt cluster A_k / response-delta cluster R_m: the real examples that express them.
-
-    No SAE feature breakdown — just the strongest real dataset examples per cluster
-    (top c_matrix examples per A_k; top |u_matrix| examples per R_m) plus the
-    score-weighted top content tokens of those examples.
-    """
+    """Meaning for prompt cluster A_k / response-delta cluster R_m: the real examples that express them."""
     state = get_state()
     if cluster_type not in ("prompt", "response"):
         raise HTTPException(400, "cluster_type must be 'prompt' or 'response'.")
     examples = state._pc_cluster_top_examples(cluster_type, cid, top_n=top_n)
-    if not examples:
-        raise HTTPException(404, f"No examples found for {cluster_type} cluster {cid}.")
+    tokens = state._pc_cluster_tokens(cluster_type, cid)
     return {
         "cluster_type": cluster_type,
         "cluster_id": cid,
-        "tokens": state._pc_cluster_tokens(cluster_type, cid),
+        "tokens": tokens,
         "examples": examples,
     }
+
+
+@app.get("/api/cluster_detail")
+def get_cluster_detail(type: str = Query(..., description="'data' (B_k), 'feature' (T_m), 'prompt' (A_k), or 'response' (R_m)"),
+                       id: int = Query(..., description="Cluster ID integer"),
+                       top_n: int = Query(5)) -> Dict[str, Any]:
+    """Unified endpoint to fetch full interpretation for any of the 4 cluster types."""
+    state = get_state()
+    t = type.lower().strip()
+    if t in ("data", "b", "bk"):
+        return {"cluster_family": "B", "cluster_type": "data", "id": id, **state._data_cluster_info(id, top_n_examples=top_n)}
+    elif t in ("feature", "t", "tm"):
+        return {"cluster_family": "T", "cluster_type": "feature", "id": id, **state._feature_cluster_info(id, top_n_examples=top_n)}
+    elif t in ("prompt", "a", "ak"):
+        return {
+            "cluster_family": "A",
+            "cluster_type": "prompt",
+            "id": id,
+            "tokens": state._pc_cluster_tokens("prompt", id),
+            "examples": state._pc_cluster_top_examples("prompt", id, top_n=top_n),
+        }
+    elif t in ("response", "r", "rm"):
+        return {
+            "cluster_family": "R",
+            "cluster_type": "response",
+            "id": id,
+            "tokens": state._pc_cluster_tokens("response", id),
+            "examples": state._pc_cluster_top_examples("response", id, top_n=top_n),
+        }
+    raise HTTPException(400, f"Unsupported cluster type: '{type}'. Allowed: data (B), feature (T), prompt (A), response (R).")
 
 
 @app.post("/api/inspect_prompt")

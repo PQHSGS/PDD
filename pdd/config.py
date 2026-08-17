@@ -24,19 +24,19 @@ class ModelConfig:
 
 @dataclass
 class SAEConfig:
-    type: str = "auto"                 # "auto", "qwen_scope", or "sae_lens"
+    type: str = "auto"                 # "auto", "qwen_scope", "batch_topk", or "sae_lens"
     repo: str = "Qwen/SAE-Res-Qwen3-1.7B-Base-W32K-L0_50"
     sae_id: Optional[str] = None      # Optional ID for sae_lens releases
     layer: int = 14
-    d_in: int = 2048
-    d_sae: int = 32768
-    k: Optional[int] = 50
+    d_in: Optional[int] = None        # Auto-inferred from checkpoint if None
+    d_sae: Optional[int] = None       # Auto-inferred from checkpoint if None
+    k: Optional[int] = None           # Auto-inferred from checkpoint if None
     device: str = "cuda"
     sae_cpu: bool = False
 
     def validate(self) -> None:
-        if self.type not in ("auto", "qwen_scope", "sae_lens"):
-            raise ValueError(f"Unsupported SAE type: '{self.type}'. Must be 'auto', 'qwen_scope', or 'sae_lens'.")
+        if self.type not in ("auto", "qwen_scope", "batch_topk", "sae_lens"):
+            raise ValueError(f"Unsupported SAE type: '{self.type}'. Must be 'auto', 'qwen_scope', 'batch_topk', or 'sae_lens'.")
         if not self.repo:
             raise ValueError("SAEConfig.repo cannot be empty.")
         if self.layer < 0:
@@ -118,8 +118,6 @@ class AutoLabelConfig:
     num_clusters: int = -1                     # Data clusters B_k to label (-1 = all active)
     skip_feature_clusters: bool = False        # Skip Pass 2 (T_m whole-cluster labels)
     skip_pc_examples: bool = False             # Skip Pass 3 (A_k / R_m example indices)
-    label_top_features: int = 6                # Per-T_m LLM labels for its top-N member features
-                                               # (Neuronpedia fallback for models without a dashboard; 0 = off)
     pc_n_top: int = 12                         # Examples per A_k / R_m in Pass 3
     max_prompt_chars: int = 600                # Max text length shown to the LLM
     max_examples: int = 10                     # Max examples per cluster shown to the LLM
@@ -127,8 +125,6 @@ class AutoLabelConfig:
     def validate(self) -> None:
         if not self.label_model:
             raise ValueError("AutoLabelConfig.label_model cannot be empty.")
-        if self.label_top_features < 0:
-            raise ValueError("label_top_features must be >= 0.")
         if self.pc_n_top <= 0:
             raise ValueError("pc_n_top must be positive.")
         if self.max_prompt_chars <= 0:
