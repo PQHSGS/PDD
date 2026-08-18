@@ -35,6 +35,24 @@ logger = logging.getLogger("PDD.Viewer")
 if not logger.handlers:
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s")
 
+
+def _read_json(path: Path) -> Optional[Any]:
+    """Read a JSON file; return None (with a warning log) instead of raising on any failure."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Error reading {path.name}: {e}")
+        return None
+
+
+def _mtime_of(path: Path) -> float:
+    """mtime of ``path`` (0.0 when missing) so lazy loaders can detect pipeline updates."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
 app = FastAPI(
     title="Predictive Data Debugging (PDD) Viewer",
     description="Interactive Explorer for Predictive Data Debugging (arXiv:2606.12360)",
@@ -86,9 +104,15 @@ class ViewerState:
         self._feat_delta: Optional[np.ndarray] = None
         self._pc_cluster_examples = None
         self._feature_cluster_labels: Optional[Dict[int, Dict[str, Any]]] = None
+        self._feature_cluster_labels_mtime: float = 0.0
+        self._pc_cluster_examples_mtime: float = 0.0
+        self._cluster_labels_mtime: float = 0.0
         self._np_set: Optional[Tuple[str, str]] = None
         self._cluster_info_cache: Dict[str, Any] = {}
         self._feature_totals: Optional[np.ndarray] = None
+        self._all_member_cols: Optional[np.ndarray] = None
+        self._member_positions_cache: Dict[str, np.ndarray] = {}
+        self._member_matrices: Dict[str, np.ndarray] = {}
 
         self.load()
 
@@ -104,34 +128,22 @@ class ViewerState:
 
         # 1. Load PDD Summary
         sum_path = self.run_dir / "pdd_summary.json"
-        if sum_path.exists():
-            try:
-                with open(sum_path, "r", encoding="utf-8") as f:
-                    self.summary = json.load(f)
-            except Exception as e:
-                logger.warning(f"Error reading summary: {e}")
+        sum_data = _read_json(sum_path)
+        if sum_data is not None:
+            self.summary = sum_data
 
         # 2. Resolve Checkpoint Subfolder for Cluster Maps
         ckpt_path_str = self.summary.get("checkpoint_subfolder")
         if ckpt_path_str and Path(ckpt_path_str).exists():
             self.checkpoint_dir = Path(ckpt_path_str)
             clusters_file = self.checkpoint_dir / "clusters.json"
-            if clusters_file.exists():
-                try:
-                    with open(clusters_file, "r", encoding="utf-8") as f:
-                        raw_clusters = json.load(f).get("clusters", {})
-                        self.feature_clusters = {int(k): v for k, v in raw_clusters.items()}
-                except Exception as e:
-                    logger.warning(f"Error loading clusters.json: {e}")
+            raw_clusters = _read_json(clusters_file)
+            if raw_clusters is not None:
+                self.feature_clusters = {int(k): v for k, v in raw_clusters.get("clusters", {}).items()}
 
-        # 3. Load Auto-Labels
-        lbl_file = Path(cluster_labels_path(str(self.run_dir)))
-        if lbl_file.exists():
-            try:
-                with open(lbl_file, "r", encoding="utf-8") as f:
-                    self.cluster_labels = json.load(f).get("labels", [])
-            except Exception as e:
-                logger.warning(f"Error loading auto-labels: {e}")
+        # 3. Auto-Labels (B_k, T_m, A_k/R_m) are read lazily and refresh automatically
+        #    when the pipeline rewrites them (see _data_cluster_labels, _load_feature_cluster_labels,
+        #    _load_pc_cluster_examples) — no manual rebuild step.
 
         # 4. Instant Seed from Summary
         # Seed with summary top hypotheses initially
@@ -143,44 +155,46 @@ class ViewerState:
             f"{len(self.feature_clusters)} feature clusters, ready for instant requests."
         )
 
+    def _data_cluster_labels(self) -> List[Dict[str, Any]]:
+        """B_k labels, re-read when cluster_labels.json changes (auto-label pipeline update)."""
+        path = Path(cluster_labels_path(str(self.run_dir)))
+        mtime = _mtime_of(path)
+        if mtime != self._cluster_labels_mtime:
+            labels: List[Dict[str, Any]] = []
+            raw = _read_json(path)
+            if raw is not None:
+                labels = raw.get("labels", [])
+            self.cluster_labels = labels
+            self._cluster_labels_mtime = mtime
+        return self.cluster_labels
+
+    @staticmethod
+    def _parse_hypotheses(data: Any) -> Tuple[List[Dict[str, Any]], Dict[int, List[Dict[str, Any]]]]:
+        """Split a hypotheses artifact into the flat list and the k-indexed map."""
+        hypos = data.get("hypotheses", data) if isinstance(data, dict) else data
+        k_to: Dict[int, List[Dict[str, Any]]] = {}
+        for h in hypos:
+            k = h.get("k")
+            if k is not None:
+                k_to.setdefault(k, []).append(h)
+        return hypos, k_to
+
     @property
     def prompt_hypotheses_map(self) -> Dict[int, List[Dict[str, Any]]]:
         """Lazy load and cache prompt hypotheses map on demand."""
         if not self.k_to_pc:
-            pc_file = self.run_dir / "prompt_conditioned_hypotheses.json"
-            if pc_file.exists():
-                try:
-                    with open(pc_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        self.pc_hypos = data.get("hypotheses", data) if isinstance(data, dict) else data
-                        k_to_pc = {}
-                        for h in self.pc_hypos:
-                            k = h.get("k")
-                            if k is not None:
-                                k_to_pc.setdefault(k, []).append(h)
-                        self.k_to_pc = k_to_pc
-                except Exception as e:
-                    logger.warning(f"Error reading pc hypotheses: {e}")
+            data = _read_json(self.run_dir / "prompt_conditioned_hypotheses.json")
+            if data is not None:
+                self.pc_hypos, self.k_to_pc = self._parse_hypotheses(data)
         return self.k_to_pc
 
     @property
     def feature_hypotheses_map(self) -> Dict[int, List[Dict[str, Any]]]:
         """Lazy load and cache feature hypotheses map on demand."""
         if not self.k_to_fc:
-            fc_file = self.run_dir / "feature_conditioned_hypotheses.json"
-            if fc_file.exists():
-                try:
-                    with open(fc_file, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        self.fc_hypos = data.get("hypotheses", data) if isinstance(data, dict) else data
-                        k_to_fc = {}
-                        for h in self.fc_hypos:
-                            k = h.get("k")
-                            if k is not None:
-                                k_to_fc.setdefault(k, []).append(h)
-                        self.k_to_fc = k_to_fc
-                except Exception as e:
-                    logger.warning(f"Error reading fc hypotheses: {e}")
+            data = _read_json(self.run_dir / "feature_conditioned_hypotheses.json")
+            if data is not None:
+                self.fc_hypos, self.k_to_fc = self._parse_hypotheses(data)
         return self.k_to_fc
 
     def _cluster_signals(self, activations: np.ndarray, mode: str = "sum") -> Dict[int, float]:
@@ -237,7 +251,7 @@ class ViewerState:
         features; Mode B: mean of per-feature u). Each scored cluster carries its
         hypotheses + best hypothesis for the downstream shift extraction.
         """
-        label_map = {cl.get("cluster_id"): cl for cl in self.cluster_labels}
+        label_map = {cl.get("cluster_id"): cl for cl in self._data_cluster_labels()}
         scored = []
         for k, hypos in self.feature_hypotheses_map.items():
             ev = self._hypothesis_evidence(hypos, signal)
@@ -429,22 +443,37 @@ class ViewerState:
             return ex.get(key, "") or ""
         return getattr(ex, key, "") or ""
 
+    def _top_examples(self, scores: np.ndarray, examples, top_n: int) -> List[Dict[str, Any]]:
+        """Top examples by per-example score: index, score, and truncated text fields."""
+        out: List[Dict[str, Any]] = []
+        for i in np.argsort(scores)[::-1]:
+            if scores[i] <= 0:
+                break
+            if int(i) >= len(examples):
+                continue
+            ex = examples[int(i)]
+            out.append({
+                "index": int(i),
+                "score": float(scores[i]),
+                "prompt": self._ex_get(ex, "prompt")[-600:],
+                "chosen": self._ex_get(ex, "chosen")[-400:],
+                "rejected": self._ex_get(ex, "rejected")[-400:],
+            })
+            if len(out) >= top_n:
+                break
+        return out
+
     def _load_examples(self):
         """Lazily load the cached dataset examples for example-based cluster interpretation."""
         if self._examples is None and self.checkpoint_dir is not None:
             ex_path = self.checkpoint_dir / "examples.json"
-            if ex_path.exists():
-                try:
-                    import orjson
-                    with open(ex_path, "rb") as f:
-                        self._examples = orjson.loads(f.read())
-                except Exception as e:
-                    logger.debug(f"orjson examples load failed ({e}); falling back to stdlib json.")
-                    try:
-                        with open(ex_path, "r", encoding="utf-8") as f:
-                            self._examples = json.load(f)
-                    except Exception as e2:
-                        logger.warning(f"Error loading examples for interpretation: {e2}")
+            try:
+                import orjson
+                with open(ex_path, "rb") as f:
+                    self._examples = orjson.loads(f.read())
+            except Exception as e:
+                logger.debug(f"orjson examples load failed ({e}); falling back to stdlib json.")
+                self._examples = _read_json(ex_path)
         return self._examples
 
     def _load_pc_cluster_examples(self):
@@ -452,16 +481,13 @@ class ViewerState:
 
         Written by the auto-labeling pipeline stage (prompt_conditioned_cluster_examples.json);
         gives each A_k/R_m a concrete, readable meaning via the real examples that
-        express it (no SAE feature breakdown).
+        express it (no SAE feature breakdown). Re-reads when the file changes.
         """
-        if self._pc_cluster_examples is None:
-            pc_path = Path(pc_cluster_examples_path(str(self.run_dir)))
-            if pc_path.exists():
-                try:
-                    with open(pc_path, "r", encoding="utf-8") as f:
-                        self._pc_cluster_examples = json.load(f)
-                except Exception as e:
-                    logger.warning(f"Error loading prompt-conditioned cluster examples: {e}")
+        path = Path(pc_cluster_examples_path(str(self.run_dir)))
+        mtime = _mtime_of(path)
+        if self._pc_cluster_examples is None or mtime != self._pc_cluster_examples_mtime:
+            self._pc_cluster_examples = _read_json(path)
+            self._pc_cluster_examples_mtime = mtime
         return self._pc_cluster_examples
 
     def _pc_cluster_tokens(self, cluster_type: str, cid: int) -> List[str]:
@@ -501,38 +527,197 @@ class ViewerState:
         return out
 
     def _load_feature_cluster_labels(self) -> Dict[int, Dict[str, Any]]:
-        """Lazily load whole-cluster LLM labels for SAE feature clusters T_m."""
-        if self._feature_cluster_labels is None:
-            self._feature_cluster_labels = {}
-            lbl_file = Path(feature_cluster_labels_path(str(self.run_dir)))
-            if lbl_file.exists():
-                try:
-                    with open(lbl_file, "r", encoding="utf-8") as f:
-                        raw = json.load(f)
-                        self._feature_cluster_labels = {int(k): v for k, v in raw.get("feature_clusters", {}).items()}
-                except Exception as e:
-                    logger.warning(f"Error loading feature cluster labels: {e}")
+        """Lazily load whole-cluster LLM labels for SAE feature clusters T_m.
+
+        Re-reads when the file changes so a re-run of the auto-label pipeline is picked
+        up without restarting the viewer.
+        """
+        path = Path(feature_cluster_labels_path(str(self.run_dir)))
+        mtime = _mtime_of(path)
+        if self._feature_cluster_labels is None or mtime != self._feature_cluster_labels_mtime:
+            labels: Dict[int, Dict[str, Any]] = {}
+            raw = _read_json(path)
+            if raw is not None:
+                labels = {int(k): v for k, v in raw.get("feature_clusters", {}).items()}
+            self._feature_cluster_labels = labels
+            self._feature_cluster_labels_mtime = mtime
         return self._feature_cluster_labels
 
+    def _expected_member_cols(self) -> np.ndarray:
+        """Sorted unique member columns across all feature clusters."""
+        return np.unique(np.concatenate(
+            [np.asarray(f, dtype=np.int64) for f in self.feature_clusters.values() if f]
+        ))
+
+    def _member_positions(self, mats, attr: str) -> np.ndarray:
+        """Flat positions in the CSR arrays of entries belonging to any member column.
+
+        Cached after the first ``isin`` pass over the full indices array, so subsequent
+        cluster lookups only touch the (small) member entries instead of re-reading the
+        whole indices file.
+        """
+        pos = self._member_positions_cache.get(attr)
+        if pos is None:
+            if self._all_member_cols is None:
+                self._all_member_cols = self._expected_member_cols()
+            mat = getattr(mats, attr)
+            pos = np.nonzero(np.isin(mat.indices, self._all_member_cols))[0]
+            self._member_positions_cache[attr] = pos
+        return pos
+
+    def _member_matrix(self, mats, attr: str) -> Optional[np.ndarray]:
+        """Dense (N, n_members) matrix of member-column values, built once from the CSR.
+
+        The member columns across all clusters are small (hundreds), so this compact
+        in-memory copy (≈1MB per member column) serves every cluster lookup from RAM
+        instead of re-reading the billion-nonzero matrix files on disk.
+        """
+        M = self._member_matrices.get(attr)
+        if M is None:
+            pos = self._member_positions(mats, attr)
+            if len(pos) == 0:
+                return None
+            mat = getattr(mats, attr)
+            cols = mat.indices[pos]
+            rows = np.searchsorted(mat.indptr, pos, side="right") - 1
+            vals = mat.data[pos]
+            slots = np.searchsorted(self._all_member_cols, cols)
+            M = np.zeros((mat.shape[0], len(self._all_member_cols)), dtype=np.float32)
+            M[rows, slots] = vals
+            self._member_matrices[attr] = M
+            logger.info(f"Built dense member matrix {attr} {M.shape} ({M.nbytes / 1e6:.0f} MB).")
+        return M
+
     def _feature_firings(self) -> Optional[np.ndarray]:
-        """Total firings for all SAE features across C_max and R_max in a single fast 10ms pass."""
+        """Total firings for all SAE features across C_max and R_max.
+
+        Summed over the compact dense member matrices (no per-cluster disk reads, no
+        billion-nonzero float64 casts).
+        """
         if self._feature_totals is None:
             mats = self._load_feature_matrices()
             if mats is None:
                 return None
-            try:
-                c_data = mats.C_max.data
-                c_idx = mats.C_max.indices
-                r_data = mats.R_max.data
-                r_idx = mats.R_max.indices
-                d_sae = mats.C_max.shape[1]
-                c_sum = np.bincount(c_idx, weights=c_data, minlength=d_sae)
-                r_sum = np.bincount(r_idx, weights=r_data, minlength=d_sae)
-                self._feature_totals = (c_sum + r_sum).astype(np.float32)
-            except Exception as e:
-                logger.warning(f"Error computing fast feature totals: {e}")
-                return None
+            d_sae = mats.C_max.shape[1]
+            tot = np.zeros(d_sae, dtype=np.float32)
+            for attr in ("C_max", "R_max"):
+                M = self._member_matrix(mats, attr)
+                if M is not None:
+                    tot[self._all_member_cols] += M.sum(axis=0)
+            self._feature_totals = tot
         return self._feature_totals
+
+    # ------------------------------------------------------------------
+    # Persisted member cache (built once, mmap-loaded on every boot)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _matrix_source_fingerprint(mat) -> str:
+        """Fingerprint of a matrix's on-disk source: nnz + size + mtime of its data file."""
+        nnz = len(mat.data)
+        fname = getattr(mat.data, "filename", None)
+        if fname:
+            try:
+                st = Path(fname).stat()
+                return f"{nnz}:{st.st_size}:{int(st.st_mtime)}"
+            except OSError:
+                pass
+        return f"{nnz}:"
+
+    def _member_cache_meta(self, mats) -> Dict[str, Any]:
+        """Identity of the cached build; any change invalidates it and triggers a rebuild."""
+        return {
+            "run_dir": self.run_dir.name,
+            "checkpoint": self.checkpoint_dir.name if self.checkpoint_dir else None,
+            "d_sae": int(mats.C_max.shape[1]),
+            "n": int(mats.C_max.shape[0]),
+            "n_members": len(self._expected_member_cols()),
+            "clusters_fp": repr(sorted((int(k), sorted(map(int, v))) for k, v in self.feature_clusters.items())),
+            "matrices": {
+                "C_max": self._matrix_source_fingerprint(mats.C_max),
+                "R_max": self._matrix_source_fingerprint(mats.R_max),
+            },
+        }
+
+    def _member_cache_valid(self, mats, meta: Optional[Dict[str, Any]]) -> bool:
+        if meta is None:
+            return False
+        try:
+            return all(meta[k] == v for k, v in self._member_cache_meta(mats).items())
+        except Exception:
+            return False
+
+    @staticmethod
+    def _save_npy(path: Path, arr: np.ndarray) -> None:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "wb") as f:
+            np.save(f, arr)
+        os.replace(tmp, path)
+
+    def _persist_member_cache(self, mats) -> None:
+        """Atomically write the built member cache under <run_dir>/viewer_cache/."""
+        cache_dir = self.run_dir / "viewer_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "member_cols.npy": self._all_member_cols,
+            "positions_C_max.npy": self._member_positions_cache["C_max"],
+            "positions_R_max.npy": self._member_positions_cache["R_max"],
+            "member_matrix_C_max.npy": self._member_matrices["C_max"],
+            "member_matrix_R_max.npy": self._member_matrices["R_max"],
+            "feature_totals.npy": self._feature_totals,
+        }
+        for name, arr in payload.items():
+            if arr is not None:
+                self._save_npy(cache_dir / name, arr)
+        meta_tmp = cache_dir / "meta.json.tmp"
+        with open(meta_tmp, "w", encoding="utf-8") as f:
+            json.dump(self._member_cache_meta(mats), f, indent=2)
+        os.replace(meta_tmp, cache_dir / "meta.json")
+        logger.info(f"Persisted member cache to {cache_dir}.")
+
+    def _load_member_cache(self, mats) -> None:
+        """Load the persisted member cache if valid, else build it once and persist it.
+
+        Dense matrices are memory-mapped so boot stays fast and only the few columns a
+        cluster lookup touches are read from disk. Validated against the source matrices
+        + feature clusters on every start; any source change (re-clustering, new
+        matrices) rebuilds automatically — no manual rebuild script.
+        """
+        if not self.feature_clusters:
+            logger.info("No feature clusters for this run; skipping member cache.")
+            return
+        cache_dir = self.run_dir / "viewer_cache"
+        cache_files = [
+            "member_cols.npy", "positions_C_max.npy", "positions_R_max.npy",
+            "member_matrix_C_max.npy", "member_matrix_R_max.npy", "feature_totals.npy",
+        ]
+        meta = _read_json(cache_dir / "meta.json")
+        if all((cache_dir / f).exists() for f in cache_files) and self._member_cache_valid(mats, meta):
+            try:
+                self._all_member_cols = np.load(cache_dir / "member_cols.npy")
+                self._member_positions_cache = {
+                    "C_max": np.load(cache_dir / "positions_C_max.npy"),
+                    "R_max": np.load(cache_dir / "positions_R_max.npy"),
+                }
+                self._member_matrices = {
+                    "C_max": np.load(cache_dir / "member_matrix_C_max.npy", mmap_mode="r"),
+                    "R_max": np.load(cache_dir / "member_matrix_R_max.npy", mmap_mode="r"),
+                }
+                self._feature_totals = np.load(cache_dir / "feature_totals.npy")
+                logger.info(f"Loaded member cache from {cache_dir} (mmap).")
+                return
+            except Exception as e:
+                logger.warning(f"Failed to load member cache ({e}); rebuilding.")
+        self._feature_firings()
+        self._persist_member_cache(mats)
+
+    def prewarm(self) -> None:
+        """Load (or build + persist) the SAE cluster member cache at startup."""
+        mats = self._load_feature_matrices()
+        if mats is None:
+            logger.info("No feature matrices for this run; skipping member-cache prewarm.")
+            return
+        self._load_member_cache(mats)
 
     def _top_cluster_features(self, m: int, top_n: int = 8) -> List[Dict[str, Any]]:
         """Top SAE features inside feature cluster T_m, ranked by firing in < 1ms."""
@@ -541,18 +726,22 @@ class ViewerState:
         if not feats:
             return []
         tot = self._feature_firings()
-        if tot is not None and len(tot) > 0:
-            d_sae = len(tot)
-            feats = [f for f in feats if 0 <= f < d_sae]
-            if feats:
-                firings = tot[feats]
-                order = np.argsort(firings)[-top_n:][::-1]
-                return [{
-                    "feature_index": int(feats[j]),
-                    "firing": float(firings[j]),
-                    "neuronpedia_url": self._neuronpedia_url(int(feats[j])),
-                } for j in order]
-        return [{"feature_index": int(f), "firing": 0.0, "neuronpedia_url": self._neuronpedia_url(int(f))} for f in feats[:top_n]]
+        if tot is None or len(tot) == 0:
+            logger.warning(f"Feature firing totals unavailable; returning T_{m} members unranked.")
+            return [{
+                "feature_index": int(f), "firing": 0.0,
+                "neuronpedia_url": self._neuronpedia_url(int(f)),
+            } for f in feats[:top_n]]
+        feats = [f for f in feats if 0 <= f < len(tot)]
+        if not feats:
+            return []
+        firings = tot[feats]
+        order = np.argsort(firings)[-top_n:][::-1]
+        return [{
+            "feature_index": int(feats[j]),
+            "firing": float(firings[j]),
+            "neuronpedia_url": self._neuronpedia_url(int(feats[j])),
+        } for j in order]
 
     def _feature_cluster_info(self, m: int, top_n_examples: int = 5) -> Dict[str, Any]:
         """One payload for the T_m dropdown: whole-cluster label + top member features + real examples."""
@@ -580,11 +769,7 @@ class ViewerState:
         if cache_key in self._cluster_info_cache:
             return self._cluster_info_cache[cache_key]
 
-        label_obj = None
-        for lab in (self.cluster_labels or []):
-            if lab.get("cluster_id") == k_int:
-                label_obj = lab
-                break
+        label_obj = next((lab for lab in self._data_cluster_labels() if lab.get("cluster_id") == k_int), None)
         if label_obj is None:
             label_obj = {
                 "cluster_id": k_int,
@@ -608,9 +793,8 @@ class ViewerState:
     def _cluster_top_examples(self, m: int, top_n: int = 5) -> List[Dict[str, Any]]:
         """Top dataset examples firing feature cluster T_m, ranked by vectorized row scores.
 
-        One pass per matrix: ``isin`` over the CSR indices locates entries of the top
-        member features, and ``bincount`` sums them per example row — no Python loop
-        over the (potentially millions of) matching entries.
+        Sums the cluster's top member columns from the cached dense member matrix in
+        RAM — no per-cluster disk reads.
         """
         mats = self._load_feature_matrices()
         examples = self._load_examples()
@@ -624,32 +808,37 @@ class ViewerState:
         if len(top_f) == 0:
             return []
 
-        n = mats.C_max.shape[0]
-        scores = np.zeros(n, dtype=np.float64)
-        for mat in (mats.C_max, mats.R_max):
-            pos = np.nonzero(np.isin(mat.indices, top_f))[0]
-            if len(pos) == 0:
-                continue
-            rows = np.searchsorted(mat.indptr, pos, side="right") - 1
-            scores += np.bincount(rows, weights=mat.data[pos], minlength=n)
+        slots = np.searchsorted(self._all_member_cols, top_f)
+        scores = np.zeros(mats.C_max.shape[0], dtype=np.float64)
+        for attr in ("C_max", "R_max"):
+            M = self._member_matrix(mats, attr)
+            if M is not None:
+                scores += M[:, slots].sum(axis=1)
+        return self._top_examples(scores, examples, top_n)
 
-        out: List[Dict[str, Any]] = []
-        for i in np.argsort(scores)[::-1]:
-            if scores[i] <= 0:
-                break
-            if int(i) >= len(examples):
-                continue
-            ex = examples[int(i)]
-            out.append({
-                "index": int(i),
-                "score": float(scores[i]),
-                "prompt": self._ex_get(ex, "prompt")[-600:],
-                "chosen": self._ex_get(ex, "chosen")[-400:],
-                "rejected": self._ex_get(ex, "rejected")[-400:],
-            })
-            if len(out) >= top_n:
-                break
-        return out
+    @staticmethod
+    def _csr_col(a: Any, i: int) -> np.ndarray:
+        """Dense column ``i`` of a sparse matrix as a 1-D array."""
+        if hasattr(a, "toarray"):
+            return np.asarray(a[:, i].toarray()).ravel()
+        return np.asarray(a[:, i]).ravel()
+
+    def _feature_act(self, mats, f: int) -> np.ndarray:
+        """Per-example C_max + R_max activation vector for feature ``f``.
+
+        Uses the dense member matrix (instant) when ``f`` is a cluster member and it is
+        already built; otherwise falls back to a scalar CSR column extraction.
+        """
+        if self._all_member_cols is not None:
+            slot = int(np.searchsorted(self._all_member_cols, f))
+            if slot < len(self._all_member_cols) and int(self._all_member_cols[slot]) == f:
+                act = np.zeros(mats.C_max.shape[0], dtype=np.float32)
+                for attr in ("C_max", "R_max"):
+                    M = self._member_matrices.get(attr)
+                    if M is not None:
+                        act += M[:, slot]
+                return act
+        return self._csr_col(mats.C_max, f) + self._csr_col(mats.R_max, f)
 
     def _feature_detail(self, f: int, top_n: int = 5) -> Dict[str, Any]:
         """Per-feature interpretation: run firing stats, top firing examples, Neuronpedia metadata."""
@@ -669,12 +858,7 @@ class ViewerState:
             out["error"] = f"feature index out of range (d_sae={d_sae})"
             return out
 
-        def _col(a: Any, i: int) -> np.ndarray:
-            if hasattr(a, "toarray"):
-                return np.asarray(a[:, i].toarray()).ravel()
-            return np.asarray(a[:, i]).ravel()
-
-        act = _col(mats.C_max, f) + _col(mats.R_max, f)
+        act = self._feature_act(mats, f)
         pos_mask = act > 0
         n_firing = int(pos_mask.sum())
         pos_vals = act[pos_mask]
@@ -685,26 +869,7 @@ class ViewerState:
             "mean": float(pos_vals.mean()) if n_firing else 0.0,
         }
         out["firing"] = firing_stats
-
-        examples_out: List[Dict[str, Any]] = []
-        if examples is not None:
-            order = np.argsort(act)[::-1]
-            for i in order:
-                if act[i] <= 0:
-                    break
-                if int(i) >= len(examples):
-                    continue
-                ex = examples[int(i)]
-                examples_out.append({
-                    "index": int(i),
-                    "score": float(act[i]),
-                    "prompt": self._ex_get(ex, "prompt")[-600:],
-                    "chosen": self._ex_get(ex, "chosen")[-400:],
-                    "rejected": self._ex_get(ex, "rejected")[-400:],
-                })
-                if len(examples_out) >= top_n:
-                    break
-        out["examples"] = examples_out
+        out["examples"] = self._top_examples(act, examples, top_n) if examples is not None else []
 
         url = self._neuronpedia_url(f)
         if url:
@@ -779,13 +944,8 @@ def get_run_data() -> Dict[str, Any]:
     """Retrieve summary, validation metrics, cluster labels, and top hypotheses for the targeted run."""
     state = get_state()
     val_file = state.run_dir / "p4_validation" / "p4_r2_metrics.json"
-    validation_metrics = {}
-    if val_file.exists():
-        try:
-            with open(val_file, "r", encoding="utf-8") as f:
-                validation_metrics = json.load(f)
-        except Exception:
-            pass
+    val_data = _read_json(val_file)
+    validation_metrics = val_data if val_data is not None else {}
 
     # Reload the full hypothesis lists (cached per run) so tables show top-100
     # ranked by the pipeline's saved ordering instead of the summary top-10.
@@ -796,7 +956,7 @@ def get_run_data() -> Dict[str, Any]:
     return {
         "summary": state.summary,
         "validation_metrics": validation_metrics,
-        "cluster_labels": state.cluster_labels,
+        "cluster_labels": state._data_cluster_labels(),
         "feature_cluster_labels": state._load_feature_cluster_labels(),
         "top_feature_conditioned_hypotheses": state.fc_hypos[:100],
         "top_prompt_conditioned_hypotheses": state.pc_hypos[:100],
@@ -1035,11 +1195,18 @@ def main():
     parser.add_argument("--run_dir", type=str, default="runs/qwen3_1.7b_dolci", help="Path to target PDD run directory")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host address")
     parser.add_argument("--port", type=int, default=7000, help="Port to bind server")
+    parser.add_argument("--no-prewarm", action="store_true",
+                        help="Skip loading/building the SAE member cache at startup")
     args = parser.parse_args()
 
     os.environ["PDD_RUN_DIR"] = args.run_dir
     global _STATE
     _STATE = ViewerState(run_dir=args.run_dir)
+
+    # Load (or build + persist once) the SAE cluster member cache before serving,
+    # so the first cluster click is instant even on the billion-nonzero runs.
+    if not args.no_prewarm:
+        _STATE.prewarm()
 
     # Pre-warm cached examples in a background daemon thread to eliminate first-click disk latency
     import threading

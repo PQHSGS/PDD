@@ -11,6 +11,10 @@
     "research": {
       "description": "Research methodology agent for paper criticism, experimental design, hypothesis reasoning, and bridging literature to our safety ceiling problem.",
       "mode": "primary"
+    },
+    "code-cleaner": {
+      "description": "Code Cleaner agent. Removes redundant/duplicate code, implicit fallbacks, un-needed if-else, and fixes function sizing/overlap without changing behavior. Use when asked to clean up, simplify, refactor, or tidy the viewer (pdd/viewer_server.py, viewer/app.js) or auto-label pipeline (pdd/autolabel.py).",
+      "mode": "primary"
     }
   },
   "mcp": {

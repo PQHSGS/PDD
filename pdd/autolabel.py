@@ -377,6 +377,20 @@ class LLMClusterLabeler(ClusterAutoLabeler):
         text = self._tokenizer.decode(gen_ids, skip_special_tokens=True)
         return self._extract_json(text)
 
+    def _clean_label(self, parsed: Dict[str, Any], fallback: ClusterLabel) -> Tuple[str, str, List[str]]:
+        """Normalize a parsed LLM label (title/description/keywords) against a keyword fallback.
+
+        Shared by data-cluster (B_k) and feature-cluster (T_m) labeling so the title/desc
+        prefix stripping and keyword normalization stay in one place.
+        """
+        title = self._clean_title(str(parsed.get("title", "")), fallback.title)
+        desc = self._clean_desc(str(parsed.get("description", "")), fallback.description)
+        kws = parsed.get("keywords", [])
+        if isinstance(kws, str):
+            kws = [kws]
+        kws = [str(k).strip().lower() for k in kws if str(k).strip()][:5]
+        return title, desc, kws
+
     def generate_label(
         self,
         cluster_id: int,
@@ -402,13 +416,9 @@ class LLMClusterLabeler(ClusterAutoLabeler):
             logger.warning(f"LLM label for B_{cluster_id} was not valid JSON; using keyword fallback.")
             return fallback
 
-        title = self._clean_title(str(parsed.get("title", "")), fallback.title)
-        desc = self._clean_desc(str(parsed.get("description", "")), fallback.description)
-        kws = parsed.get("keywords", [])
-        if isinstance(kws, str):
-            kws = [kws]
-        kws = [str(k).strip().lower() for k in kws if str(k).strip()][:5] or fallback.keywords
-
+        title, desc, kws = self._clean_label(parsed, fallback)
+        if not kws:
+            kws = fallback.keywords
         return ClusterLabel(
             cluster_id=cluster_id,
             title=title[:120],
@@ -497,27 +507,17 @@ class AutoLabelingPipeline:
 
             if isinstance(labeler, LLMClusterLabeler):
                 # Keyword-heuristic fallback only — never fire an extra LLM call here.
-                fallback = ClusterAutoLabeler(max_prompt_chars=labeler.max_prompt_chars)._keyword_label(m, texts, [])
-                fallback_title = fallback.title
-                fallback_desc = fallback.description
+                fallback = labeler._keyword_label(m, texts, [])
                 parsed = labeler._label_dict(texts, kind="response")
                 if parsed is None:
                     logger.warning(f"LLM label for T_{m} was not valid JSON; using keyword fallback.")
-                    title, desc, kws = fallback_title, fallback_desc, []
+                    title, desc, kws = fallback.title, fallback.description, []
                 else:
-                    raw_title = str(parsed.get("title", ""))
-                    raw_desc = str(parsed.get("description", ""))
-                    title = labeler._clean_title(raw_title, fallback_title)
-                    desc = labeler._clean_desc(raw_desc, fallback_desc)
-                    kws = parsed.get("keywords", [])
+                    title, desc, kws = labeler._clean_label(parsed, fallback)
             else:
                 fallback = labeler.generate_label(m, texts, [])
-                fallback_title = fallback.title if fallback else f"Feature cluster T_{m}"
-                fallback_desc = fallback.description if fallback else "Cluster of SAE features"
-                title, desc, kws = fallback_title, fallback_desc, fallback.keywords if fallback else []
+                title, desc, kws = fallback.title, fallback.description, fallback.keywords
 
-            if isinstance(kws, str):
-                kws = [kws]
             labels[str(m)] = {
                 "title": str(title)[:120],
                 "description": str(desc)[:600],

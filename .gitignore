@@ -12,6 +12,7 @@ runs/
 data/
 cache/
 scratch/
+**/viewer_cache/
 
 # Large binary file formats
 *.npz
