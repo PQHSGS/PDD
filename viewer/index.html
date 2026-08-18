@@ -221,18 +221,23 @@
 
           <!-- Master-Detail Two-Column Layout for Inspector Results -->
           <div id="inspector-results" class="inspector-results hidden">
+            <!-- Dedicated Pipeline Sub-Mode Switcher -->
+            <div class="pipeline-submode-bar" style="display: flex; gap: 10px; margin-bottom: 14px;">
+              <button class="mode-btn active" id="pipeline-fc-btn" style="flex: 1; font-size: 0.88rem; padding: 10px 14px; font-weight: 700;">🌐 Pipeline 1: Feature-Conditioned (B_k → T_m)</button>
+              <button class="mode-btn" id="pipeline-pc-btn" style="flex: 1; font-size: 0.88rem; padding: 10px 14px; font-weight: 700;">🎯 Pipeline 2: Prompt-Conditioned (A_k → R_m)</button>
+            </div>
+
             <div class="clusters-explorer-grid">
               <!-- Left: Searchable / Filterable Results List -->
               <div class="clusters-list-pane">
                 <div class="pane-header">
-                  <span class="pane-title" id="inspector-list-title">Live Signals</span>
+                  <span class="pane-title" id="inspector-list-title">Feature-Conditioned Signals</span>
                   <span class="pane-count" id="inspector-list-count">-</span>
                 </div>
-                <div class="toolbar" style="padding: 6px 10px; border-bottom: 1px solid var(--border-color); background: var(--bg-card); display: flex; flex-wrap: wrap; gap: 6px;">
+                <div class="toolbar" style="padding: 6px 10px; border-bottom: 1px solid var(--border-color); background: var(--bg-card); display: flex; flex-wrap: wrap; gap: 6px;" id="inspector-filter-toolbar">
                   <button class="cluster-pill-btn active" id="inspector-filter-all" data-filter="all" style="font-size: 0.75rem; padding: 2px 8px;">All</button>
-                  <button class="cluster-pill-btn" id="inspector-filter-fc" data-filter="fc" style="font-size: 0.75rem; padding: 2px 8px;">Feature-Cond (B_k × T_m)</button>
-                  <button class="cluster-pill-btn" id="inspector-filter-pc" data-filter="pc" style="font-size: 0.75rem; padding: 2px 8px;">Prompt-Cond (A_k × R_m)</button>
-                  <button class="cluster-pill-btn" id="inspector-filter-clusters" data-filter="clusters" style="font-size: 0.75rem; padding: 2px 8px;">Matched Data (B_k)</button>
+                  <button class="cluster-pill-btn" id="inspector-filter-shifts" data-filter="shifts" style="font-size: 0.75rem; padding: 2px 8px;">Shifts (T_m / R_m)</button>
+                  <button class="cluster-pill-btn" id="inspector-filter-clusters" data-filter="clusters" style="font-size: 0.75rem; padding: 2px 8px;">Matched Prompts (B_k / A_k)</button>
                   <button class="cluster-pill-btn" id="inspector-filter-features" data-filter="features" style="font-size: 0.75rem; padding: 2px 8px;">Top SAE Feats</button>
                 </div>
                 <div id="inspector-master-list" class="clusters-master-list"></div>

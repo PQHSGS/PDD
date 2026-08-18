@@ -1291,8 +1291,10 @@ if (clustersMasterList) {
     const inspectorMasterList = document.getElementById("inspector-master-list");
     const inspectorDetailView = document.getElementById("inspector-detail-view");
     const inspectorListCount = document.getElementById("inspector-list-count");
+    const inspectorListTitle = document.getElementById("inspector-list-title");
 
     let allInspectorSignals = [];
+    let currentPipelineSubMode = "fc"; // "fc" (Feature-Conditioned B_k -> T_m) or "pc" (Prompt-Conditioned A_k -> R_m)
     let currentInspectorFilter = "all";
     let activeSelectedSignalKey = null;
 
@@ -1300,16 +1302,22 @@ if (clustersMasterList) {
       if (!inspectorMasterList) return;
 
       let filtered = allInspectorSignals.filter(item => {
+        if (item.pipeline !== currentPipelineSubMode) return false;
         if (currentInspectorFilter !== "all" && item.category !== currentInspectorFilter) {
           return false;
         }
         return true;
       });
 
-      if (inspectorListCount) inspectorListCount.textContent = `${filtered.length} of ${allInspectorSignals.length}`;
+      if (inspectorListCount) inspectorListCount.textContent = `${filtered.length} of ${allInspectorSignals.filter(i => i.pipeline === currentPipelineSubMode).length}`;
+      if (inspectorListTitle) {
+        inspectorListTitle.textContent = currentPipelineSubMode === "fc" 
+          ? "Feature-Conditioned Signals (B_k → T_m)" 
+          : "Prompt-Conditioned Signals (A_k → R_m)";
+      }
 
       if (filtered.length === 0) {
-        inspectorMasterList.innerHTML = '<div style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.85rem;">No matching signals found.</div>';
+        inspectorMasterList.innerHTML = `<div style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.85rem;">No ${currentPipelineSubMode === "fc" ? "feature-conditioned" : "prompt-conditioned"} signals found for this filter.</div>`;
         return;
       }
 
@@ -1577,17 +1585,18 @@ if (clustersMasterList) {
     // Build Master Signals List from server response
     allInspectorSignals = [];
 
-    // 1. Matched Data Clusters (B_k)
+    // 1. Matched Data Clusters (B_k) -> Feature-Conditioned Pipeline
     const clusters = data.matched_clusters || [];
     clusters.forEach(c => {
       allInspectorSignals.push({
         key: `cluster_${c.cluster_id}`,
+        pipeline: "fc",
         category: "clusters",
         clusterType: "data",
         clusterId: c.cluster_id,
         badgeClass: "badge-b",
         badgeText: `B_${c.cluster_id}`,
-        title: `Data Cluster B_${c.cluster_id}: ${c.title || 'Matched Topic'}`,
+        title: `Data Topic B_${c.cluster_id}: ${c.title || 'Matched Topic'}`,
         summary: c.description || "Matched training data distribution cluster",
         tagHtml: '<span class="pill pill-neutral">Matched Data Topic B_' + esc(c.cluster_id) + '</span>',
         explanation: c.description,
@@ -1603,7 +1612,8 @@ if (clustersMasterList) {
         const kStr = p.data_cluster_k != null ? `B_${p.data_cluster_k}` : "Global";
         allInspectorSignals.push({
           key: `shift_promoted_${p.feature_cluster_m}`,
-          category: "fc",
+          pipeline: "fc",
+          category: "shifts",
           clusterType: "feature",
           clusterId: p.feature_cluster_m,
           badgeClass: "badge-t",
@@ -1619,7 +1629,8 @@ if (clustersMasterList) {
         const kStr = s.data_cluster_k != null ? `B_${s.data_cluster_k}` : "Global";
         allInspectorSignals.push({
           key: `shift_suppressed_${s.feature_cluster_m}`,
-          category: "fc",
+          pipeline: "fc",
+          category: "shifts",
           clusterType: "feature",
           clusterId: s.feature_cluster_m,
           badgeClass: "badge-t",
@@ -1639,12 +1650,13 @@ if (clustersMasterList) {
         const mId = s.response_cluster_m;
         allInspectorSignals.push({
           key: `shift_fc_${mId}`,
-          category: "fc",
+          pipeline: "fc",
+          category: "shifts",
           clusterType: "feature",
           clusterId: mId,
           badgeClass: "badge-t",
           badgeText: `T_${mId}`,
-          title: `Feature-Cond Shift: T_${mId} (Topic B_${kId})`,
+          title: `Predicted Shift: T_${mId} (Topic B_${kId})`,
           summary: s.interpretation || "Predicted post-training shift",
           tagHtml: `<span class="pill ${isChosen ? 'pill-chosen' : 'pill-rejected'}">${esc(s.effect_direction)}</span>`,
           explanation: s.interpretation,
@@ -1658,7 +1670,8 @@ if (clustersMasterList) {
         const isAmp = pc.delta > 0;
         allInspectorSignals.push({
           key: `shift_pc_${pc.prompt_cluster_k}_${pc.response_cluster_m}`,
-          category: "pc",
+          pipeline: "pc",
+          category: "shifts",
           k: pc.prompt_cluster_k,
           m: pc.response_cluster_m,
           delta: pc.delta,
@@ -1680,11 +1693,12 @@ if (clustersMasterList) {
       });
     }
 
-    // 4. Top Fired SAE Features
+    // 4. Top Fired SAE Features -> Belongs to Feature-Conditioned exploration
     const feats = data.top_sae_features || [];
     feats.forEach(f => {
       allInspectorSignals.push({
         key: `feat_${f.feature_index}`,
+        pipeline: "fc",
         category: "features",
         featureIndex: f.feature_index,
         activation: f.activation,
@@ -1706,21 +1720,49 @@ if (clustersMasterList) {
 
     renderInspectorMasterList();
 
-    if (allInspectorSignals.length > 0) {
-      selectInspectorSignal(allInspectorSignals[0]);
+    const initialSignal = allInspectorSignals.find(s => s.pipeline === currentPipelineSubMode);
+    if (initialSignal) {
+      selectInspectorSignal(initialSignal);
+    }
+
+    // Pipeline Submode Controls (Pipeline 1: FC vs Pipeline 2: PC)
+    const pipelineFCBtn = document.getElementById("pipeline-fc-btn");
+    const pipelinePCBtn = document.getElementById("pipeline-pc-btn");
+
+    if (pipelineFCBtn) {
+      pipelineFCBtn.addEventListener("click", () => {
+        pipelineFCBtn.classList.add("active");
+        if (pipelinePCBtn) pipelinePCBtn.classList.remove("active");
+        currentPipelineSubMode = "fc";
+        currentInspectorFilter = "all";
+        renderInspectorMasterList();
+        const first = allInspectorSignals.find(s => s.pipeline === "fc");
+        if (first) selectInspectorSignal(first);
+      });
+    }
+
+    if (pipelinePCBtn) {
+      pipelinePCBtn.addEventListener("click", () => {
+        pipelinePCBtn.classList.add("active");
+        if (pipelineFCBtn) pipelineFCBtn.classList.remove("active");
+        currentPipelineSubMode = "pc";
+        currentInspectorFilter = "all";
+        renderInspectorMasterList();
+        const first = allInspectorSignals.find(s => s.pipeline === "pc");
+        if (first) selectInspectorSignal(first);
+      });
     }
 
     // Filter Pill Controls
     const filterAll = document.getElementById("inspector-filter-all");
-    const filterFC = document.getElementById("inspector-filter-fc");
-    const filterPC = document.getElementById("inspector-filter-pc");
+    const filterShifts = document.getElementById("inspector-filter-shifts");
     const filterClusters = document.getElementById("inspector-filter-clusters");
     const filterFeatures = document.getElementById("inspector-filter-features");
 
-    [filterAll, filterFC, filterPC, filterClusters, filterFeatures].forEach(btn => {
+    [filterAll, filterShifts, filterClusters, filterFeatures].forEach(btn => {
       if (btn) {
         btn.addEventListener("click", () => {
-          [filterAll, filterFC, filterPC, filterClusters, filterFeatures].forEach(b => b && b.classList.remove("active"));
+          [filterAll, filterShifts, filterClusters, filterFeatures].forEach(b => b && b.classList.remove("active"));
           btn.classList.add("active");
           currentInspectorFilter = btn.dataset.filter;
           renderInspectorMasterList();
