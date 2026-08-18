@@ -14,7 +14,6 @@ document.addEventListener("DOMContentLoaded", () => {
   // Table Bodies
   const fcTbody = document.getElementById("fc-tbody");
   const pcTbody = document.getElementById("pc-tbody");
-  const labelsContainer = document.getElementById("labels-container");
 
   // Filters & Search
   const fcSearch = document.getElementById("fc-search");
@@ -48,8 +47,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     return topFeats.map(f => `
       <div class="feature-row">
-        <div class="feature-row-head">
-          <button class="feature-caret-btn" data-fidx="${esc(f.feature_index)}" title="Load Neuronpedia interpretation for SAE ${esc(f.feature_index)}">▸</button>
+        <div class="feature-row-head" data-fidx="${esc(f.feature_index)}" title="Click to view Neuronpedia details & firing statistics for SAE ${esc(f.feature_index)}">
+          <button class="feature-caret-btn" data-fidx="${esc(f.feature_index)}">▸</button>
           <span class="feature-badge">SAE ${esc(f.feature_index)}</span>
           ${f.neuronpedia_url
             ? `<a class="feature-np-link" href="${esc(f.neuronpedia_url)}" target="_blank" rel="noopener noreferrer" title="Open Neuronpedia dashboard in new tab">↗ Neuronpedia</a>`
@@ -142,21 +141,28 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   document.addEventListener("click", (ev) => {
-    const caret = ev.target.closest(".feature-caret-btn");
-    if (!caret) return;
+    // If clicking directly on external Neuronpedia link, open link normally
+    if (ev.target.closest(".feature-np-link")) return;
+
+    const head = ev.target.closest(".feature-row-head");
+    if (!head) return;
     ev.preventDefault();
-    const row = caret.closest(".feature-row");
+
+    const row = head.closest(".feature-row");
     const body = row ? row.querySelector(".feature-detail-body") : null;
-    if (!body) return;
+    const caret = row ? row.querySelector(".feature-caret-btn") : null;
+    const fidx = head.dataset.fidx || (caret ? caret.dataset.fidx : null);
+    if (!body || !fidx) return;
+
     const expanded = body.classList.contains("open");
     if (expanded) {
       body.classList.remove("open");
-      caret.textContent = "▸";
+      if (caret) caret.textContent = "▸";
       return;
     }
     body.classList.add("open");
-    caret.textContent = "▾";
-    loadFeatureDetail(caret.dataset.fidx, body);
+    if (caret) caret.textContent = "▾";
+    loadFeatureDetail(fidx, body);
   });
 
   // Tab Switching
@@ -190,6 +196,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  // Client-side in-memory cache for instant cluster inspection
+  const clusterDetailCache = new Map();
+
   async function openSlidePanel(type, cid) {
     if (!slidePanel || !drawerBody) return;
     const ctype = String(type).toLowerCase().trim();
@@ -197,6 +206,7 @@ document.addEventListener("DOMContentLoaded", () => {
                    (ctype === "feature" || ctype === "t") ? "T" :
                    (ctype === "prompt" || ctype === "a") ? "A" : "R";
     const badgeText = `${family}_${cid}`;
+    const cacheKey = `${family}_${cid}`;
 
     if (drawerClusterBadge) {
       drawerClusterBadge.className = `cluster-badge badge-${family.toLowerCase()}`;
@@ -215,6 +225,12 @@ document.addEventListener("DOMContentLoaded", () => {
     slidePanel.setAttribute("aria-hidden", "false");
     if (slidePanelBackdrop) slidePanelBackdrop.classList.remove("hidden");
 
+    // Fast Path: If already cached in memory, render immediately with zero delay
+    if (clusterDetailCache.has(cacheKey)) {
+      renderDrawerDetail(clusterDetailCache.get(cacheKey), family, cid);
+      return;
+    }
+
     drawerBody.innerHTML = `
       <div style="padding:40px 20px; text-align:center; color:var(--text-muted); font-size:0.9rem;">
         <div class="placeholder-icon" style="font-size:2rem; margin-bottom:8px;">⚡</div>
@@ -226,6 +242,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const res = await fetch(`/api/cluster_detail?type=${encodeURIComponent(ctype)}&id=${encodeURIComponent(cid)}&top_n=8`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      clusterDetailCache.set(cacheKey, data);
       renderDrawerDetail(data, family, cid);
     } catch (err) {
       drawerBody.innerHTML = `
@@ -236,13 +253,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function renderDrawerDetail(data, family, cid) {
-    const badgeText = `${family}_${cid}`;
+  function buildClusterDetailHtml(badgeText, family, cid, title, desc, keywords, data) {
     const badgeClass = `badge-${family.toLowerCase()}`;
-    const title = data.title || `Cluster ${badgeText}`;
-    const desc = data.description || "No description";
-    const keywords = data.keywords || [];
-
     let bodyHtml = "";
 
     if (family === "T") {
@@ -319,7 +331,7 @@ document.addEventListener("DOMContentLoaded", () => {
       `;
     }
 
-    drawerBody.innerHTML = `
+    return `
       <div class="detail-header" style="margin-bottom:14px; padding-bottom:12px;">
         <div class="detail-badge-title-row">
           <span class="cluster-badge ${badgeClass}" style="font-size:0.95rem; padding:3px 8px;">${esc(badgeText)}</span>
@@ -334,6 +346,15 @@ document.addEventListener("DOMContentLoaded", () => {
       </div>
       ${bodyHtml}
     `;
+  }
+
+  function renderDrawerDetail(data, family, cid) {
+    if (!drawerBody) return;
+    const badgeText = `${family}_${cid}`;
+    const title = data.title || `Cluster ${badgeText}`;
+    const desc = data.description || "No description";
+    const keywords = data.keywords || [];
+    drawerBody.innerHTML = buildClusterDetailHtml(badgeText, family, cid, title, desc, keywords, data);
   }
 
   // Drawer event bindings
@@ -391,9 +412,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // 2. Fetch data for the targeted run
   async function loadRunData() {
-    fcTbody.innerHTML = '<tr><td colspan="8" class="loading-cell">Loading hypotheses...</td></tr>';
-    pcTbody.innerHTML = '<tr><td colspan="7" class="loading-cell">Loading prompt-conditioned hypotheses...</td></tr>';
-    labelsContainer.innerHTML = '<p class="loading-cell">Loading cluster labels...</p>';
+    if (fcTbody) fcTbody.innerHTML = '<tr><td colspan="8" class="loading-cell">Loading hypotheses...</td></tr>';
+    if (pcTbody) pcTbody.innerHTML = '<tr><td colspan="7" class="loading-cell">Loading prompt-conditioned hypotheses...</td></tr>';
 
     try {
       const res = await fetch("/api/run_data");
@@ -696,6 +716,14 @@ async function selectCluster(item) {
   activeSelectedClusterKey = item.key;
   renderExplorerList();
 
+  const cacheKey = `${item.family}_${item.id}`;
+
+  // Fast Path: If already cached in memory, render immediately with zero delay
+  if (clusterDetailCache.has(cacheKey)) {
+    renderClusterDetail(item, clusterDetailCache.get(cacheKey));
+    return;
+  }
+
   clusterDetailView.innerHTML = `
     <div style="padding:30px; text-align:center; color:var(--text-muted); font-size:0.9rem;">
       Loading interpretation for <strong>${esc(item.badgeText)}</strong>...
@@ -706,6 +734,7 @@ async function selectCluster(item) {
     const res = await fetch(`/api/cluster_detail?type=${encodeURIComponent(item.type)}&id=${encodeURIComponent(item.id)}&top_n=6`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    clusterDetailCache.set(cacheKey, data);
     renderClusterDetail(item, data);
   } catch (err) {
     clusterDetailView.innerHTML = `
@@ -723,102 +752,10 @@ async function selectCluster(item) {
 
 function renderClusterDetail(item, data) {
   if (!clusterDetailView) return;
-  const badgeClass = `badge-${item.family.toLowerCase()}`;
   const title = data.title || item.title;
   const desc = data.description || item.description || "No description";
   const keywords = data.keywords || item.keywords || [];
-
-  let bodyHtml = "";
-
-  if (item.family === "T") {
-    const topFeats = data.top_features || [];
-    const exs = data.examples || [];
-    bodyHtml += `
-      <div class="detail-section">
-        <div class="detail-section-title">⚡ Top Member SAE Features (${data.n_features || topFeats.length} total)</div>
-        <div class="feature-rows-wrap">
-          ${renderFeatureRows(topFeats)}
-        </div>
-      </div>
-
-      <div class="detail-section">
-        <div class="detail-section-title">📄 Real Dataset Response Examples Firing T_${esc(item.id)}</div>
-        <div class="detail-examples-list">
-          ${exs.length ? exs.map(firingExampleCard).join("") : `<div style="color:var(--text-muted); font-size:0.85rem;">No real examples cached for this feature cluster yet.</div>`}
-        </div>
-      </div>
-    `;
-  } else if (item.family === "B") {
-    const centroidPrompts = data.centroid_prompts || [];
-    const samplePrompts = data.sample_prompts || [];
-    bodyHtml += `
-      <div class="detail-section">
-        <div class="detail-section-title">🎯 Centroid Real Prompts (Most Representative)</div>
-        <div class="detail-examples-list">
-          ${centroidPrompts.length ? centroidPrompts.map((p, i) => `
-            <div class="detail-example-card">
-              <div class="detail-example-meta">Centroid Sample #${i + 1}</div>
-              <div style="color:var(--text-main); font-size:0.85rem;">${esc(p)}</div>
-            </div>
-          `).join("") : `<div style="color:var(--text-muted); font-size:0.85rem;">Centroid prompt samples not generated.</div>`}
-        </div>
-      </div>
-
-      ${samplePrompts.length ? `
-      <div class="detail-section">
-        <div class="detail-section-title">🎲 Random Real Prompts in Cluster B_${esc(item.id)}</div>
-        <div class="detail-examples-list">
-          ${samplePrompts.map((p, i) => `
-            <div class="detail-example-card">
-              <div class="detail-example-meta">Random Sample #${i + 1}</div>
-              <div style="color:var(--text-muted); font-size:0.85rem;">${esc(p)}</div>
-            </div>
-          `).join("")}
-        </div>
-      </div>` : ""}
-    `;
-  } else {
-    const toks = data.tokens || [];
-    const exs = data.examples || [];
-    bodyHtml += `
-      <div class="detail-section">
-        <div class="detail-section-title">🏷️ Top Expressive Tokens</div>
-        <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:16px;">
-          ${toks.length ? toks.map(t => `<span class="keyword-tag" style="font-size:0.8rem; font-weight:600;">${esc(t)}</span>`).join("") : `<span style="color:var(--text-muted); font-size:0.85rem;">No statistical tokens extracted</span>`}
-        </div>
-      </div>
-
-      <div class="detail-section">
-        <div class="detail-section-title">📄 Real Dataset Examples Expressing ${esc(item.badgeText)}</div>
-        <div class="detail-examples-list">
-          ${exs.length ? exs.map(e => `
-            <div class="detail-example-card firing">
-              <div class="detail-example-meta">Example #${esc(e.index)} · ${esc(e.note || "")}</div>
-              <div style="color:var(--text-muted); margin-bottom:4px;"><strong>Prompt:</strong> ${esc(e.prompt)}</div>
-              <div style="color:var(--color-chosen); margin-bottom:4px;"><strong>Chosen:</strong> ${esc(e.chosen)}</div>
-              <div style="color:var(--color-rejected);"><strong>Rejected:</strong> ${esc(e.rejected)}</div>
-            </div>
-          `).join("") : `<div style="color:var(--text-muted); font-size:0.85rem;">No examples cached for this cluster.</div>`}
-        </div>
-      </div>
-    `;
-  }
-
-  clusterDetailView.innerHTML = `
-    <div class="detail-header">
-      <div class="detail-badge-title-row">
-        <span class="cluster-badge ${badgeClass}" style="font-size:1rem; padding:4px 10px;">${esc(item.badgeText)}</span>
-        <h2 class="detail-title">${esc(title)}</h2>
-      </div>
-      <p class="detail-description">${esc(desc)}</p>
-      ${keywords.length ? `
-        <div class="keywords-wrap">
-          ${keywords.map(k => `<span class="keyword-tag" style="background:var(--bg-page); font-weight:500;">${esc(k)}</span>`).join("")}
-        </div>
-      ` : ""}
-    </div>
-    ${bodyHtml}
-  `;
+  clusterDetailView.innerHTML = buildClusterDetailHtml(item.badgeText, item.family, item.id, title, desc, keywords, data);
 }
 
 // Event Listeners for Cluster Explorer

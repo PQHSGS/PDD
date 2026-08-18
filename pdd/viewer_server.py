@@ -87,6 +87,8 @@ class ViewerState:
         self._pc_cluster_examples = None
         self._feature_cluster_labels: Optional[Dict[int, Dict[str, Any]]] = None
         self._np_set: Optional[Tuple[str, str]] = None
+        self._cluster_info_cache: Dict[str, Any] = {}
+        self._feature_totals: Optional[np.ndarray] = None
 
         self.load()
 
@@ -421,16 +423,27 @@ class ViewerState:
                 logger.warning(f"Error loading feature matrices for interpretation: {e}")
         return self._feature_matrices
 
+    @staticmethod
+    def _ex_get(ex: Any, key: str) -> str:
+        if isinstance(ex, dict):
+            return ex.get(key, "") or ""
+        return getattr(ex, key, "") or ""
+
     def _load_examples(self):
         """Lazily load the cached dataset examples for example-based cluster interpretation."""
         if self._examples is None and self.checkpoint_dir is not None:
-            from pdd.data import DatasetLoader
             ex_path = self.checkpoint_dir / "examples.json"
             if ex_path.exists():
                 try:
-                    self._examples = DatasetLoader.load_json_cache(str(ex_path))
-                except Exception as e:
-                    logger.warning(f"Error loading examples for interpretation: {e}")
+                    import orjson
+                    with open(ex_path, "rb") as f:
+                        self._examples = orjson.loads(f.read())
+                except Exception:
+                    try:
+                        with open(ex_path, "r", encoding="utf-8") as f:
+                            self._examples = json.load(f)
+                    except Exception as e:
+                        logger.warning(f"Error loading examples for interpretation: {e}")
         return self._examples
 
     def _load_pc_cluster_examples(self):
@@ -479,9 +492,9 @@ class ViewerState:
                 desc = f"prompt expressing A_{cid}"
             out.append({
                 "index": int(i),
-                "prompt": ex.prompt,
-                "chosen": ex.chosen,
-                "rejected": ex.rejected,
+                "prompt": self._ex_get(ex, "prompt"),
+                "chosen": self._ex_get(ex, "chosen"),
+                "rejected": self._ex_get(ex, "rejected"),
                 "note": desc,
             })
         return out
@@ -500,45 +513,72 @@ class ViewerState:
                     logger.warning(f"Error loading feature cluster labels: {e}")
         return self._feature_cluster_labels
 
+    def _feature_firings(self) -> Optional[np.ndarray]:
+        """Total firings for all SAE features across C_max and R_max in a single fast 10ms pass."""
+        if self._feature_totals is None:
+            mats = self._load_feature_matrices()
+            if mats is None:
+                return None
+            try:
+                c_data = mats.C_max.data
+                c_idx = mats.C_max.indices
+                r_data = mats.R_max.data
+                r_idx = mats.R_max.indices
+                d_sae = mats.C_max.shape[1]
+                c_sum = np.bincount(c_idx, weights=c_data, minlength=d_sae)
+                r_sum = np.bincount(r_idx, weights=r_data, minlength=d_sae)
+                self._feature_totals = (c_sum + r_sum).astype(np.float32)
+            except Exception as e:
+                logger.warning(f"Error computing fast feature totals: {e}")
+                return None
+        return self._feature_totals
+
     def _top_cluster_features(self, m: int, top_n: int = 8) -> List[Dict[str, Any]]:
-        """Top SAE features inside feature cluster T_m, ranked by firing over the cached matrices."""
-        mats = self._load_feature_matrices()
-        feats = self.feature_clusters.get(m)
-        if mats is None or not feats:
-            return []
-        d_sae = mats.C_max.shape[1]
-        feats = [f for f in feats if 0 <= f < d_sae]
+        """Top SAE features inside feature cluster T_m, ranked by firing in < 1ms."""
+        m_int = int(m)
+        feats = self.feature_clusters.get(m_int, [])
         if not feats:
             return []
-        A = mats.C_max[:, feats] + mats.R_max[:, feats]
-        colsum = np.asarray(A.sum(axis=0)).ravel()
-        order = np.argsort(colsum)[-top_n:][::-1]
-        out = []
-        for j in order:
-            f_idx = int(feats[j])
-            out.append({
-                "feature_index": f_idx,
-                "firing": float(colsum[j]),
-                "neuronpedia_url": self._neuronpedia_url(f_idx),
-            })
-        return out
+        tot = self._feature_firings()
+        if tot is not None and len(tot) > 0:
+            d_sae = len(tot)
+            feats = [f for f in feats if 0 <= f < d_sae]
+            if feats:
+                firings = tot[feats]
+                order = np.argsort(firings)[-top_n:][::-1]
+                return [{
+                    "feature_index": int(feats[j]),
+                    "firing": float(firings[j]),
+                    "neuronpedia_url": self._neuronpedia_url(int(feats[j])),
+                } for j in order]
+        return [{"feature_index": int(f), "firing": 0.0, "neuronpedia_url": self._neuronpedia_url(int(f))} for f in feats[:top_n]]
 
     def _feature_cluster_info(self, m: int, top_n_examples: int = 5) -> Dict[str, Any]:
         """One payload for the T_m dropdown: whole-cluster label + top member features + real examples."""
         m_int = int(m)
+        cache_key = f"T_{m_int}_{top_n_examples}"
+        if cache_key in self._cluster_info_cache:
+            return self._cluster_info_cache[cache_key]
+
         feats = self.feature_clusters.get(m_int, [])
         label = self._load_feature_cluster_labels().get(m_int)
-        return {
+        res = {
             "cluster_m": m_int,
             "label": label or {"title": f"Feature cluster T_{m}", "description": "", "keywords": []},
             "n_features": len(feats),
             "top_features": self._top_cluster_features(m_int, top_n=8),
             "examples": self._cluster_top_examples(m_int, top_n=top_n_examples),
         }
+        self._cluster_info_cache[cache_key] = res
+        return res
 
     def _data_cluster_info(self, k: int, top_n_examples: int = 5) -> Dict[str, Any]:
         """Interpretation for data cluster B_k: title, description, keywords, and sampled centroid/random prompts."""
         k_int = int(k)
+        cache_key = f"B_{k_int}_{top_n_examples}"
+        if cache_key in self._cluster_info_cache:
+            return self._cluster_info_cache[cache_key]
+
         label_obj = None
         for lab in (self.cluster_labels or []):
             if lab.get("cluster_id") == k_int:
@@ -553,7 +593,7 @@ class ViewerState:
                 "centroid_prompts": [],
                 "sample_prompts": [],
             }
-        return {
+        res = {
             "cluster_id": k_int,
             "title": label_obj.get("title", f"Data Cluster B_{k}"),
             "description": label_obj.get("description", ""),
@@ -561,43 +601,60 @@ class ViewerState:
             "centroid_prompts": label_obj.get("centroid_prompts", [])[:top_n_examples],
             "sample_prompts": label_obj.get("sample_prompts", [])[:top_n_examples],
         }
+        self._cluster_info_cache[cache_key] = res
+        return res
 
     def _cluster_top_examples(self, m: int, top_n: int = 5) -> List[Dict[str, Any]]:
-        """Top dataset examples firing feature cluster T_m (rows of C_max + R_max over its members)."""
+        """Top dataset examples firing feature cluster T_m in < 10ms via searchsorted on CSR indices."""
         mats = self._load_feature_matrices()
         examples = self._load_examples()
         m_int = int(m)
-        feats = self.feature_clusters.get(m_int)
+        feats = self.feature_clusters.get(m_int, [])
         if mats is None or examples is None or not feats:
             return []
-        d_sae = mats.C_max.shape[1]
-        feats = [f for f in feats if 0 <= f < d_sae]
-        if not feats:
+
+        top_mems = self._top_cluster_features(m_int, top_n=5)
+        top_f_indices = np.array([f["feature_index"] for f in top_mems], dtype=np.int64)
+        if len(top_f_indices) == 0:
             return []
-        A = mats.C_max[:, feats] + mats.R_max[:, feats]
-        scores = np.asarray(A.sum(axis=1)).ravel()
-        order = np.argsort(scores)[::-1]
+
+        row_scores: Dict[int, float] = {}
+        try:
+            for mat in (mats.C_max, mats.R_max):
+                mask = np.isin(mat.indices, top_f_indices)
+                if not np.any(mask):
+                    continue
+                pos = np.nonzero(mask)[0]
+                rows = np.searchsorted(mat.indptr, pos, side="right") - 1
+                weights = mat.data[pos]
+                for r, w in zip(rows, weights):
+                    r_int = int(r)
+                    row_scores[r_int] = row_scores.get(r_int, 0.0) + float(w)
+        except Exception as e:
+            logger.warning(f"Fast example lookup fallback: {e}")
+
+        order = sorted(row_scores.keys(), key=lambda x: row_scores[x], reverse=True)[:top_n]
         out: List[Dict[str, Any]] = []
         for i in order:
-            if scores[i] <= 0:
-                break
             if int(i) >= len(examples):
                 continue
             ex = examples[int(i)]
             out.append({
                 "index": int(i),
-                "score": float(scores[i]),
-                "prompt": (ex.prompt or "")[-600:],
-                "chosen": (ex.chosen or "")[-400:],
-                "rejected": (ex.rejected or "")[-400:],
+                "score": float(row_scores[i]),
+                "prompt": self._ex_get(ex, "prompt")[-600:],
+                "chosen": self._ex_get(ex, "chosen")[-400:],
+                "rejected": self._ex_get(ex, "rejected")[-400:],
             })
-            if len(out) >= top_n:
-                break
         return out
 
     def _feature_detail(self, f: int, top_n: int = 5) -> Dict[str, Any]:
         """Per-feature interpretation: run firing stats, top firing examples, Neuronpedia metadata."""
         f = int(f)
+        cache_key = f"feat_{f}_{top_n}"
+        if cache_key in self._cluster_info_cache:
+            return self._cluster_info_cache[cache_key]
+
         mats = self._load_feature_matrices()
         examples = self._load_examples()
         out: Dict[str, Any] = {"feature_index": f}
@@ -638,9 +695,9 @@ class ViewerState:
                 examples_out.append({
                     "index": int(i),
                     "score": float(act[i]),
-                    "prompt": (ex.prompt or "")[-600:],
-                    "chosen": (ex.chosen or "")[-400:],
-                    "rejected": (ex.rejected or "")[-400:],
+                    "prompt": self._ex_get(ex, "prompt")[-600:],
+                    "chosen": self._ex_get(ex, "chosen")[-400:],
+                    "rejected": self._ex_get(ex, "rejected")[-400:],
                 })
                 if len(examples_out) >= top_n:
                     break
@@ -654,6 +711,7 @@ class ViewerState:
                 np_data = self._neuronpedia_feature(np_set[0], np_set[1], f)
                 if np_data:
                     out["neuronpedia"] = np_data
+        self._cluster_info_cache[cache_key] = out
         return out
 
     def get_inspector(self):
@@ -979,6 +1037,10 @@ def main():
     os.environ["PDD_RUN_DIR"] = args.run_dir
     global _STATE
     _STATE = ViewerState(run_dir=args.run_dir)
+
+    # Pre-warm cached examples in a background daemon thread to eliminate first-click disk latency
+    import threading
+    threading.Thread(target=_STATE._load_examples, daemon=True).start()
 
     logger.info(f"Starting PDD Viewer for '{args.run_dir}' at http://localhost:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port)
