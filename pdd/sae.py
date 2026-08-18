@@ -51,6 +51,7 @@ class ModelBackend:
             self.cfg.path,
             torch_dtype=torch_dtype,
             trust_remote_code=True,
+            low_cpu_mem_usage=True,
             **kwargs,
         )
         if self.cfg.device != "cpu":

@@ -58,67 +58,59 @@
 
     <!-- Main Content Area -->
     <main class="content-container">
-<section id="tab-stat" class="tab-content active">
-        <h2 class="section-title">B.1 — Feature-Conditioned Hypotheses</h2>
-        <p class="section-desc">Data clusters B_k × response-feature clusters T_m, inside-vs-outside effect Δ (Welch z / Cohen's d) with split-half validation.</p>
-        <div class="toolbar">
-          <div class="search-box">
-            <input type="text" id="fc-search" placeholder="Filter by cluster ID, keyword..." class="search-input">
+      <!-- TAB 1: Stat (B.1 + B.2) Master-Detail Hypotheses Explorer -->
+      <section id="tab-stat" class="tab-content active">
+        <div class="explorer-card">
+          <div class="explorer-header">
+            <div>
+              <h2 class="section-title">Hypotheses & Causal Shift Explorer</h2>
+              <p class="section-desc">Ranked hypotheses predicting how dataset clusters shift SAE response behaviors. Select any hypothesis row to inspect its full cluster interpretation and dataset firing examples.</p>
+            </div>
           </div>
-          <div class="filter-group">
-            <label><input type="checkbox" id="fc-chosen-only"> Chosen-leaning only</label>
-            <label><input type="checkbox" id="fc-rejected-only"> Rejected-leaning only</label>
+
+          <!-- Interactive Search & Hypothesis Type Toolbar -->
+          <div class="toolbar cluster-toolbar">
+            <div class="search-box cluster-search-box">
+              <input type="text" id="stat-search" placeholder="🔍 Search hypothesis (e.g. B_5, T_10, A_2, R_5, math, code)..." class="search-input">
+            </div>
+            <div class="cluster-pills-bar" id="stat-pills-bar">
+              <button class="cluster-pill-btn active" id="pill-b1" data-type="b1">⚡ B.1 Feature-Conditioned (B_k × T_m) <span id="count-b1" class="pill-count">-</span></button>
+              <button class="cluster-pill-btn" id="pill-b2" data-type="b2">🔮 B.2 Prompt-Conditioned (A_k × R_m) <span id="count-b2" class="pill-count">-</span></button>
+              <button class="cluster-pill-btn" id="stat-dir-all" data-dir="all">All Directions</button>
+              <button class="cluster-pill-btn" id="stat-dir-chosen" data-dir="chosen">Chosen Only</button>
+              <button class="cluster-pill-btn" id="stat-dir-rejected" data-dir="rejected">Rejected Only</button>
+            </div>
           </div>
-        </div>
 
-        <div class="table-card">
-          <table class="data-table" id="fc-table">
-            <thead>
-              <tr>
-                <th>Data Cluster (B_k)</th>
-                <th>Feature Cluster (T_m)</th>
-                <th>Effect Δ (in - out)</th>
-                <th>Direction</th>
-                <th>Welch z</th>
-                <th>Cohen's d</th>
-                <th>Split-Half Δ^min</th>
-                <th>Sign Consistent?</th>
-              </tr>
-            </thead>
-            <tbody id="fc-tbody">
-              <tr><td colspan="8" class="loading-cell">Loading hypotheses...</td></tr>
-            </tbody>
-          </table>
-        </div>
+          <!-- Master-Detail Two-Column Layout -->
+          <div class="clusters-explorer-grid">
+            <!-- Left: Searchable Hypotheses Master List -->
+            <div class="clusters-list-pane">
+              <div class="pane-header">
+                <span class="pane-title" id="stat-list-title">Hypotheses</span>
+                <span class="pane-count" id="stat-list-count">-</span>
+              </div>
+              <div id="stat-master-list" class="clusters-master-list">
+                <p class="loading-cell">Loading hypotheses...</p>
+              </div>
+            </div>
 
-        <h2 class="section-title">B.2 — Prompt-Conditioned Hypotheses</h2>
-        <p class="section-desc">Prompt clusters A_k × response-delta clusters R_m: does a prompt expressing A_k shift chosen responses along R_m? Click any cluster to open the inspector panel.</p>
-        <div class="toolbar">
-          <div class="search-box">
-            <input type="text" id="pc-search" placeholder="Search prompt clusters..." class="search-input">
+            <!-- Right: Active Selected Hypothesis Cluster Detail -->
+            <div class="cluster-detail-pane">
+              <div id="stat-detail-view" class="cluster-detail-view">
+                <div class="detail-placeholder">
+                  <div class="placeholder-icon">⚡</div>
+                  <h3>Select any hypothesis on the left to inspect its cluster interpretation</h3>
+                  <p>Click any hypothesis pair to view whole-cluster LLM descriptions, interactive Neuronpedia member features, and real dataset firing examples directly on the board.</p>
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
-
-        <div class="table-card">
-          <table class="data-table" id="pc-table">
-            <thead>
-              <tr>
-                <th>Prompt Cluster (A_k)</th>
-                <th>Response Delta Cluster (R_m)</th>
-                <th>Prompt Feats</th>
-                <th>Resp Feats</th>
-                <th>Δ (in - out)</th>
-                <th>Welch z</th>
-                <th>Cohen's d</th>
-              </tr>
-            </thead>
-            <tbody id="pc-tbody">
-              <tr><td colspan="7" class="loading-cell">Loading prompt-conditioned hypotheses...</td></tr>
-            </tbody>
-          </table>
         </div>
       </section>
-<section id="tab-labels" class="tab-content">
+
+      <!-- TAB 2: Cluster Interpretation Explorer -->
+      <section id="tab-labels" class="tab-content">
         <div class="explorer-card">
           <div class="explorer-header">
             <div>
@@ -167,7 +159,9 @@
           </div>
         </div>
       </section>
-<section id="tab-inspector" class="tab-content">
+
+      <!-- TAB 3: Live Prompt Debugger Master-Detail Explorer -->
+      <section id="tab-inspector" class="tab-content">
         <div class="inspector-card">
           <div class="inspector-header">
             <div>
@@ -225,21 +219,33 @@
             <div id="inspector-status" style="margin-top: 10px; font-size: 0.85rem; font-weight: 600; color: var(--text-muted);"></div>
           </div>
 
+          <!-- Master-Detail Two-Column Layout for Inspector Results -->
           <div id="inspector-results" class="inspector-results hidden">
-            <div class="results-grid">
-              <div class="result-box">
-                <h3>Matched Data & Prompt Clusters</h3>
-                <ul id="matched-clusters-list" class="clusters-list"></ul>
+            <div class="clusters-explorer-grid">
+              <!-- Left: Searchable / Filterable Results List -->
+              <div class="clusters-list-pane">
+                <div class="pane-header">
+                  <span class="pane-title" id="inspector-list-title">Live Signals</span>
+                  <span class="pane-count" id="inspector-list-count">-</span>
+                </div>
+                <div class="toolbar" style="padding: 6px 10px; border-bottom: 1px solid var(--border-color); background: var(--bg-card); display: flex; flex-wrap: wrap; gap: 6px;">
+                  <button class="cluster-pill-btn active" id="inspector-filter-all" data-filter="all" style="font-size: 0.75rem; padding: 2px 8px;">All</button>
+                  <button class="cluster-pill-btn" id="inspector-filter-shifts" data-filter="shifts" style="font-size: 0.75rem; padding: 2px 8px;">Predicted Shifts</button>
+                  <button class="cluster-pill-btn" id="inspector-filter-clusters" data-filter="clusters" style="font-size: 0.75rem; padding: 2px 8px;">Matched Data (B_k)</button>
+                  <button class="cluster-pill-btn" id="inspector-filter-features" data-filter="features" style="font-size: 0.75rem; padding: 2px 8px;">Top SAE Feats</button>
+                </div>
+                <div id="inspector-master-list" class="clusters-master-list"></div>
               </div>
-              <div class="result-box">
-                <h3 id="shifts-box-title">Predicted Post-Training Behavioral Shifts</h3>
-                <div id="predicted-shifts-list" class="shifts-list"></div>
-              </div>
-              <div class="result-box">
-                <h3>⚡ Top Fired SAE Features</h3>
-                <p class="section-desc" style="margin-top:0;">Individual features driving the signal. Links open the Neuronpedia dashboard (auto-interpreted description) for each feature. Click a <em>T_m</em> tag to open a dropdown with the whole-cluster LLM label, its top member features, and the real dataset examples firing it.</p>
-                <ul id="sae-features-list" class="clusters-list"></ul>
-                <div id="cluster-examples-area"></div>
+
+              <!-- Right: Active Selected Signal Detail -->
+              <div class="cluster-detail-pane">
+                <div id="inspector-detail-view" class="cluster-detail-view">
+                  <div class="detail-placeholder">
+                    <div class="placeholder-icon">⚡</div>
+                    <h3>Select any signal on the left to inspect full details</h3>
+                    <p>Click any matched data cluster, predicted behavioral shift, or SAE feature on the left to view its whole-cluster interpretation, Neuronpedia details, and real dataset examples.</p>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
