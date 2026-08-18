@@ -13,14 +13,16 @@ from dataclasses import asdict, dataclass
 import json
 import os
 import re
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from tqdm import tqdm
 
 from .config import AutoLabelConfig, FeatureConditionedConfig, PromptConditionedConfig
-from .data import DatasetLoader, PreferenceExample
 from .logger import get_logger
+
+if TYPE_CHECKING:
+    from .data import PreferenceExample
 
 logger = get_logger("PDD.AutoLabel")
 
@@ -56,6 +58,8 @@ def _save_json(path: str, data: Dict[str, Any]) -> None:
 
 def _load_examples(checkpoint_dir: str) -> List[Any]:
     """Load the REAL cached preference examples using fast compiled C parser."""
+    from .data import DatasetLoader  # lazy: keeps the viewer import free of the heavy `datasets` package
+
     ex_path = os.path.join(checkpoint_dir, "examples.json")
     if not os.path.exists(ex_path):
         raise FileNotFoundError(f"No cached examples.json in checkpoint '{checkpoint_dir}' for auto-labeling.")
@@ -158,24 +162,8 @@ class ClusterAutoLabeler:
 
         return centroid_prompts, sample_prompts
 
-    def generate_label(
-        self,
-        cluster_id: int,
-        centroid_prompts: List[str],
-        sample_prompts: List[str],
-    ) -> ClusterLabel:
-        """Generate heuristic/keyword-based label for cluster B_k."""
-        if cluster_id == 0:
-            return ClusterLabel(
-                cluster_id=0,
-                title="Silent Bucket (B_0)",
-                description="Examples with low response-side SAE feature activity.",
-                keywords=["silent", "low_activation"],
-                centroid_prompts=[],
-                sample_prompts=[],
-            )
-
-        # Extract common words as keywords
+    def _keyword_label(self, cluster_id: int, centroid_prompts: List[str], sample_prompts: List[str]) -> ClusterLabel:
+        """Keyword-heuristic label (used directly as the LLM fallback for feature clusters too)."""
         all_text = " ".join(centroid_prompts + sample_prompts).lower()
         words = [w.strip(".,!?;:\"'") for w in all_text.split() if len(w) > 4 and w not in _STOPWORDS]
 
@@ -194,6 +182,24 @@ class ClusterAutoLabeler:
             centroid_prompts=centroid_prompts[:5],
             sample_prompts=sample_prompts[:5],
         )
+
+    def generate_label(
+        self,
+        cluster_id: int,
+        centroid_prompts: List[str],
+        sample_prompts: List[str],
+    ) -> ClusterLabel:
+        """Generate heuristic/keyword-based label for cluster B_k."""
+        if cluster_id == 0:
+            return ClusterLabel(
+                cluster_id=0,
+                title="Silent Bucket (B_0)",
+                description="Examples with low response-side SAE feature activity.",
+                keywords=["silent", "low_activation"],
+                centroid_prompts=[],
+                sample_prompts=[],
+            )
+        return self._keyword_label(cluster_id, centroid_prompts, sample_prompts)
 
 
 class LLMClusterLabeler(ClusterAutoLabeler):
@@ -242,8 +248,8 @@ class LLMClusterLabeler(ClusterAutoLabeler):
                     logger.warning(
                         f"Label model VRAM congested ({free_gb:.2f} GB free). Running labeler on CPU."
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"VRAM probe failed ({e}); defaulting to CPU.")
 
         logger.info(f"Loading label model {self.model_path} on {device}...")
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_path)
@@ -307,7 +313,7 @@ class LLMClusterLabeler(ClusterAutoLabeler):
                        "labeling cluster of", "user_prompts", "response_texts"):
             if t.lower().startswith(prefix):
                 t = t[len(prefix):].strip(" :-,")
-        return t.capitalize()[:120] if len(t) >= 3 else fallback
+        return t[:1].upper() + t[1:] if len(t) >= 3 else fallback
 
     @staticmethod
     def _clean_desc(desc: str, fallback: str) -> str:
@@ -320,7 +326,7 @@ class LLMClusterLabeler(ClusterAutoLabeler):
                        "cluster containing responses associated with", "cluster of"):
             if d.lower().startswith(prefix):
                 d = d[len(prefix):].strip(" :-,")
-        return d.capitalize()[:600] if len(d) >= 5 else fallback
+        return d[:1].upper() + d[1:] if len(d) >= 5 else fallback
 
     def _label_dict(self, texts: List[str], kind: str = "prompt") -> Optional[Dict[str, Any]]:
         """Ask the LLM to label a cluster of ``texts``, returning the raw parsed JSON dict.
@@ -342,7 +348,8 @@ class LLMClusterLabeler(ClusterAutoLabeler):
             "- 'title': 2-5 words naming the specific topic/task. NEVER include meta words like 'Cluster', 'User Prompts', 'Response', or 'Labeling'.\n"
             "- 'description': 1 concise sentence describing the core topic directly without filler phrases.\n"
             "- 'keywords': 3-5 specific domain keywords (lowercase).\n\n"
-            'Output ONLY a valid JSON object: {"title": "...", "description": "...", "keywords": ["...", "..."]}'
+            'Output ONLY a valid JSON object, e.g. {"title": "Gardening Tips", "description": "Prompts about pruning, trimming and plant care.", "keywords": ["pruning", "gardening", "plants"]}. '
+            "Do NOT reason. Do NOT explain. Output ONLY the JSON object, nothing else."
         )
         messages = [{"role": "user", "content": instruction}]
         try:
@@ -350,7 +357,11 @@ class LLMClusterLabeler(ClusterAutoLabeler):
                 messages, tokenize=True, add_generation_prompt=True,
                 chat_template_kwargs={"enable_thinking": False}, return_tensors="pt",
             ).to(self._device)
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"Chat template does not accept enable_thinking=False ({e}); "
+                "falling back to the plain chat template (thinking mode may be on)."
+            )
             inputs = self._tokenizer.apply_chat_template(
                 messages, tokenize=True, add_generation_prompt=True, return_tensors="pt",
             ).to(self._device)
@@ -484,13 +495,14 @@ class AutoLabelingPipeline:
             idxs = [int(i) for i in np.argsort(scores)[-n_samples:][::-1] if scores[int(i)] > 0 and int(i) < len(examples)]
             texts = [(examples[i].chosen or examples[i].rejected or examples[i].prompt or "").strip() for i in idxs]
 
-            fallback = labeler.generate_label(m, texts, []) if hasattr(labeler, "generate_label") else None
-            fallback_title = fallback.title if fallback else f"Feature cluster T_{m}"
-            fallback_desc = fallback.description if fallback else "Cluster of SAE features"
-
             if isinstance(labeler, LLMClusterLabeler):
+                # Keyword-heuristic fallback only — never fire an extra LLM call here.
+                fallback = ClusterAutoLabeler(max_prompt_chars=labeler.max_prompt_chars)._keyword_label(m, texts, [])
+                fallback_title = fallback.title
+                fallback_desc = fallback.description
                 parsed = labeler._label_dict(texts, kind="response")
                 if parsed is None:
+                    logger.warning(f"LLM label for T_{m} was not valid JSON; using keyword fallback.")
                     title, desc, kws = fallback_title, fallback_desc, []
                 else:
                     raw_title = str(parsed.get("title", ""))
@@ -499,6 +511,9 @@ class AutoLabelingPipeline:
                     desc = labeler._clean_desc(raw_desc, fallback_desc)
                     kws = parsed.get("keywords", [])
             else:
+                fallback = labeler.generate_label(m, texts, [])
+                fallback_title = fallback.title if fallback else f"Feature cluster T_{m}"
+                fallback_desc = fallback.description if fallback else "Cluster of SAE features"
                 title, desc, kws = fallback_title, fallback_desc, fallback.keywords if fallback else []
 
             if isinstance(kws, str):

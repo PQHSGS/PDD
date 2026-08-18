@@ -64,6 +64,7 @@ _LAZY = {
     "DatasetInoculator": ("interventions", "DatasetInoculator"),
     "LossReweighter": ("interventions", "LossReweighter"),
     "FeatureSteerer": ("interventions", "FeatureSteerer"),
+    "AutoLabelingPipeline": ("autolabel", "AutoLabelingPipeline"),
     "ClusterAutoLabeler": ("autolabel", "ClusterAutoLabeler"),
     "ClusterLabel": ("autolabel", "ClusterLabel"),
     "AutoLabelConfig": ("config", "AutoLabelConfig"),

@@ -113,7 +113,9 @@ class AutoLabelConfig:
     feature_cluster_labels.json, prompt_conditioned_cluster_examples.json).
     """
     enabled: bool = True
-    label_model: str = "Qwen/Qwen3-1.7B"     # Local instruct model for LLM labels
+    label_model: str = "Qwen/Qwen3-1.7B"     # Local chat model (post-trained variant) for LLM labels
+                                           # NB: prompt template MUST include a full JSON example for
+                                           # reliable output (see LLMClusterLabeler._label_dict)
     heuristic: bool = False                    # Keyword labels instead of the local LLM
     num_clusters: int = -1                     # Data clusters B_k to label (-1 = all active)
     skip_feature_clusters: bool = False        # Skip Pass 2 (T_m whole-cluster labels)

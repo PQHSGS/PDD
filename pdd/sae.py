@@ -4,7 +4,7 @@ from __future__ import annotations
 import torch
 from huggingface_hub import hf_hub_download
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from typing import Any, Tuple, Optional
+from typing import Any, Tuple
 
 from .config import ModelConfig, SAEConfig
 from .logger import get_logger
@@ -175,7 +175,7 @@ class SAEBackend:
         except Exception:
             path = hf_hub_download(self.cfg.repo, subpath)
 
-        state = torch.load(path, map_location="cpu", weights_only=False)
+        state = torch.load(path, map_location="cpu", weights_only=True)
 
         if "encoder.weight" in state:
             weights = {
@@ -185,11 +185,12 @@ class SAEBackend:
                 "b_dec": state["b_dec"].contiguous(),
             }
         else:
+            d_in_ref = self.cfg.d_in or 2048
             w_enc = state["W_enc"]
             w_dec = state["W_dec"]
             weights = {
-                "W_enc": w_enc.T.contiguous() if w_enc.shape[0] != 2048 else w_enc.contiguous(),
-                "W_dec": w_dec.T.contiguous() if w_dec.shape[1] != 2048 else w_dec.contiguous(),
+                "W_enc": w_enc.T.contiguous() if w_enc.shape[0] != d_in_ref else w_enc.contiguous(),
+                "W_dec": w_dec.T.contiguous() if w_dec.shape[1] != d_in_ref else w_dec.contiguous(),
                 "b_enc": state["b_enc"].contiguous(),
                 "b_dec": state["b_dec"].contiguous(),
             }

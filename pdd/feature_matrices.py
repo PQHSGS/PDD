@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import numpy as np
+import scipy.sparse as sp
 import torch
 from tqdm import tqdm
 from typing import Any, Dict, List, Optional, Tuple
@@ -14,9 +15,6 @@ from .data import PreferenceExample
 from .logger import get_logger
 
 logger = get_logger("PDD.FeatureExtractor")
-
-
-import scipy.sparse as sp
 
 
 def _to_csr(mat: Any) -> sp.csr_matrix:
@@ -381,7 +379,6 @@ class FeatureMatrixExtractor:
 
         d_sae = self.sae.cfg.d_sae
         N = len(examples)
-        example_ids = np.array([ex.example_id for ex in examples], dtype=np.int64)
 
         chunks_dir = os.path.join(os.path.dirname(os.path.abspath(checkpoint_path)), "chunks") if checkpoint_path else None
 

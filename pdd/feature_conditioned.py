@@ -6,10 +6,9 @@ import gc
 import json
 import os
 import numpy as np
-import scipy.sparse as sp
 from sklearn.cluster import MiniBatchKMeans
 from tqdm import tqdm
-from typing import Dict, List, Optional, Tuple
+from typing import List
 
 from .config import FeatureConditionedConfig
 from .feature_clusters import FeatureClusterMap

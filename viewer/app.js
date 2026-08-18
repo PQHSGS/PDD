@@ -41,6 +41,124 @@ document.addEventListener("DOMContentLoaded", () => {
     }[c]));
   }
 
+  // --- PER-FEATURE NEURONPEDIA DROPDOWN (inside any T_m interpretation) ---
+  function renderFeatureRows(topFeats) {
+    if (!topFeats || !topFeats.length) {
+      return '<span style="color:var(--text-muted); font-size:0.85rem;">No member features listed</span>';
+    }
+    return topFeats.map(f => `
+      <div class="feature-row">
+        <div class="feature-row-head">
+          <button class="feature-caret-btn" data-fidx="${esc(f.feature_index)}" title="Load Neuronpedia interpretation for SAE ${esc(f.feature_index)}">▸</button>
+          <span class="feature-badge">SAE ${esc(f.feature_index)}</span>
+          ${f.neuronpedia_url
+            ? `<a class="feature-np-link" href="${esc(f.neuronpedia_url)}" target="_blank" rel="noopener noreferrer" title="Open Neuronpedia dashboard in new tab">↗ Neuronpedia</a>`
+            : ""}
+          <span class="feature-act">act=${Number(f.firing).toFixed(1)}</span>
+        </div>
+        <div class="feature-detail-body" data-fidx="${esc(f.feature_index)}"></div>
+      </div>
+    `).join("");
+  }
+
+  async function loadFeatureDetail(fidx, bodyEl) {
+    if (bodyEl.dataset.loaded === "1") return;
+    bodyEl.dataset.loaded = "1";
+    bodyEl.innerHTML = '<div class="feature-loading">Loading SAE feature interpretation...</div>';
+    try {
+      const res = await fetch(`/api/feature_detail?f=${encodeURIComponent(fidx)}&top_n=3`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const d = await res.json();
+      bodyEl.innerHTML = renderFeatureDetailBody(d);
+    } catch (err) {
+      bodyEl.dataset.loaded = "";
+      bodyEl.innerHTML = `<div class="feature-error">Could not load feature details (${esc(err.message)}).</div>`;
+    }
+  }
+
+  function firingExampleCard(e) {
+    return `
+      <div class="detail-example-card firing">
+        <div class="detail-example-meta">Example #${esc(e.index)} · Firing Score ${Number(e.score).toFixed(2)}</div>
+        <div style="color:var(--text-muted); margin-bottom:4px;"><strong>Prompt:</strong> ${esc(e.prompt)}</div>
+        <div style="color:var(--color-chosen); margin-bottom:4px;"><strong>Chosen:</strong> ${esc(e.chosen)}</div>
+        <div style="color:var(--color-rejected);"><strong>Rejected:</strong> ${esc(e.rejected)}</div>
+      </div>`;
+  }
+
+  function featureNpBlock(np) {
+    if (!np) return "";
+    let html = "";
+    if (np.description) {
+      html += `<div class="feature-np-desc">${esc(np.description)}</div>`;
+    } else if (np.name) {
+      html += `<div class="feature-np-desc">Neuronpedia: ${esc(np.name)}</div>`;
+    }
+    html += '<div class="feature-token-grid">';
+    if (np.max_act_approx != null) {
+      html += `<div class="feature-token-card"><div class="feature-token-label">Global Max Act</div><div class="feature-token-val">${Number(np.max_act_approx).toFixed(1)}</div></div>`;
+    }
+    if (np.pos_tokens && np.pos_tokens.length) {
+      html += `<div class="feature-token-label">Top Activating Tokens</div>` +
+        np.pos_tokens.slice(0, 8).map(t => `<span class="feature-tok pos">${esc(t.token)}</span>`).join("");
+    }
+    if (np.neg_tokens && np.neg_tokens.length) {
+      html += `<div class="feature-token-label">Top Suppressing Tokens</div>` +
+        np.neg_tokens.slice(0, 6).map(t => `<span class="feature-tok neg">${esc(t.token)}</span>`).join("");
+    }
+    html += '</div>';
+    if (np.correlated_features && np.correlated_features.length) {
+      html += `<div class="feature-token-label">Correlated Features</div>` +
+        np.correlated_features.slice(0, 10).map(i => `<span class="feature-tok neutral">${esc(i)}</span>`).join("");
+    }
+    return html;
+  }
+
+  function renderFeatureDetailBody(d) {
+    if (d.error) {
+      return `<div class="feature-error">${esc(d.error)}</div>`;
+    }
+    const np = d.neuronpedia || null;
+    const firing = d.firing || {};
+    const exs = d.examples || [];
+
+    let html = featureNpBlock(np);
+    html += `<div class="feature-stats">
+      Fires in <strong>${Number(firing.n_examples || 0).toLocaleString()}</strong> of ${Number(firing.n_total || 0).toLocaleString()} examples
+      (max <strong>${Number(firing.max || 0).toFixed(2)}</strong>, mean <strong>${Number(firing.mean || 0).toFixed(2)}</strong>)
+    </div>`;
+
+    if (d.neuronpedia_url) {
+      html += `<div style="margin:8px 0 4px;"><a class="feature-np-link" href="${esc(d.neuronpedia_url)}" target="_blank" rel="noopener noreferrer">↗ Open full Neuronpedia dashboard</a></div>`;
+    }
+
+    if (exs.length) {
+      html += '<div class="feature-token-label" style="margin-top:8px;">Top Firing Examples In This Run</div><div class="detail-examples-list">' +
+        exs.map(firingExampleCard).join("") + '</div>';
+    } else if (!np) {
+      html += '<div class="feature-error">No Neuronpedia data and no firing examples cached for this feature.</div>';
+    }
+    return html;
+  }
+
+  document.addEventListener("click", (ev) => {
+    const caret = ev.target.closest(".feature-caret-btn");
+    if (!caret) return;
+    ev.preventDefault();
+    const row = caret.closest(".feature-row");
+    const body = row ? row.querySelector(".feature-detail-body") : null;
+    if (!body) return;
+    const expanded = body.classList.contains("open");
+    if (expanded) {
+      body.classList.remove("open");
+      caret.textContent = "▸";
+      return;
+    }
+    body.classList.add("open");
+    caret.textContent = "▾";
+    loadFeatureDetail(caret.dataset.fidx, body);
+  });
+
   // Tab Switching
   tabBtns.forEach(btn => {
     btn.addEventListener("click", () => {
@@ -53,106 +171,201 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   });
 
-  // Shared dropdown: whole-cluster interpretation for SAE feature clusters T_m.
-  // Clicking a T_m tag (in the inspector feature list or the B.1 FC table) toggles
-  // a dropdown with the LLM whole-cluster label + top member SAE features
-  // (Neuronpedia) + the real dataset examples firing the cluster.
-  let activeClusterM = null;
-  async function loadClusterInfo(clusterM, area) {
-    if (!area) area = document.getElementById("cluster-examples-area");
-    if (!area) return;
-    if (activeClusterM === clusterM) { area.innerHTML = ""; activeClusterM = null; return; }
-    activeClusterM = clusterM;
-    area.innerHTML = `<div class="shift-item" style="font-size:0.85rem;">Loading interpretation for T_${esc(clusterM)}...</div>`;
-    try {
-      const res = await fetch(`/api/feature_cluster_info?m=${encodeURIComponent(clusterM)}&top_n=5`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const lab = data.label || {};
-      const feats = data.top_features || [];
-      const exs = data.examples || [];
-      const head = `<div class="shift-item" style="font-size:0.9rem;">
-          <strong>T_${esc(clusterM)} — ${esc(lab.title || "No LLM label")}</strong>
-          <span class="keyword-tag">${esc(data.n_features)} features</span>
-          ${(lab.keywords || []).map(k => `<span class="keyword-tag">${esc(k)}</span>`).join("")}
-        </div>`;
-      const desc = lab.description
-        ? `<div class="shift-item" style="font-size:0.82rem; color:var(--text-muted);">${esc(lab.description)}</div>` : "";
-      const featHtml = feats.length
-        ? `<div class="shift-item" style="font-size:0.82rem;"><strong>Top member SAE features:</strong> ${
-            feats.map(f => {
-              const local = f.local_label;
-              const link = f.neuronpedia_url
-                ? `<a href="${esc(f.neuronpedia_url)}" target="_blank" rel="noopener noreferrer" class="keyword-tag" style="text-decoration:none;" title="Open Neuronpedia dashboard">SAE ${esc(f.feature_index)}</a>`
-                : `<span class="keyword-tag">SAE ${esc(f.feature_index)}</span>`;
-              const localHtml = local
-                ? `<span class="keyword-tag" style="background:var(--color-accent-soft,#2a2f45);" title="${esc(local.description || '')}">${esc(local.title || '')}</span>`
-                : "";
-              const kws = (local && local.keywords && local.keywords.length)
-                ? local.keywords.slice(0, 3).map(k => `<span class="keyword-tag">${esc(k)}</span>`).join("") : "";
-              return `${link}${localHtml}${kws}`;
-            }).join("")}
-          </div>` : "";
-      const exHtml = exs.length
-        ? `<div class="shift-item" style="font-size:0.82rem;"><strong>Real examples firing T_${esc(clusterM)}:</strong></div>${
-            exs.map(e => `
-              <div class="shift-item" style="font-size:0.8rem; border-left:3px solid var(--color-accent); padding-left:8px; margin-top:6px;">
-                <div style="font-weight:600;">#${esc(e.index)} · score ${Number(e.score).toFixed(1)}</div>
-                <div style="color:var(--text-muted); margin-top:2px;"><strong>Prompt:</strong> ${esc(e.prompt)}</div>
-                <div style="color:var(--color-chosen); margin-top:2px;"><strong>Chosen:</strong> ${esc(e.chosen)}</div>
-                <div style="color:var(--color-rejected); margin-top:2px;"><strong>Rejected:</strong> ${esc(e.rejected)}</div>
-              </div>`).join("")}` : "";
-      area.innerHTML = head + desc + featHtml + exHtml;
-    } catch (err) {
-      area.innerHTML = `<div class="shift-item" style="font-size:0.85rem;">Failed to load interpretation: ${esc(err.message)}</div>`;
+  // --- SLIDE-OUT DRAWER PANEL (STAT TAB & GLOBAL INSPECTOR) ---
+  const slidePanel = document.getElementById("slide-panel");
+  const slidePanelBackdrop = document.getElementById("slide-panel-backdrop");
+  const drawerCloseBtn = document.getElementById("drawer-close-btn");
+  const drawerSearchInput = document.getElementById("drawer-search-input");
+  const drawerBody = document.getElementById("drawer-body");
+  const drawerClusterBadge = document.getElementById("drawer-cluster-badge");
+  const drawerSubtitle = document.getElementById("drawer-subtitle");
+
+  function closeSlidePanel() {
+    if (slidePanel) {
+      slidePanel.classList.remove("open");
+      slidePanel.setAttribute("aria-hidden", "true");
+    }
+    if (slidePanelBackdrop) {
+      slidePanelBackdrop.classList.add("hidden");
     }
   }
-  document.addEventListener("click", (ev) => {
-    const tag = ev.target.closest(".cluster-tag");
-    if (tag && tag.dataset.cluster !== undefined) {
-      // T_m tags in the B.1 table (Stat tab) render below the table; tags in the
-      // inspector feature list render into the inspector's own dropdown area.
-      const area = tag.closest(".table-card")
-        ? document.getElementById("fc-cluster-examples-area")
-        : document.getElementById("cluster-examples-area");
-      loadClusterInfo(tag.dataset.cluster, area);
+
+  async function openSlidePanel(type, cid) {
+    if (!slidePanel || !drawerBody) return;
+    const ctype = String(type).toLowerCase().trim();
+    const family = (ctype === "data" || ctype === "b") ? "B" :
+                   (ctype === "feature" || ctype === "t") ? "T" :
+                   (ctype === "prompt" || ctype === "a") ? "A" : "R";
+    const badgeText = `${family}_${cid}`;
+
+    if (drawerClusterBadge) {
+      drawerClusterBadge.className = `cluster-badge badge-${family.toLowerCase()}`;
+      drawerClusterBadge.textContent = badgeText;
     }
+    if (drawerSubtitle) {
+      drawerSubtitle.textContent = family === "B" ? "Data Cluster Interpretation" :
+                                  family === "T" ? "SAE Feature Community" :
+                                  family === "A" ? "Prompt Cluster Subspace" : "Response Delta Subspace";
+    }
+    if (drawerSearchInput) {
+      drawerSearchInput.value = badgeText;
+    }
+
+    slidePanel.classList.add("open");
+    slidePanel.setAttribute("aria-hidden", "false");
+    if (slidePanelBackdrop) slidePanelBackdrop.classList.remove("hidden");
+
+    drawerBody.innerHTML = `
+      <div style="padding:40px 20px; text-align:center; color:var(--text-muted); font-size:0.9rem;">
+        <div class="placeholder-icon" style="font-size:2rem; margin-bottom:8px;">⚡</div>
+        Loading full interpretation for <strong>${esc(badgeText)}</strong>...
+      </div>
+    `;
+
+    try {
+      const res = await fetch(`/api/cluster_detail?type=${encodeURIComponent(ctype)}&id=${encodeURIComponent(cid)}&top_n=8`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      renderDrawerDetail(data, family, cid);
+    } catch (err) {
+      drawerBody.innerHTML = `
+        <div style="padding:20px; color:var(--text-muted); font-size:0.85rem;">
+          Interpretation details not available for ${esc(badgeText)} (${esc(err.message)}).
+        </div>
+      `;
+    }
+  }
+
+  function renderDrawerDetail(data, family, cid) {
+    const badgeText = `${family}_${cid}`;
+    const badgeClass = `badge-${family.toLowerCase()}`;
+    const title = data.title || `Cluster ${badgeText}`;
+    const desc = data.description || "No description";
+    const keywords = data.keywords || [];
+
+    let bodyHtml = "";
+
+    if (family === "T") {
+      const topFeats = data.top_features || [];
+      const exs = data.examples || [];
+      bodyHtml += `
+        <div class="detail-section" style="margin-top:16px;">
+          <div class="detail-section-title">⚡ Top Member SAE Features (${data.n_features || topFeats.length} total)</div>
+          <div class="feature-rows-wrap">
+            ${renderFeatureRows(topFeats)}
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-section-title">📄 Real Dataset Response Examples Firing ${esc(badgeText)}</div>
+          <div class="detail-examples-list">
+            ${exs.length ? exs.map(firingExampleCard).join("") : `<div style="color:var(--text-muted); font-size:0.85rem;">No real examples cached for this feature cluster.</div>`}
+          </div>
+        </div>
+      `;
+    } else if (family === "B") {
+      const centroidPrompts = data.centroid_prompts || [];
+      const samplePrompts = data.sample_prompts || [];
+      bodyHtml += `
+        <div class="detail-section" style="margin-top:16px;">
+          <div class="detail-section-title">🎯 Centroid Real Prompts (Most Representative)</div>
+          <div class="detail-examples-list">
+            ${centroidPrompts.length ? centroidPrompts.map((p, i) => `
+              <div class="detail-example-card">
+                <div class="detail-example-meta">Centroid Sample #${i + 1}</div>
+                <div style="color:var(--text-main); font-size:0.85rem;">${esc(p)}</div>
+              </div>
+            `).join("") : `<div style="color:var(--text-muted); font-size:0.85rem;">Centroid prompt samples not generated.</div>`}
+          </div>
+        </div>
+
+        ${samplePrompts.length ? `
+        <div class="detail-section">
+          <div class="detail-section-title">🎲 Random Real Prompts in Cluster B_${esc(cid)}</div>
+          <div class="detail-examples-list">
+            ${samplePrompts.map((p, i) => `
+              <div class="detail-example-card">
+                <div class="detail-example-meta">Random Sample #${i + 1}</div>
+                <div style="color:var(--text-muted); font-size:0.85rem;">${esc(p)}</div>
+              </div>
+            `).join("")}
+          </div>
+        </div>` : ""}
+      `;
+    } else {
+      const toks = data.tokens || [];
+      const exs = data.examples || [];
+      bodyHtml += `
+        <div class="detail-section" style="margin-top:16px;">
+          <div class="detail-section-title">🏷️ Top Expressive Tokens</div>
+          <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:16px;">
+            ${toks.length ? toks.map(t => `<span class="keyword-tag" style="font-size:0.8rem; font-weight:600;">${esc(t)}</span>`).join("") : `<span style="color:var(--text-muted); font-size:0.85rem;">No statistical tokens extracted</span>`}
+          </div>
+        </div>
+
+        <div class="detail-section">
+          <div class="detail-section-title">📄 Real Dataset Examples Expressing ${esc(badgeText)}</div>
+          <div class="detail-examples-list">
+            ${exs.length ? exs.map(e => `
+              <div class="detail-example-card firing">
+                <div class="detail-example-meta">Example #${esc(e.index)} · ${esc(e.note || "")}</div>
+                <div style="color:var(--text-muted); margin-bottom:4px;"><strong>Prompt:</strong> ${esc(e.prompt)}</div>
+                <div style="color:var(--color-chosen); margin-bottom:4px;"><strong>Chosen:</strong> ${esc(e.chosen)}</div>
+                <div style="color:var(--color-rejected);"><strong>Rejected:</strong> ${esc(e.rejected)}</div>
+              </div>
+            `).join("") : `<div style="color:var(--text-muted); font-size:0.85rem;">No examples cached for this cluster.</div>`}
+          </div>
+        </div>
+      `;
+    }
+
+    drawerBody.innerHTML = `
+      <div class="detail-header" style="margin-bottom:14px; padding-bottom:12px;">
+        <div class="detail-badge-title-row">
+          <span class="cluster-badge ${badgeClass}" style="font-size:0.95rem; padding:3px 8px;">${esc(badgeText)}</span>
+          <h3 class="detail-title" style="font-size:1.1rem;">${esc(title)}</h3>
+        </div>
+        <p class="detail-description" style="font-size:0.88rem; margin-bottom:8px;">${esc(desc)}</p>
+        ${keywords.length ? `
+          <div class="keywords-wrap">
+            ${keywords.map(k => `<span class="keyword-tag" style="background:var(--bg-page); font-weight:500;">${esc(k)}</span>`).join("")}
+          </div>
+        ` : ""}
+      </div>
+      ${bodyHtml}
+    `;
+  }
+
+  // Drawer event bindings
+  if (drawerCloseBtn) drawerCloseBtn.addEventListener("click", closeSlidePanel);
+  if (slidePanelBackdrop) slidePanelBackdrop.addEventListener("click", closeSlidePanel);
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") closeSlidePanel();
   });
 
-  // A_k / R_m meaning: real examples that express each cluster (no SAE breakdown).
-  async function loadPcExamples(ctype, cid) {
-    const area = document.getElementById("pc-examples-area");
-    const label = (ctype === "prompt" ? "A_" : "R_") + cid;
-    area.innerHTML = `<div class="shift-item" style="font-size:0.85rem;">Loading real examples for ${esc(label)}...</div>`;
-    try {
-      const res = await fetch(`/api/pc_cluster_examples?cluster_type=${encodeURIComponent(ctype)}&cid=${encodeURIComponent(cid)}&top_n=4`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const exs = data.examples || [];
-      const toks = data.tokens || [];
-      if (exs.length === 0) { area.innerHTML = `<div class="shift-item" style="font-size:0.85rem;">No cached examples express ${esc(label)}.</div>`; return; }
-      const tokHtml = toks.length
-        ? `<div class="shift-item" style="font-size:0.82rem;"><strong>Top contributing tokens:</strong> ${
-            toks.map(t => `<span class="keyword-tag">${esc(t)}</span>`).join("")}</div>`
-        : "";
-      area.innerHTML = `
-        <div class="shift-item" style="font-size:0.85rem;"><strong>Meaning of ${esc(label)} — strongest real dataset examples:</strong></div>
-        ${tokHtml}
-        ${exs.map(e => `
-          <div class="shift-item" style="font-size:0.8rem; border-left:3px solid var(--color-accent); padding-left:8px; margin-top:6px;">
-            <div style="font-weight:600;">#${esc(e.index)}</div>
-            <div style="color:var(--text-muted); margin-top:2px;"><strong>Prompt:</strong> ${esc(e.prompt)}</div>
-            <div style="color:var(--color-chosen); margin-top:2px;"><strong>Chosen:</strong> ${esc(e.chosen)}</div>
-            <div style="color:var(--color-rejected); margin-top:2px;"><strong>Rejected:</strong> ${esc(e.rejected)}</div>
-          </div>
-        `).join("")}`;
-    } catch (err) {
-      area.innerHTML = `<div class="shift-item" style="font-size:0.85rem;">No examples available for ${esc(label)}.</div>`;
-    }
+  if (drawerSearchInput) {
+    drawerSearchInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        const val = drawerSearchInput.value.trim().toUpperCase();
+        const m = val.match(/^([BTAR])_?(\d+)$/i);
+        if (m) {
+          const type = m[1] === "B" ? "data" : m[1] === "T" ? "feature" : m[1] === "A" ? "prompt" : "response";
+          openSlidePanel(type, parseInt(m[2]));
+        }
+      }
+    });
   }
-  pcTbody.addEventListener("click", (ev) => {
-    const link = ev.target.closest(".pc-cluster-link");
-    if (link) loadPcExamples(link.dataset.type, link.dataset.cid);
+
+  // Global click delegation for all cluster tags / links in tables and inspector
+  document.addEventListener("click", (ev) => {
+    const tag = ev.target.closest(".cluster-tag, .pc-cluster-link");
+    if (!tag) return;
+    const cid = tag.dataset.cid !== undefined ? tag.dataset.cid : tag.dataset.cluster;
+    let type = tag.dataset.type;
+    if (!type && tag.dataset.cluster !== undefined) type = "feature";
+    if (cid !== undefined && type) {
+      openSlidePanel(type, cid);
+    }
   });
 
   // 1. Fetch the single targeted run (set via --run_dir on the server)
@@ -200,19 +413,97 @@ document.addEventListener("DOMContentLoaded", () => {
         elR2.textContent = "N/A";
       }
 
-    allFcHypotheses = data.top_feature_conditioned_hypotheses || [];
-    allPcHypotheses = data.top_prompt_conditioned_hypotheses || [];
+      allFcHypotheses = data.top_feature_conditioned_hypotheses || [];
+      allPcHypotheses = data.top_prompt_conditioned_hypotheses || [];
 
-    renderFcTable();
-    renderPcTable();
-    initClusterExplorer(data);
-  } catch (err) {
-    console.error("Failed to load run data:", err);
-    fcTbody.innerHTML = '<tr><td colspan="8" class="loading-cell">Error loading run data</td></tr>';
+      renderFcTable();
+      renderPcTable();
+      initClusterExplorer(data);
+    } catch (err) {
+      console.error("Failed to load run data:", err);
+      fcTbody.innerHTML = '<tr><td colspan="8" class="loading-cell">Error loading run data</td></tr>';
+    }
   }
-}
 
-// --- CLUSTER INTERPRETATION EXPLORER (TAB 3) ---
+  // Render Feature-Conditioned Table (B.1)
+  function renderFcTable() {
+    const q = fcSearch.value.toLowerCase().trim();
+    const chosenOnly = fcChosenOnly.checked;
+    const rejectedOnly = fcRejectedOnly.checked;
+
+    let filtered = allFcHypotheses.filter(h => {
+      if (chosenOnly && !h.is_chosen_leaning) return false;
+      if (rejectedOnly && h.is_chosen_leaning) return false;
+      if (q) {
+        const text = `k${h.k} m${h.m} b${h.k} t${h.m} ${h.delta}`.toLowerCase();
+        if (!text.includes(q)) return false;
+      }
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      fcTbody.innerHTML = '<tr><td colspan="8" class="loading-cell">No matching hypotheses found</td></tr>';
+      return;
+    }
+
+    fcTbody.innerHTML = filtered.map(h => `
+      <tr>
+        <td>
+          <strong class="cluster-tag badge-b" data-type="data" data-cid="${esc(h.k)}" title="Inspect Data Cluster B_${esc(h.k)} in Slide Panel">B_${esc(h.k)}</strong>
+          <span style="font-size:0.75rem; color:var(--text-muted); margin-left:4px;">(n=${esc(h.n_k || '-')})</span>
+        </td>
+        <td>
+          <strong class="cluster-tag badge-t" data-type="feature" data-cid="${esc(h.m)}" title="Inspect Feature Cluster T_${esc(h.m)} in Slide Panel">T_${esc(h.m)}</strong>
+          <span class="keyword-tag" style="margin-left:4px;">size=${esc(h.t_m || '-')}</span>
+        </td>
+        <td>${h.delta ? (h.delta > 0 ? '+' : '') + h.delta.toFixed(4) : '-'}</td>
+        <td>
+          <span class="pill ${h.is_chosen_leaning ? 'pill-chosen' : 'pill-rejected'}">
+            ${h.is_chosen_leaning ? 'Chosen' : 'Rejected'}
+          </span>
+        </td>
+        <td>${h.z_score ? h.z_score.toFixed(2) : '-'}</td>
+        <td>${h.cohens_d ? h.cohens_d.toFixed(2) : '-'}</td>
+        <td>${h.delta_min ? h.delta_min.toFixed(4) : '-'}</td>
+        <td>${h.sign_consistent ? '<span class="pill pill-chosen">SC=1</span>' : '<span class="pill pill-neutral">SC=0</span>'}</td>
+      </tr>
+    `).join("");
+  }
+
+  // Render Prompt-Conditioned Table (B.2)
+  function renderPcTable() {
+    const q = pcSearch.value.toLowerCase().trim();
+    let filtered = allPcHypotheses.filter(h => {
+      if (q) {
+        const text = `a${h.k} r${h.m}`.toLowerCase();
+        if (!text.includes(q)) return false;
+      }
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      pcTbody.innerHTML = '<tr><td colspan="7" class="loading-cell">No matching prompt-conditioned hypotheses found</td></tr>';
+      return;
+    }
+
+    pcTbody.innerHTML = filtered.map(h => `
+      <tr>
+        <td>
+          <strong class="pc-cluster-link cluster-tag badge-a" data-type="prompt" data-cid="${esc(h.k)}" title="Inspect Prompt Cluster A_${esc(h.k)} in Slide Panel">A_${esc(h.k)}</strong>
+        </td>
+        <td>
+          <strong class="pc-cluster-link cluster-tag badge-r" data-type="response" data-cid="${esc(h.m)}" title="Inspect Response Delta Cluster R_${esc(h.m)} in Slide Panel">R_${esc(h.m)}</strong>
+        </td>
+        <td>${h.n_prompt_feats || '-'}</td>
+        <td>${h.n_resp_feats || '-'}</td>
+        <td>${h.delta ? (h.delta > 0 ? '+' : '') + h.delta.toFixed(5) : '-'}</td>
+        <td>${h.z_score ? h.z_score.toFixed(2) : '-'}</td>
+        <td>${h.cohens_d ? h.cohens_d.toFixed(2) : '-'}</td>
+      </tr>
+    `).join("");
+  }
+
+  // --- CLUSTER INTERPRETATION EXPLORER (TAB 3) ---
 const clusterSearch = document.getElementById("cluster-search");
 const clustersMasterList = document.getElementById("clusters-master-list");
 const clusterDetailView = document.getElementById("cluster-detail-view");
@@ -365,7 +656,7 @@ function renderExplorerList() {
       const matchKey = item.key.toLowerCase().includes(q) || item.badgeText.toLowerCase().includes(q);
       const matchTitle = item.title.toLowerCase().includes(q);
       const matchDesc = (item.description || "").toLowerCase().includes(q);
-      const matchKw = (item.keywords || []).some(k => k.toLowerCase().includes(k));
+      const matchKw = (item.keywords || []).some(k => k.toLowerCase().includes(q));
       const matchId = String(item.id) === q;
       if (!matchKey && !matchTitle && !matchDesc && !matchKw && !matchId) {
         return false;
@@ -445,28 +736,15 @@ function renderClusterDetail(item, data) {
     bodyHtml += `
       <div class="detail-section">
         <div class="detail-section-title">⚡ Top Member SAE Features (${data.n_features || topFeats.length} total)</div>
-        <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:16px;">
-          ${topFeats.length ? topFeats.map(f => {
-            const link = f.neuronpedia_url
-              ? `<a href="${esc(f.neuronpedia_url)}" target="_blank" rel="noopener noreferrer" class="keyword-tag cluster-tag" style="text-decoration:none; font-weight:600;" title="Open Neuronpedia dashboard">SAE ${esc(f.feature_index)} ↗</a>`
-              : `<span class="keyword-tag" style="font-weight:600;">SAE ${esc(f.feature_index)}</span>`;
-            const score = `<span class="keyword-tag" style="color:var(--color-accent); font-family:var(--font-mono);">act=${Number(f.firing).toFixed(1)}</span>`;
-            return `<div style="display:inline-flex; align-items:center; background:var(--border-subtle); border-radius:4px; padding:2px;">${link}${score}</div>`;
-          }).join("") : `<span style="color:var(--text-muted); font-size:0.85rem;">No member features listed</span>`}
+        <div class="feature-rows-wrap">
+          ${renderFeatureRows(topFeats)}
         </div>
       </div>
 
       <div class="detail-section">
         <div class="detail-section-title">📄 Real Dataset Response Examples Firing T_${esc(item.id)}</div>
         <div class="detail-examples-list">
-          ${exs.length ? exs.map(e => `
-            <div class="detail-example-card firing">
-              <div class="detail-example-meta">Example #${esc(e.index)} · Firing Score ${Number(e.score).toFixed(2)}</div>
-              <div style="color:var(--text-muted); margin-bottom:4px;"><strong>Prompt:</strong> ${esc(e.prompt)}</div>
-              <div style="color:var(--color-chosen); margin-bottom:4px;"><strong>Chosen:</strong> ${esc(e.chosen)}</div>
-              <div style="color:var(--color-rejected);"><strong>Rejected:</strong> ${esc(e.rejected)}</div>
-            </div>
-          `).join("") : `<div style="color:var(--text-muted); font-size:0.85rem;">No real examples cached for this feature cluster yet.</div>`}
+          ${exs.length ? exs.map(firingExampleCard).join("") : `<div style="color:var(--text-muted); font-size:0.85rem;">No real examples cached for this feature cluster yet.</div>`}
         </div>
       </div>
     `;
@@ -773,12 +1051,14 @@ if (clustersMasterList) {
         saeFeaturesList.innerHTML = '<li class="cluster-item">No strong single-feature activations.</li>';
       } else {
         saeFeaturesList.innerHTML = feats.map(f => `
-          <li class="cluster-item">
-            ${f.neuronpedia_url
-              ? `<strong><a href="${esc(f.neuronpedia_url)}" target="_blank" rel="noopener noreferrer">SAE Feature ${esc(f.feature_index)}</a></strong>`
-              : `<strong>SAE Feature ${esc(f.feature_index)}</strong>`}
+          <li class="cluster-item feature-row">
+            <div class="feature-row-head">
+              <button class="feature-caret-btn" data-fidx="${esc(f.feature_index)}" title="Load Neuronpedia interpretation for SAE ${esc(f.feature_index)}">▸</button>
+              <strong class="feature-badge">SAE Feature ${esc(f.feature_index)}</strong>
+              ${f.neuronpedia_url ? `<a class="feature-np-link" href="${esc(f.neuronpedia_url)}" target="_blank" rel="noopener noreferrer" title="Open Neuronpedia dashboard in new tab">↗ Neuronpedia</a>` : ""}
+              <span class="feature-act">act=${Number(f.activation).toFixed(3)}</span>
+            </div>
             <div style="margin-top:4px;">
-              <span class="keyword-tag">act=${Number(f.activation).toFixed(3)}</span>
               ${f.dp_direction === "amplified"
                 ? `<span class="keyword-tag" title="This DPO run fires the feature more in chosen than rejected responses (u>0)">DPO: amplified +${Number(f.dp_delta).toFixed(4)}</span>`
                 : f.dp_direction === "suppressed"
@@ -787,6 +1067,7 @@ if (clustersMasterList) {
               ${f.cluster_m != null ? `<span class="keyword-tag cluster-tag" data-cluster="${esc(f.cluster_m)}" title="Show LLM label + member features + examples for T_${esc(f.cluster_m)}">→ T_${esc(f.cluster_m)}</span>` : ""}
               ${f.neuronpedia_url ? "" : '<span class="keyword-tag">no Neuronpedia dashboard</span>'}
             </div>
+            <div class="feature-detail-body" data-fidx="${esc(f.feature_index)}"></div>
           </li>
         `).join("");
       }

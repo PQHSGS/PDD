@@ -13,7 +13,6 @@ import os
 import numpy as np
 from scipy.stats import pearsonr
 from sklearn.linear_model import LinearRegression
-from typing import Dict, List, Tuple
 
 from .logger import get_logger
 

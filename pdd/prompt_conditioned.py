@@ -8,7 +8,7 @@ import numpy as np
 from sklearn.cluster import MiniBatchKMeans
 from sklearn.decomposition import TruncatedSVD
 from tqdm import tqdm
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from .config import PromptConditionedConfig
 from .feature_matrices import FeatureMatrices

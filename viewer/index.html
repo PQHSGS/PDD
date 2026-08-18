@@ -52,15 +52,13 @@
     <!-- Navigation Tabs -->
     <nav class="tab-nav">
       <button class="tab-btn active" data-tab="tab-stat">📊 Stat (B.1 + B.2)</button>
-      <button class="tab-btn" data-tab="tab-inspector">⚡ Live Prompt Debugger</button>
       <button class="tab-btn" data-tab="tab-labels">Cluster Auto-Labels</button>
+      <button class="tab-btn" data-tab="tab-inspector">⚡ Live Prompt Debugger</button>
     </nav>
 
     <!-- Main Content Area -->
     <main class="content-container">
-      
-      <!-- TAB 1: Statistics (B.1 Feature-Conditioned + B.2 Prompt-Conditioned) -->
-      <section id="tab-stat" class="tab-content active">
+<section id="tab-stat" class="tab-content active">
         <h2 class="section-title">B.1 — Feature-Conditioned Hypotheses</h2>
         <p class="section-desc">Data clusters B_k × response-feature clusters T_m, inside-vs-outside effect Δ (Welch z / Cohen's d) with split-half validation.</p>
         <div class="toolbar">
@@ -91,11 +89,10 @@
               <tr><td colspan="8" class="loading-cell">Loading hypotheses...</td></tr>
             </tbody>
           </table>
-          <div id="fc-cluster-examples-area"></div>
         </div>
 
         <h2 class="section-title">B.2 — Prompt-Conditioned Hypotheses</h2>
-        <p class="section-desc">Prompt clusters A_k × response-delta clusters R_m: does a prompt expressing A_k shift chosen responses along R_m?</p>
+        <p class="section-desc">Prompt clusters A_k × response-delta clusters R_m: does a prompt expressing A_k shift chosen responses along R_m? Click any cluster to open the inspector panel.</p>
         <div class="toolbar">
           <div class="search-box">
             <input type="text" id="pc-search" placeholder="Search prompt clusters..." class="search-input">
@@ -120,11 +117,57 @@
             </tbody>
           </table>
         </div>
-        <div id="pc-examples-area" style="margin-top:10px;"></div>
       </section>
+<section id="tab-labels" class="tab-content">
+        <div class="explorer-card">
+          <div class="explorer-header">
+            <div>
+              <h2 class="section-title">Cluster Interpretation Explorer</h2>
+              <p class="section-desc">Search across all 4 cluster families (B_k, T_m, A_k, R_m) by exact ID or keyword to inspect semantic interpretations, member features, and real dataset examples on demand.</p>
+            </div>
+          </div>
 
-      <!-- TAB 3: Live Prompt Debugger -->
-      <section id="tab-inspector" class="tab-content">
+          <!-- Interactive Search & Type Filter Toolbar -->
+          <div class="toolbar cluster-toolbar">
+            <div class="search-box cluster-search-box">
+              <input type="text" id="cluster-search" placeholder="🔍 Search ID (e.g. T_10, B_25, A_5, R_12) or keyword (math, code, security)..." class="search-input">
+            </div>
+            <div class="cluster-pills-bar" id="cluster-pills-bar">
+              <button class="cluster-pill-btn active" data-filter="all">All <span id="count-all" class="pill-count">-</span></button>
+              <button class="cluster-pill-btn" data-filter="B">B_k Data <span id="count-bk" class="pill-count">-</span></button>
+              <button class="cluster-pill-btn" data-filter="T">T_m Feature <span id="count-tm" class="pill-count">-</span></button>
+              <button class="cluster-pill-btn" data-filter="A">A_k Prompt <span id="count-ak" class="pill-count">-</span></button>
+              <button class="cluster-pill-btn" data-filter="R">R_m Response <span id="count-rm" class="pill-count">-</span></button>
+            </div>
+          </div>
+
+          <!-- Master-Detail Two-Column Layout -->
+          <div class="clusters-explorer-grid">
+            <!-- Left: Searchable Clusters List -->
+            <div class="clusters-list-pane">
+              <div class="pane-header">
+                <span class="pane-title" id="pane-list-title">Clusters</span>
+                <span class="pane-count" id="pane-list-count">-</span>
+              </div>
+              <div id="clusters-master-list" class="clusters-master-list">
+                <p class="loading-cell">Loading clusters...</p>
+              </div>
+            </div>
+
+            <!-- Right: Active Selected Cluster Detail -->
+            <div class="cluster-detail-pane">
+              <div id="cluster-detail-view" class="cluster-detail-view">
+                <div class="detail-placeholder">
+                  <div class="placeholder-icon">🔍</div>
+                  <h3>Select or search any cluster to view its full interpretation</h3>
+                  <p>Type an ID like <code>T_10</code> or <code>B_5</code> in the search bar or select an item on the left to inspect LLM labels, member SAE features, and real firing examples.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+<section id="tab-inspector" class="tab-content">
         <div class="inspector-card">
           <div class="inspector-header">
             <div>
@@ -202,61 +245,34 @@
           </div>
         </div>
       </section>
-
-      <!-- TAB 3: Cluster Auto-Labels & Interpretation Explorer -->
-      <section id="tab-labels" class="tab-content">
-        <div class="explorer-card">
-          <div class="explorer-header">
-            <div>
-              <h2 class="section-title">Cluster Interpretation Explorer</h2>
-              <p class="section-desc">Search across all 4 cluster families (B_k, T_m, A_k, R_m) by exact ID or keyword to inspect semantic interpretations, member features, and real dataset examples on demand.</p>
-            </div>
-          </div>
-
-          <!-- Interactive Search & Type Filter Toolbar -->
-          <div class="toolbar cluster-toolbar">
-            <div class="search-box cluster-search-box">
-              <input type="text" id="cluster-search" placeholder="🔍 Search ID (e.g. T_10, B_25, A_5, R_12) or keyword (math, code, security)..." class="search-input">
-            </div>
-            <div class="cluster-pills-bar" id="cluster-pills-bar">
-              <button class="cluster-pill-btn active" data-filter="all">All <span id="count-all" class="pill-count">-</span></button>
-              <button class="cluster-pill-btn" data-filter="B">B_k Data <span id="count-bk" class="pill-count">-</span></button>
-              <button class="cluster-pill-btn" data-filter="T">T_m Feature <span id="count-tm" class="pill-count">-</span></button>
-              <button class="cluster-pill-btn" data-filter="A">A_k Prompt <span id="count-ak" class="pill-count">-</span></button>
-              <button class="cluster-pill-btn" data-filter="R">R_m Response <span id="count-rm" class="pill-count">-</span></button>
-            </div>
-          </div>
-
-          <!-- Master-Detail Two-Column Layout -->
-          <div class="clusters-explorer-grid">
-            <!-- Left: Searchable Clusters List -->
-            <div class="clusters-list-pane">
-              <div class="pane-header">
-                <span class="pane-title" id="pane-list-title">Clusters</span>
-                <span class="pane-count" id="pane-list-count">-</span>
-              </div>
-              <div id="clusters-master-list" class="clusters-master-list">
-                <p class="loading-cell">Loading clusters...</p>
-              </div>
-            </div>
-
-            <!-- Right: Active Selected Cluster Detail -->
-            <div class="cluster-detail-pane">
-              <div id="cluster-detail-view" class="cluster-detail-view">
-                <div class="detail-placeholder">
-                  <div class="placeholder-icon">🔍</div>
-                  <h3>Select or search any cluster to view its full interpretation</h3>
-                  <p>Type an ID like <code>T_10</code> or <code>B_5</code> in the search bar or select an item on the left to inspect LLM labels, member SAE features, and real firing examples.</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
     </main>
   </div>
 
-  <script src="/static/app.js?v=7"></script>
+  <!-- Slide-out Drawer Backdrop & Panel -->
+  <div id="slide-panel-backdrop" class="slide-panel-backdrop hidden"></div>
+  <aside id="slide-panel" class="slide-panel" aria-hidden="true">
+    <div class="drawer-header">
+      <div class="drawer-title-box">
+        <span class="drawer-badge" id="drawer-cluster-badge">INSPECTOR</span>
+        <span class="drawer-subtitle" id="drawer-subtitle">Cluster & Concept Details</span>
+      </div>
+      <button id="drawer-close-btn" class="drawer-close-btn" title="Close Panel (Esc)">✕</button>
+    </div>
+
+    <!-- Quick Jump Search Box inside Drawer -->
+    <div class="drawer-search-bar">
+      <input type="text" id="drawer-search-input" placeholder="Jump to ID (e.g. T_10, B_5, A_12, R_8)..." class="drawer-input">
+    </div>
+
+    <!-- Scrollable Drawer Body -->
+    <div id="drawer-body" class="drawer-body">
+      <div class="detail-placeholder">
+        <div class="placeholder-icon">⚡</div>
+        <p>Loading cluster interpretation...</p>
+      </div>
+    </div>
+  </aside>
+
+  <script src="/static/app.js?v=9"></script>
 </body>
 </html>

@@ -86,7 +86,6 @@ class ViewerState:
         self._feat_delta: Optional[np.ndarray] = None
         self._pc_cluster_examples = None
         self._feature_cluster_labels: Optional[Dict[int, Dict[str, Any]]] = None
-        self._feature_labels: Optional[Dict[int, Dict[str, Any]]] = None
         self._np_set: Optional[Tuple[str, str]] = None
 
         self.load()
@@ -309,8 +308,38 @@ class ViewerState:
             )
             with urllib.request.urlopen(req, timeout=10) as r:
                 return r.status == 200
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Neuronpedia slug not verified ({url}): {e}")
             return False
+
+    @staticmethod
+    @functools.lru_cache(maxsize=256)
+    def _neuronpedia_feature(model_id: str, sae_set: str, f: int) -> Optional[Dict[str, Any]]:
+        """Cached per-feature Neuronpedia metadata (auto-interpretation payload). None on any failure."""
+        import urllib.request
+
+        url = f"https://www.neuronpedia.org/api/feature/{model_id}/{sae_set}/{f}"
+        try:
+            req = urllib.request.Request(
+                url, method="GET",
+                headers={"User-Agent": "PDD-Viewer/1.0", "Accept": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=8) as r:
+                d = json.loads(r.read().decode("utf-8"))
+        except Exception as e:
+            logger.warning(f"Neuronpedia feature fetch failed ({url}): {e}")
+            return None
+        pos = list(zip(d.get("pos_str") or [], d.get("pos_values") or []))[:10]
+        neg = list(zip(d.get("neg_str") or [], d.get("neg_values") or []))[:8]
+        return {
+            "name": d.get("name"),
+            "description": d.get("description"),
+            "max_act_approx": d.get("maxActApprox"),
+            "pos_tokens": [{"token": t, "value": v} for t, v in pos],
+            "neg_tokens": [{"token": t, "value": v} for t, v in neg],
+            "correlated_features": (d.get("correlated_features_indices") or [])[:10],
+            "aligned_neurons": (d.get("neuron_alignment_indices") or [])[:10],
+        }
 
     def _neuronpedia_set(self) -> Optional[Tuple[str, str]]:
         """Cached (model_id, sae_set) pair only if the Neuronpedia slug was runtime-verified."""
@@ -458,17 +487,15 @@ class ViewerState:
         return out
 
     def _load_feature_cluster_labels(self) -> Dict[int, Dict[str, Any]]:
-        """Lazily load whole-cluster LLM labels for SAE feature clusters T_m + per-feature labels."""
+        """Lazily load whole-cluster LLM labels for SAE feature clusters T_m."""
         if self._feature_cluster_labels is None:
             self._feature_cluster_labels = {}
-            self._feature_labels = {}
             lbl_file = Path(feature_cluster_labels_path(str(self.run_dir)))
             if lbl_file.exists():
                 try:
                     with open(lbl_file, "r", encoding="utf-8") as f:
                         raw = json.load(f)
                         self._feature_cluster_labels = {int(k): v for k, v in raw.get("feature_clusters", {}).items()}
-                        self._feature_labels = {int(k): v for k, v in raw.get("feature_labels", {}).items()}
                 except Exception as e:
                     logger.warning(f"Error loading feature cluster labels: {e}")
         return self._feature_cluster_labels
@@ -499,35 +526,23 @@ class ViewerState:
     def _feature_cluster_info(self, m: int, top_n_examples: int = 5) -> Dict[str, Any]:
         """One payload for the T_m dropdown: whole-cluster label + top member features + real examples."""
         m_int = int(m)
-        feats = self.feature_clusters.get(m_int) or self.feature_clusters.get(str(m), [])
-        label = self._load_feature_cluster_labels().get(m_int) or self._load_feature_cluster_labels().get(str(m))
-        if label is None and not feats:
-            label = {"title": f"Feature cluster T_{m}", "description": "SAE feature cluster", "keywords": []}
-        info: Dict[str, Any] = {
+        feats = self.feature_clusters.get(m_int, [])
+        label = self._load_feature_cluster_labels().get(m_int)
+        return {
             "cluster_m": m_int,
             "label": label or {"title": f"Feature cluster T_{m}", "description": "", "keywords": []},
             "n_features": len(feats),
             "top_features": self._top_cluster_features(m_int, top_n=8),
             "examples": self._cluster_top_examples(m_int, top_n=top_n_examples),
         }
-        # Local LLM per-feature labels as the Neuronpedia fallback (no dashboard needed).
-        feat_labels = self._feature_labels or {}
-        for f in info["top_features"]:
-            fl = feat_labels.get(f["feature_index"])
-            if fl:
-                f["local_label"] = {
-                    "title": fl.get("title", ""),
-                    "keywords": fl.get("keywords", []),
-                }
-        return info
 
     def _data_cluster_info(self, k: int, top_n_examples: int = 5) -> Dict[str, Any]:
         """Interpretation for data cluster B_k: title, description, keywords, and sampled centroid/random prompts."""
         k_int = int(k)
         label_obj = None
-        for l in (self.cluster_labels or []):
-            if l.get("cluster_id") == k_int:
-                label_obj = l
+        for lab in (self.cluster_labels or []):
+            if lab.get("cluster_id") == k_int:
+                label_obj = lab
                 break
         if label_obj is None:
             label_obj = {
@@ -552,7 +567,7 @@ class ViewerState:
         mats = self._load_feature_matrices()
         examples = self._load_examples()
         m_int = int(m)
-        feats = self.feature_clusters.get(m_int) or self.feature_clusters.get(str(m))
+        feats = self.feature_clusters.get(m_int)
         if mats is None or examples is None or not feats:
             return []
         d_sae = mats.C_max.shape[1]
@@ -578,6 +593,67 @@ class ViewerState:
             })
             if len(out) >= top_n:
                 break
+        return out
+
+    def _feature_detail(self, f: int, top_n: int = 5) -> Dict[str, Any]:
+        """Per-feature interpretation: run firing stats, top firing examples, Neuronpedia metadata."""
+        f = int(f)
+        mats = self._load_feature_matrices()
+        examples = self._load_examples()
+        out: Dict[str, Any] = {"feature_index": f}
+        if mats is None:
+            out["error"] = "feature matrices not cached for this run"
+            return out
+        d_sae = mats.C_max.shape[1]
+        if not (0 <= f < d_sae):
+            out["error"] = f"feature index out of range (d_sae={d_sae})"
+            return out
+
+        def _col(a: Any, i: int) -> np.ndarray:
+            if hasattr(a, "toarray"):
+                return np.asarray(a[:, i].toarray()).ravel()
+            return np.asarray(a[:, i]).ravel()
+
+        act = _col(mats.C_max, f) + _col(mats.R_max, f)
+        pos_mask = act > 0
+        n_firing = int(pos_mask.sum())
+        pos_vals = act[pos_mask]
+        firing_stats: Dict[str, float] = {
+            "n_examples": n_firing,
+            "n_total": int(len(act)),
+            "max": float(pos_vals.max()) if n_firing else 0.0,
+            "mean": float(pos_vals.mean()) if n_firing else 0.0,
+        }
+        out["firing"] = firing_stats
+
+        examples_out: List[Dict[str, Any]] = []
+        if examples is not None:
+            order = np.argsort(act)[::-1]
+            for i in order:
+                if act[i] <= 0:
+                    break
+                if int(i) >= len(examples):
+                    continue
+                ex = examples[int(i)]
+                examples_out.append({
+                    "index": int(i),
+                    "score": float(act[i]),
+                    "prompt": (ex.prompt or "")[-600:],
+                    "chosen": (ex.chosen or "")[-400:],
+                    "rejected": (ex.rejected or "")[-400:],
+                })
+                if len(examples_out) >= top_n:
+                    break
+        out["examples"] = examples_out
+
+        url = self._neuronpedia_url(f)
+        if url:
+            out["neuronpedia_url"] = url
+            np_set = self._neuronpedia_set()
+            if np_set:
+                np_data = self._neuronpedia_feature(np_set[0], np_set[1], f)
+                if np_data:
+                    out["neuronpedia"] = np_data
         return out
 
     def get_inspector(self):
@@ -650,16 +726,11 @@ def get_run_data() -> Dict[str, Any]:
         except Exception:
             pass
 
-    # Pull the full hypothesis lists (cached per run) so tables show top-100
-    # ranked by the pipeline's saved ordering instead of only the summary top-10.
-    try:
-        state.feature_hypotheses_map
-    except Exception as e:
-        logger.warning(f"Error loading feature hypotheses for run_data: {e}")
-    try:
-        state.prompt_hypotheses_map
-    except Exception as e:
-        logger.warning(f"Error loading prompt hypotheses for run_data: {e}")
+    # Reload the full hypothesis lists (cached per run) so tables show top-100
+    # ranked by the pipeline's saved ordering instead of the summary top-10.
+    # The properties self-log any load failure and leave the summary seed intact.
+    state.feature_hypotheses_map
+    state.prompt_hypotheses_map
 
     return {
         "summary": state.summary,
@@ -725,6 +796,14 @@ def get_cluster_detail(type: str = Query(..., description="'data' (B_k), 'featur
             "examples": state._pc_cluster_top_examples("response", id, top_n=top_n),
         }
     raise HTTPException(400, f"Unsupported cluster type: '{type}'. Allowed: data (B), feature (T), prompt (A), response (R).")
+
+
+@app.get("/api/feature_detail")
+def get_feature_detail(f: int = Query(..., ge=0, description="SAE feature index"),
+                       top_n: int = Query(5)) -> Dict[str, Any]:
+    """Per-feature interpretation: run firing stats + top examples + cached Neuronpedia metadata."""
+    state = get_state()
+    return state._feature_detail(f, top_n=top_n)
 
 
 @app.post("/api/inspect_prompt")

@@ -888,3 +888,283 @@ body {
   margin-bottom: 6px;
 }
 
+/* ==========================================================================
+   Slide-out Drawer Panel (Stat Tab & Inspector Fast Inspection)
+   ========================================================================== */
+.slide-panel-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(15, 23, 42, 0.45);
+  z-index: 999;
+  backdrop-filter: blur(3px);
+  opacity: 1;
+  transition: opacity 0.2s ease;
+}
+
+.slide-panel-backdrop.hidden {
+  opacity: 0;
+  pointer-events: none;
+  display: none;
+}
+
+.slide-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 560px;
+  max-width: 95vw;
+  height: 100vh;
+  background: var(--bg-card);
+  z-index: 1000;
+  box-shadow: -6px 0 30px rgba(0, 0, 0, 0.2);
+  transform: translateX(105%);
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  flex-direction: column;
+}
+
+.slide-panel.open {
+  transform: translateX(0);
+}
+
+.drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background: var(--bg-page);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.drawer-title-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.drawer-badge {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.8rem;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.drawer-subtitle {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.drawer-close-btn {
+  background: transparent;
+  border: none;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  transition: all 0.15s ease;
+}
+
+.drawer-close-btn:hover {
+  background: var(--border-color);
+  color: var(--text-main);
+}
+
+.drawer-search-bar {
+  padding: 10px 20px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.drawer-input {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  font-family: var(--font-mono);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: var(--bg-page);
+  transition: border-color 0.15s ease;
+}
+
+.drawer-input:focus {
+  border-color: var(--color-accent);
+  background: var(--bg-card);
+}
+
+.drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+/* --- Per-Feature Neuronpedia Dropdown Rows --- */
+.feature-rows-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.feature-row {
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+.feature-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+}
+
+.feature-caret-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-accent);
+  font-size: 0.8rem;
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+}
+
+.feature-caret-btn:hover {
+  background: var(--border-subtle);
+}
+
+.feature-badge {
+  font-weight: 600;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text-main);
+}
+
+.feature-np-link {
+  color: var(--color-accent);
+  text-decoration: none;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.feature-np-link:hover {
+  text-decoration: underline;
+}
+
+.feature-act {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.feature-detail-body {
+  display: none;
+  padding: 10px 12px;
+  border-top: 1px dashed var(--border-subtle);
+  background: var(--bg-page);
+  font-size: 0.82rem;
+}
+
+.feature-detail-body.open {
+  display: block;
+}
+
+.feature-loading,
+.feature-error {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  padding: 6px 0;
+}
+
+.feature-error {
+  color: var(--color-rejected);
+}
+
+.feature-np-desc {
+  color: var(--text-main);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  background: var(--border-subtle);
+  border-left: 3px solid var(--color-accent);
+  border-radius: 4px;
+}
+
+.feature-stats {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.feature-token-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.feature-token-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  width: 100%;
+  margin-top: 6px;
+}
+
+.feature-token-card {
+  background: var(--border-subtle);
+  border-radius: 4px;
+  padding: 4px 8px;
+  text-align: center;
+}
+
+.feature-token-val {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--color-accent);
+}
+
+.feature-tok {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: var(--border-subtle);
+}
+
+.feature-tok.pos {
+  background: rgba(22, 163, 74, 0.12);
+  color: #166534;
+}
+
+.feature-tok.neg {
+  background: rgba(220, 38, 38, 0.1);
+  color: #991b1b;
+}
+
+.feature-tok.neutral {
+  background: var(--border-subtle);
+  color: var(--text-main);
+}
+
+

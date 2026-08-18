@@ -1,7 +1,7 @@
 """Leiden Feature Clusterer with disk checkpointing (.json)."""
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 import gc
 import glob
 import json
@@ -10,7 +10,6 @@ import tempfile
 import igraph as ig
 import leidenalg as la
 import numpy as np
-import scipy.sparse as sp
 from tqdm import tqdm
 from typing import Dict, List, Optional, Tuple, Any
 

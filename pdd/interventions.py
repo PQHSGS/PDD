@@ -7,14 +7,11 @@ Provides 3 actionable debugging mechanisms:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 import numpy as np
 import torch
-from typing import Dict, List, Optional, Tuple, Any
+from typing import List, Optional, Any
 
 from .data import PreferenceExample
-from .feature_clusters import FeatureClusterMap
-from .feature_conditioned import FeatureConditionedResult, HypothesisPair
 from .logger import get_logger
 
 logger = get_logger("PDD.Interventions")
