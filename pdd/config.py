@@ -163,6 +163,33 @@ class FeatureClusterConfig:
 
 
 @dataclass
+class DPOValidationConfig:
+    """Experiment 4 DPO Training & Rollout Validation settings (paper Table 8 & §4)."""
+    train_samples: int = -1             # Preference pairs for DPO training (-1 = full dataset)
+    eval_prompts: int = 500             # Held-out evaluation prompts for text rollouts
+    batch_size: int = 4                 # Micro-batch size per GPU step (high throughput, ~4.6 GB VRAM)
+    grad_accum: int = 16                # Gradient accumulation steps (eff_bs = 64)
+    lr: float = 1e-6                    # Learning rate (1e-6 for full finetuning, Table 8)
+    beta: float = 2.0                   # DPO beta parameter (author uses 2.0 on Dolci, Table 8)
+    epochs: int = 1                     # DPO training epochs (paper: 1 epoch)
+    lora_rank: int = 0                  # 0 = 100% Full-Parameter Fine-Tuning (paper-exact with AdamW8bit)
+    warmup_ratio: float = 0.1           # Linear LR warmup ratio (paper: 0.1)
+    temperature: float = 0.0            # Rollout decoding temperature (0.0 = greedy, noise-free)
+    max_length: int = 512               # Max sequence length (VRAM safe)
+    num_features: int = 50              # Top feature clusters for R^2 evaluation
+
+    def validate(self) -> None:
+        if self.train_samples <= 0 and self.train_samples != -1:
+            raise ValueError("train_samples must be positive or -1 (for full dataset).")
+        if self.eval_prompts <= 0:
+            raise ValueError("eval_prompts must be positive.")
+        if self.batch_size <= 0:
+            raise ValueError("batch_size must be positive.")
+        if self.grad_accum <= 0:
+            raise ValueError("grad_accum must be positive.")
+
+
+@dataclass
 class PipelineConfig:
     name: str = "qwen3_dolci_default"
     seed: int = 0
@@ -176,6 +203,7 @@ class PipelineConfig:
     feature_conditioned: FeatureConditionedConfig = field(default_factory=FeatureConditionedConfig)
     prompt_conditioned: PromptConditionedConfig = field(default_factory=PromptConditionedConfig)
     auto_label: AutoLabelConfig = field(default_factory=AutoLabelConfig)
+    dpo_validation: DPOValidationConfig = field(default_factory=DPOValidationConfig)
 
     def validate(self) -> None:
         if not self.name:
@@ -187,6 +215,7 @@ class PipelineConfig:
         self.feature_conditioned.validate()
         self.prompt_conditioned.validate()
         self.auto_label.validate()
+        self.dpo_validation.validate()
 
 
     def to_dict(self) -> Dict[str, Any]:
@@ -206,8 +235,9 @@ class PipelineConfig:
         fcd_cfg = FeatureConditionedConfig(**data.get("feature_conditioned", {}))
         pc_cfg = PromptConditionedConfig(**data.get("prompt_conditioned", {}))
         al_cfg = AutoLabelConfig(**data.get("auto_label", {}))
+        val_cfg = DPOValidationConfig(**data.get("dpo_validation", {}))
 
-        top_kwargs = {k: v for k, v in data.items() if k not in ("model", "sae", "data", "feature_clusters", "feature_conditioned", "prompt_conditioned", "auto_label")}
+        top_kwargs = {k: v for k, v in data.items() if k not in ("model", "sae", "data", "feature_clusters", "feature_conditioned", "prompt_conditioned", "auto_label", "dpo_validation")}
 
         config = cls(
             model=model_cfg,
@@ -217,6 +247,7 @@ class PipelineConfig:
             feature_conditioned=fcd_cfg,
             prompt_conditioned=pc_cfg,
             auto_label=al_cfg,
+            dpo_validation=val_cfg,
             **top_kwargs
         )
         config.validate()

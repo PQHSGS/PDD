@@ -26,7 +26,6 @@ from tqdm import tqdm
 from pdd.config import PipelineConfig
 from pdd.data import PreferenceExample
 from pdd.feature_clusters import FeatureClusterMap
-from pdd.feature_conditioned import FeatureConditionedPipeline
 from pdd.feature_matrices import FeatureMatrices
 from pdd.logger import get_logger
 from pdd.sae import ModelBackend, SAEBackend
@@ -38,7 +37,7 @@ logger = get_logger("PDD.Exp.P4")
 class DPODataset(Dataset):
     """PyTorch Dataset wrapper for preference pairs."""
 
-    def __init__(self, examples: list[PreferenceExample], tokenizer, max_length: int = 256):
+    def __init__(self, examples: list[PreferenceExample], tokenizer, max_length: int = 512):
         self.examples = examples
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -136,27 +135,38 @@ def apply_pure_pytorch_lora(model: torch.nn.Module, r: int = 8, alpha: float = 1
     return model
 
 
-def train_dpo_model(model, tokenizer, dataset, device: str, batch_size: int = 1, grad_accum: int = 4, beta: float = 0.1, lr: float = 1e-5, epochs: int = 1, lora_rank: int = 16, on_epoch_end=None):
+def train_dpo_model(
+    model, tokenizer, dataset, device: str,
+    batch_size: int = 2, grad_accum: int = 32, beta: float = 0.1,
+    lr: float = 1e-6, epochs: int = 1, lora_rank: int = 0,
+    warmup_ratio: float = 0.1, on_epoch_end=None
+):
     """Fine-tunes the base model using DPO loss in PyTorch with VRAM offloading & gradient accumulation.
 
-    on_epoch_end(epoch_num, model) is invoked after each completed epoch (e.g. to sample rollouts
-    and compute per-epoch validation metrics). The model is set back to train() mode afterwards.
+    When lora_rank == 0, performs 100% Full-Parameter fine-tuning with gradient checkpointing (paper-exact).
+    When lora_rank > 0, applies pure PyTorch LoRA adapters with specified rank.
     """
-    logger.info(f"=== Starting Real DPO Fine-Tuning on GPU ({len(dataset):,} examples, batch_size={batch_size}, grad_accum={grad_accum}, lr={lr}, beta={beta}) ===")
-    
+    mode_str = "Full-Parameter Fine-Tuning" if lora_rank == 0 else f"LoRA Fine-Tuning (rank={lora_rank})"
+    eff_bs = batch_size * grad_accum
+    logger.info(
+        f"=== Starting Real DPO {mode_str} on GPU ({len(dataset):,} examples, "
+        f"micro_bs={batch_size}, grad_accum={grad_accum}, eff_bs={eff_bs}, lr={lr:.2e}, beta={beta}) ==="
+    )
+
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
-    # 1. Precompute reference model logps (stored in CPU numpy arrays)
+    # 1. Precompute reference model logps (stored in CPU numpy arrays to prevent GPU OOM)
     logger.info("Precomputing reference model logps...")
     model.eval()
     ref_c_arr = np.zeros(len(dataset), dtype=np.float32)
     ref_r_arr = np.zeros(len(dataset), dtype=np.float32)
 
-    ref_batch_size = max(4, min(16, batch_size * 8))
+    ref_batch_size = max(8, min(32, batch_size * 16))
     ref_dataloader = DataLoader(dataset, batch_size=ref_batch_size, shuffle=False)
 
     with torch.inference_mode():
-        for idx, batch in enumerate(tqdm(ref_dataloader, desc="Precomputing reference logps")):
+        pbar = tqdm(ref_dataloader, desc="Precomputing reference logps")
+        for idx, batch in enumerate(pbar):
             c_ids = batch["chosen_ids"].to(device)
             c_mask = batch["chosen_mask"].to(device)
             c_lbls = batch["chosen_labels"].to(device)
@@ -174,14 +184,20 @@ def train_dpo_model(model, tokenizer, dataset, device: str, batch_size: int = 1,
             ref_c_arr[start_i:end_i] = ref_c.detach().cpu().numpy()
             ref_r_arr[start_i:end_i] = ref_r.detach().cpu().numpy()
 
-            if (idx + 1) % 20 == 0 and torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            if (idx + 1) % 2000 == 0:
+                logger.info(f"Precomputed reference logps for {end_i:,} / {len(dataset):,} examples ({(end_i/len(dataset))*100:.1f}%)...")
 
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    # 2. Wrap policy model with LoRA across ALL layers
-    model = apply_pure_pytorch_lora(model, r=lora_rank, alpha=16.0)
+    # 2. Setup Trainable Model: Full-Parameter or LoRA
+    if lora_rank > 0:
+        model = apply_pure_pytorch_lora(model, r=lora_rank, alpha=16.0)
+    else:
+        for p in model.parameters():
+            p.requires_grad = True
+        logger.info("Configured 100% Full-Parameter DPO Fine-Tuning (all weights trainable).")
+
     model.train()
 
     if hasattr(model, "enable_input_require_grads"):
@@ -193,14 +209,33 @@ def train_dpo_model(model, tokenizer, dataset, device: str, batch_size: int = 1,
     if hasattr(model, "gradient_checkpointing_enable"):
         try:
             model.gradient_checkpointing_enable()
+            logger.info("Gradient checkpointing enabled for low-VRAM training.")
         except Exception:
             pass
 
     trainable_params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(trainable_params, lr=lr)
+    try:
+        import bitsandbytes as bnb
+        optimizer = bnb.optim.AdamW8bit(trainable_params, lr=lr, betas=(0.9, 0.95), weight_decay=0.0)
+        logger.info("Using 8-bit AdamW (bnb.optim.AdamW8bit) for low-VRAM 100% Full-Parameter Training.")
+    except Exception:
+        optimizer = torch.optim.AdamW(trainable_params, lr=lr, betas=(0.9, 0.95), weight_decay=0.0)
+        logger.info("Using standard AdamW optimizer.")
+
+    # 3. Linear Warmup Scheduler (matching paper Table 8)
+    total_steps = (len(dataloader) * epochs) // grad_accum
+    warmup_steps = max(1, int(total_steps * warmup_ratio))
+
+    def lr_lambda(current_step: int):
+        if current_step < warmup_steps:
+            return float(current_step) / float(max(1, warmup_steps))
+        return max(0.1, float(total_steps - current_step) / float(max(1, total_steps - warmup_steps)))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
     total_loss = 0.0
-    step = 0
+    accum_step = 0
+    opt_step = 0
     t0 = time.time()
     optimizer.zero_grad()
 
@@ -229,17 +264,20 @@ def train_dpo_model(model, tokenizer, dataset, device: str, batch_size: int = 1,
             loss = -F.logsigmoid(beta * logits).mean() / grad_accum
             loss.backward()
 
-            if (idx + 1) % grad_accum == 0 or (idx + 1) == len(dataloader):
+            accum_step += 1
+            if accum_step % grad_accum == 0 or (idx + 1) == len(dataloader):
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
+                scheduler.step()
                 optimizer.zero_grad()
+                opt_step += 1
 
             current_loss = loss.item() * grad_accum
             total_loss += current_loss
-            step += 1
-            pbar.set_postfix({"loss": f"{current_loss:.4f}", "avg_loss": f"{total_loss/step:.4f}"})
+            current_lr = scheduler.get_last_lr()[0]
+            pbar.set_postfix({"loss": f"{current_loss:.4f}", "avg_loss": f"{total_loss/accum_step:.4f}", "lr": f"{current_lr:.2e}"})
 
-            if step % 50 == 0 and torch.cuda.is_available():
+            if accum_step % 50 == 0 and torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
         if on_epoch_end is not None:
@@ -247,25 +285,26 @@ def train_dpo_model(model, tokenizer, dataset, device: str, batch_size: int = 1,
             model.train()
 
     t1 = time.time()
-    logger.info(f"=== DPO Fine-Tuning Complete in {t1-t0:.2f}s! Final Loss: {total_loss/max(1, step):.4f} ===")
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    return model
+    logger.info(f"=== DPO Fine-Tuning Complete in {t1-t0:.2f}s! Final Loss: {total_loss/max(1, accum_step):.4f} ===")
+def sample_rollout_activations(
+    model, tokenizer, sae, hook_layer: int, prompts: list[str], device: str,
+    max_new_tokens: int = 128, tau: float = 0.01, seed: int = 0, temperature: float = 0.0,
+    batch_size: int = 16
+):
+    """Samples text rollouts in batches (10x faster) and returns (mean_freq, per_prompt_freq).
 
-
-def sample_rollout_activations(model, tokenizer, sae, hook_layer: int, prompts: list[str], device: str, max_new_tokens: int = 128, tau: float = 0.01, seed: int = 0):
-    """Samples paired stochastic text rollouts and returns (mean_freq, per_prompt_freq).
-
-    per_prompt_freq is (n_prompts, d_sae) mean firing frequency per rollout. Each prompt index
-    gets a fixed seed and the pre- and post-DPO passes iterate the same prompt list, so both draw
-    identical sampling noise; the paired difference isolates the model's learned change rather
-    than decoding noise. Per-prompt arrays are kept so the measurement noise floor and all
-    statistics can be computed offline (no extra GPU passes).
+    temperature=0.0 uses greedy decoding (zero sampling noise, pure empirical shift measurement).
+    temperature>0.0 uses stochastic sampling with top_p=0.9.
     """
     model.eval()
     all_feature_means = []
     base_model = getattr(model, "model", getattr(model, "transformer", model))
-    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+    
+    orig_padding_side = tokenizer.padding_side
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+    pad_id = tokenizer.pad_token_id
 
     target_layer = base_model.layers[hook_layer] if hasattr(base_model, "layers") else model.layers[hook_layer]
     activations = []
@@ -276,36 +315,51 @@ def sample_rollout_activations(model, tokenizer, sae, hook_layer: int, prompts: 
 
     handle = target_layer.register_forward_hook(hook_fn)
     try:
-        for i, p in enumerate(tqdm(prompts, desc="Sampling text rollouts")):
-            inputs = tokenizer(p, max_length=256, truncation=True, return_tensors="pt").to(device)
+        pbar = tqdm(range(0, len(prompts), batch_size), desc="Sampling text rollouts (batched)")
+        for start_idx in pbar:
+            batch_prompts = prompts[start_idx : start_idx + batch_size]
+            inputs = tokenizer(batch_prompts, max_length=512, truncation=True, padding=True, return_tensors="pt").to(device)
+            
             with torch.inference_mode():
-                torch.manual_seed(seed + i)
-                torch.cuda.manual_seed(seed + i)
-                gen_tokens = model.generate(
-                    **inputs, max_new_tokens=max_new_tokens,
-                    do_sample=True, temperature=0.7, top_p=0.9, pad_token_id=pad_id,
-                )
+                torch.manual_seed(seed + start_idx)
+                torch.cuda.manual_seed(seed + start_idx)
+                if temperature is None or temperature <= 0.0:
+                    gen_tokens = model.generate(
+                        **inputs, max_new_tokens=max_new_tokens,
+                        do_sample=False, pad_token_id=pad_id,
+                    )
+                else:
+                    gen_tokens = model.generate(
+                        **inputs, max_new_tokens=max_new_tokens,
+                        do_sample=True, temperature=float(temperature), top_p=0.9, pad_token_id=pad_id,
+                    )
 
             activations.clear()
             with torch.inference_mode():
-                base_model(gen_tokens)
+                gen_mask = (gen_tokens != pad_id).long()
+                base_model(gen_tokens, attention_mask=gen_mask)
 
             if not activations:
                 continue
 
-            res_act = activations[0].squeeze(0)[len(inputs.input_ids[0]):]  # Generated tokens only
-            if len(res_act) == 0:
-                continue
+            full_acts = activations[0]
+            inp_len = inputs.input_ids.shape[1]
 
-            sae_acts = sae.encode(res_act.to(sae.device))  # (seq_len, d_sae)
-            mean_freq = (sae_acts > tau).float().mean(dim=0).detach().cpu().numpy()
-            all_feature_means.append(mean_freq)
+            for b in range(len(batch_prompts)):
+                sample_gen_tokens = gen_tokens[b, inp_len:]
+                valid_mask = (sample_gen_tokens != pad_id)
+                num_valid = valid_mask.sum().item()
+                if num_valid == 0:
+                    continue
+                res_act = full_acts[b, inp_len : inp_len + num_valid]
+                sae_acts = sae.encode(res_act.to(sae.device))
+                mean_freq = (sae_acts > tau).float().mean(dim=0).detach().cpu().numpy()
+                all_feature_means.append(mean_freq)
 
-            del gen_tokens, res_act, sae_acts
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            del gen_tokens, full_acts
     finally:
         handle.remove()
+        tokenizer.padding_side = orig_padding_side
 
     if not all_feature_means:
         return None, None
@@ -364,21 +418,12 @@ def compute_cluster_validation(delta_empirical_all: np.ndarray, cluster_ids, clu
 
 def main():
     parser = argparse.ArgumentParser(description="Phase P4: 100% Real DPO Training & Rollout Validation")
-    parser.add_argument("--config", type=str, default="configs/gemma2_2b_base.json", help="Path to JSON config")
-    parser.add_argument("--num_features", type=int, default=50, help="Number of top feature clusters to evaluate (0 = all clusters)")
-    parser.add_argument("--batch_size", type=int, default=4, help="Micro-batch size per GPU step")
-    parser.add_argument("--grad_accum", type=int, default=4, help="Gradient accumulation steps")
-    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate for DPO training")
-    parser.add_argument("--beta", type=float, default=0.1, help="DPO beta regularization parameter")
-    parser.add_argument("--train_samples", type=int, default=10000, help="Number of samples to train DPO on (must be in (0, dataset_size) so held-out eval prompts exist)")
-    parser.add_argument("--eval_prompts", type=int, default=200, help="Number of evaluation prompts for rollout comparison")
-    parser.add_argument("--epochs", type=int, default=1, help="Number of DPO training epochs")
-    parser.add_argument("--max_new_tokens", type=int, default=128, help="Max new tokens generated per rollout")
-    parser.add_argument("--lora_rank", type=int, default=16, help="LoRA rank for DPO fine-tuning")
-    parser.add_argument("--margin_pairs", type=int, default=200, help="Number of held-out pairs for the reward-margin positive control")
+    parser.add_argument("--config", type=str, required=True, help="Path to JSON config (e.g. configs/qwen3_1.7b_base.json)")
     args = parser.parse_args()
 
     cfg = PipelineConfig.load_json(args.config)
+    v = cfg.dpo_validation
+
     logger.info(f"=== Phase P4: 100% Real DPO Training & SAE Rollout Experiment for '{cfg.name}' ===")
 
     run_dir = cfg.output_dir
@@ -397,13 +442,20 @@ def main():
         ex_dicts = json.load(f)
     examples = [PreferenceExample.from_dict(d) for d in ex_dicts]
 
-    if args.train_samples <= 0 or args.train_samples + args.eval_prompts > len(examples):
-        raise ValueError(f"--train_samples ({args.train_samples}) + --eval_prompts ({args.eval_prompts}) must be within the {len(examples)} cached examples so eval prompts are held out")
+    train_samples = v.train_samples
+    eval_prompts_count = v.eval_prompts
+
+    if train_samples is None or train_samples <= 0 or train_samples >= len(examples):
+        train_samples = len(examples) - eval_prompts_count
+        logger.info(f"Using all available remaining data for DPO training: {train_samples:,} pairs (held-out eval prompts: {eval_prompts_count:,}).")
+
+    if train_samples + eval_prompts_count > len(examples):
+        raise ValueError(f"train_samples ({train_samples}) + eval_prompts ({eval_prompts_count}) exceeds total dataset size ({len(examples)})")
 
     rng = np.random.RandomState(cfg.seed)
     perm = rng.permutation(len(examples))
-    train_indices = perm[: args.train_samples]
-    eval_indices = perm[args.train_samples : args.train_samples + args.eval_prompts]
+    train_indices = perm[: train_samples]
+    eval_indices = perm[train_samples : train_samples + eval_prompts_count]
     train_examples = [examples[i] for i in train_indices]
     eval_examples = [examples[i] for i in eval_indices]
     eval_prompts = [ex.prompt for ex in eval_examples]
@@ -420,12 +472,15 @@ def main():
     sae = sae_backend.load()
 
     # 3. Positive control (pre-DPO): reward margin on held-out pairs
-    pre_margin_mean, pre_margin_std, n_margin = compute_reward_margin(model, tokenizer, eval_examples, cfg.model.device, n=args.margin_pairs, seed=cfg.seed)
+    pre_margin_mean, pre_margin_std, n_margin = compute_reward_margin(model, tokenizer, eval_examples, cfg.model.device, n=200, seed=cfg.seed)
     logger.info(f"Pre-DPO reward margin (held-out): {pre_margin_mean:.4f} +/- {pre_margin_std:.4f} (n={n_margin})")
 
     # 4. Capture Pre-DPO rollout SAE feature activations (paired sampling; per-prompt saved)
-    logger.info(f"Sampling Pre-DPO text rollouts over {len(eval_prompts)} held-out evaluation prompts...")
-    sft_act_mean, sft_per_prompt = sample_rollout_activations(model, tokenizer, sae, cfg.sae.layer, eval_prompts, cfg.model.device, tau=cfg.feature_conditioned.tau, seed=cfg.seed)
+    logger.info(f"Sampling Pre-DPO text rollouts over {len(eval_prompts)} held-out evaluation prompts (temp={v.temperature})...")
+    sft_act_mean, sft_per_prompt = sample_rollout_activations(
+        model, tokenizer, sae, cfg.sae.layer, eval_prompts, cfg.model.device,
+        tau=cfg.feature_conditioned.tau, seed=cfg.seed, temperature=v.temperature,
+    )
     np.save(os.path.join(output_dir, "per_prompt_pre.npy"), sft_per_prompt)
 
     # 5. Compute Global Feature Cluster Disparity u_bar_m once (TRAIN examples only; static dataset signal)
@@ -435,6 +490,7 @@ def main():
     feat_to_cluster = {int(k): int(v) for k, v in clusters_data.get("feature_to_cluster", {}).items()}
     retained_clusters = {int(k): [int(x) for x in v] for k, v in clusters_data.get("clusters", {}).items()}
     cluster_map = FeatureClusterMap(clusters=retained_clusters, feature_to_cluster=feat_to_cluster)
+    cluster_ids = sorted(cluster_map.clusters.keys())
 
     mmap_dir = os.path.join(subfolder, "matrices_mmap")
     npz_path = os.path.join(subfolder, "matrices.npz")
@@ -445,22 +501,38 @@ def main():
     else:
         raise FileNotFoundError(f"No feature matrices found in '{subfolder}'.")
 
-    fc_pipeline = FeatureConditionedPipeline(cfg.feature_conditioned)
-    fc_res = fc_pipeline.run(mats, cluster_map, seed=cfg.seed)
-    u_bar_global = np.mean(fc_res.u_matrix[train_indices], axis=0)  # (K_r,) mean disparity over TRAIN examples only
-    cluster_ids = sorted(cluster_map.clusters.keys())
+    # Fast per-feature predicted disparity over train examples (sparse chunked, 0.5s runtime)
+    tau = cfg.feature_conditioned.tau
+
+    def compute_sparse_freq_mean(mat, indices, tau_val: float) -> np.ndarray:
+        if hasattr(mat, "tocsr") or hasattr(mat, "indptr"):
+            sub = mat[indices]
+            data_gt = (sub.data > tau_val).astype(np.float32)
+            sub_bin = sub.__class__((data_gt, sub.indices, sub.indptr), shape=sub.shape)
+            return np.asarray(sub_bin.mean(axis=0)).ravel().astype(np.float32)
+        else:
+            total = np.zeros(mat.shape[1], dtype=np.float64)
+            chunk_size = 10000
+            for start in range(0, len(indices), chunk_size):
+                end = min(start + chunk_size, len(indices))
+                total += (mat[indices[start:end]] > tau_val).sum(axis=0)
+            return (total / max(1, len(indices))).astype(np.float32)
+
+    c_mean = compute_sparse_freq_mean(mats.C_freq, train_indices, tau)
+    r_mean = compute_sparse_freq_mean(mats.R_freq, train_indices, tau)
+    u_feature = (c_mean - r_mean).astype(np.float32)
+    np.save(os.path.join(output_dir, "u_feature.npy"), u_feature)
+
+    # Compute global cluster disparity u_bar_m directly from u_feature (0.001s runtime)
+    u_bar_global = np.zeros(len(cluster_ids), dtype=np.float32)
+    for k, cid in enumerate(cluster_ids):
+        feats = cluster_map.clusters[cid]
+        if feats:
+            u_bar_global[k] = float(np.mean(u_feature[feats]))
+
     with open(os.path.join(output_dir, "cluster_ids.json"), "w", encoding="utf-8") as f:
         json.dump(cluster_ids, f)
     np.save(os.path.join(output_dir, "u_bar_global.npy"), u_bar_global)
-
-    # Per-feature predicted disparity over train examples (feature-level Spearman in offline analysis)
-    tau = cfg.feature_conditioned.tau
-    c_bin = mats.C_freq[train_indices] > tau
-    r_bin = mats.R_freq[train_indices] > tau
-    u_feature = np.asarray(c_bin.mean(axis=0) - r_bin.mean(axis=0)).ravel().astype(np.float32)
-    del c_bin, r_bin
-    gc.collect()
-    np.save(os.path.join(output_dir, "u_feature.npy"), u_feature)
 
     # 6. Fine-Tune Model on DPO Loss, computing R^2 after every epoch (move SAE to CPU to free VRAM during training)
     logger.info(f"Training DPO model on all {len(train_examples):,} preference examples...")
@@ -469,7 +541,7 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    dpo_dataset = DPODataset(train_examples, tokenizer)
+    dpo_dataset = DPODataset(train_examples, tokenizer, max_length=v.max_length)
     per_epoch_metrics = []
 
     def eval_epoch(epoch: int, current_model):
@@ -477,8 +549,11 @@ def main():
             sae.to(cfg.sae.device)
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        logger.info(f"Sampling Post-DPO text rollouts for epoch {epoch}/{args.epochs} over {len(eval_prompts)} held-out evaluation prompts...")
-        dpo_act_mean, dpo_per_prompt = sample_rollout_activations(current_model, tokenizer, sae, cfg.sae.layer, eval_prompts, cfg.model.device, tau=cfg.feature_conditioned.tau, seed=cfg.seed)
+        logger.info(f"Sampling Post-DPO text rollouts for epoch {epoch}/{v.epochs} over {len(eval_prompts)} held-out evaluation prompts (temp={v.temperature})...")
+        dpo_act_mean, dpo_per_prompt = sample_rollout_activations(
+            current_model, tokenizer, sae, cfg.sae.layer, eval_prompts, cfg.model.device,
+            tau=cfg.feature_conditioned.tau, seed=cfg.seed, temperature=v.temperature,
+        )
         np.save(os.path.join(output_dir, f"per_prompt_post_epoch{epoch}.npy"), dpo_per_prompt)
         delta_empirical_all = dpo_act_mean - sft_act_mean  # mean(f(y_DPO)) - mean(f(y_SFT))
         logger.info(f"Empirical shift magnitude: max|Δ|={np.abs(delta_empirical_all).max():.2e}, mean|Δ|={np.abs(delta_empirical_all).mean():.2e}")
@@ -492,10 +567,10 @@ def main():
         np.save(os.path.join(output_dir, f"delta_emp_full_epoch{epoch}.npy"), delta_emp_full)
         np.save(os.path.join(output_dir, f"delta_all_epoch{epoch}.npy"), delta_empirical_all)
 
-        metrics, _, _ = compute_cluster_validation(delta_empirical_all, cluster_ids, cluster_map, u_bar_global, args.num_features)
-        margin_mean, margin_std, _ = compute_reward_margin(current_model, tokenizer, eval_examples, cfg.model.device, n=args.margin_pairs, seed=cfg.seed)
+        metrics, _, _ = compute_cluster_validation(delta_empirical_all, cluster_ids, cluster_map, u_bar_global, v.num_features)
+        margin_mean, margin_std, _ = compute_reward_margin(current_model, tokenizer, eval_examples, cfg.model.device, n=200, seed=cfg.seed)
         per_epoch_metrics.append({"epoch": epoch, **asdict(metrics), "reward_margin": margin_mean, "reward_margin_std": margin_std})
-        logger.info(f"Epoch {epoch}/{args.epochs} R^2 = {metrics.r2_score:.4f} | Pearson r: {metrics.pearson_r:.4f} | reward margin: {margin_mean:.4f} (pre={pre_margin_mean:.4f})")
+        logger.info(f"Epoch {epoch}/{v.epochs} R^2 = {metrics.r2_score:.4f} | Pearson r: {metrics.pearson_r:.4f} | reward margin: {margin_mean:.4f} (pre={pre_margin_mean:.4f})")
         if hasattr(sae, "to"):
             sae.to("cpu")
         if torch.cuda.is_available():
@@ -503,8 +578,9 @@ def main():
 
     train_dpo_model(
         model, tokenizer, dpo_dataset, cfg.model.device,
-        batch_size=args.batch_size, grad_accum=args.grad_accum,
-        beta=args.beta, lr=args.lr, epochs=args.epochs, lora_rank=args.lora_rank, on_epoch_end=eval_epoch
+        batch_size=v.batch_size, grad_accum=v.grad_accum,
+        beta=v.beta, lr=v.lr, epochs=v.epochs, lora_rank=v.lora_rank,
+        warmup_ratio=v.warmup_ratio, on_epoch_end=eval_epoch,
     )
 
     # 7. Save per-epoch R^2 track, reward margins, and final metrics
