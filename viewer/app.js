@@ -1335,8 +1335,10 @@ if (clustersMasterList) {
       if (!s || !inspectorDetailView) return;
       activeSelectedSignalKey = s.key;
       renderInspectorMasterList();
-
-      if (s.category === "shifts" || s.category === "clusters") {
+      if (s.category === "pc") {
+        // Prompt-Conditioned Local Hypothesis Detail (A_k x R_m)
+        renderInspectorPCSignalDetail(s);
+      } else if (s.category === "shifts" || s.category === "fc" || s.category === "clusters") {
         const targetType = s.clusterType || "feature";
         const targetId = s.clusterId;
         const cacheKey = `${targetType === "feature" ? "T" : "B"}_${targetId}`;
@@ -1394,6 +1396,91 @@ if (clustersMasterList) {
           inspectorDetailView.innerHTML = `<div style="padding:20px; color:var(--color-rejected);">Failed to load feature details: ${esc(err.message)}</div>`;
         }
       }
+    }
+
+    function renderInspectorPCSignalDetail(s) {
+      if (!inspectorDetailView) return;
+      const isAmp = s.delta > 0;
+      const pTokens = s.promptTokens || [];
+      const rTokens = s.responseTokens || [];
+      const pExs = s.promptExamples || [];
+      const rExs = s.responseExamples || [];
+
+      inspectorDetailView.innerHTML = `
+        <div class="detail-header">
+          <div class="detail-badge-title-row">
+            <span class="cluster-badge badge-t">A_${esc(s.k)} × R_${esc(s.m)}</span>
+            <h2 class="detail-title">${esc(s.title)}</h2>
+            ${s.tagHtml || ""}
+          </div>
+          <p class="detail-desc" style="margin-top:6px;">Prompt-Conditioned local hypothesis predicting behavioral shift from prompt feature subspace A_${esc(s.k)} to response disparity cluster R_${esc(s.m)}.</p>
+        </div>
+
+        <!-- Metric Stat Cards -->
+        <div class="stat-cards-grid" style="margin-bottom:18px;">
+          <div class="stat-card">
+            <span class="stat-label">Cohen's d (Effect Size)</span>
+            <span class="stat-value ${Math.abs(s.cohensD) >= 0.5 ? 'value-highlight' : ''}">${Number(s.cohensD).toFixed(2)}</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Disparity Δ</span>
+            <span class="stat-value ${(s.delta > 0) ? 'value-pos' : 'value-neg'}">${(s.delta > 0 ? '+' : '') + Number(s.delta).toFixed(5)}</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Welch z-Score</span>
+            <span class="stat-value">${Number(s.zScore).toFixed(2)}</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Prompt Relevance</span>
+            <span class="stat-value">${(Number(s.relevanceScore || 1.0) * 100).toFixed(0)}%</span>
+          </div>
+        </div>
+
+        <!-- Interpretation Box -->
+        <div style="background:var(--border-subtle); border:1px solid var(--border-color); border-radius:var(--radius-md); padding:14px 18px; margin-bottom:18px;">
+          <div style="font-weight:700; font-size:0.95rem; margin-bottom:6px; color:var(--text-main);">💡 Local Prompt-Conditioned Mechanism</div>
+          <p style="font-size:0.88rem; line-height:1.5; color:var(--text-main); margin:0;">${esc(s.explanation || s.summary)}</p>
+        </div>
+
+        <!-- Subspace Expression Tokens -->
+        <div class="detail-section">
+          <div class="detail-section-title">🔤 Expressive Content Tokens (A_${esc(s.k)} Prompt vs R_${esc(s.m)} Response)</div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:10px;">
+              <div style="font-size:0.8rem; font-weight:700; color:var(--text-muted); margin-bottom:6px;">Prompt Cluster A_${esc(s.k)} Tokens:</div>
+              <div>${pTokens.length > 0 ? pTokens.map(t => `<span class="keyword-tag" style="margin:2px;">${esc(t)}</span>`).join("") : '<span style="color:var(--text-muted); font-size:0.8rem;">No token breakdown</span>'}</div>
+            </div>
+            <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:10px;">
+              <div style="font-size:0.8rem; font-weight:700; color:var(--text-muted); margin-bottom:6px;">Response Disparity R_${esc(s.m)} Tokens:</div>
+              <div>${rTokens.length > 0 ? rTokens.map(t => `<span class="keyword-tag" style="margin:2px;">${esc(t)}</span>`).join("") : '<span style="color:var(--text-muted); font-size:0.8rem;">No token breakdown</span>'}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Real Examples for A_k and R_m -->
+        <div class="detail-section" style="margin-top:16px;">
+          <div class="detail-section-title">📚 Real Dataset Evidence (Dolci Training Pairs)</div>
+          ${pExs.length > 0 ? `
+            <div style="font-size:0.85rem; font-weight:700; margin-bottom:6px; color:var(--text-main);">Examples of Prompt Condition A_${esc(s.k)}:</div>
+            ${pExs.map(ex => `
+              <div class="example-item" style="margin-bottom:8px;">
+                <div class="example-item-prompt" style="font-size:0.82rem;"><strong>Prompt:</strong> ${esc(ex.prompt)}</div>
+              </div>
+            `).join("")}
+          ` : ''}
+
+          ${rExs.length > 0 ? `
+            <div style="font-size:0.85rem; font-weight:700; margin-top:12px; margin-bottom:6px; color:var(--text-main);">Examples Driving Response Disparity R_${esc(s.m)}:</div>
+            ${rExs.map(ex => `
+              <div class="example-item" style="margin-bottom:8px;">
+                <div class="example-item-prompt" style="font-size:0.82rem;"><strong>Prompt:</strong> ${esc(ex.prompt)}</div>
+                <div class="example-item-chosen" style="font-size:0.82rem; margin-top:4px;"><strong>Chosen (+):</strong> ${esc(ex.chosen)}</div>
+                <div class="example-item-rejected" style="font-size:0.82rem; margin-top:4px;"><strong>Rejected (-):</strong> ${esc(ex.rejected)}</div>
+              </div>
+            `).join("")}
+          ` : ''}
+        </div>
+      `;
     }
 
     function renderInspectorFeatureDetail(s, featData, clusterData) {
@@ -1465,7 +1552,7 @@ if (clustersMasterList) {
     }
 
     function renderInspectorSignalDetail(s, clusterData) {
-      if (!inspectorDetailView) return;
+      if (!inspectorDetailView || !clusterData) return;
       let headerHtml = `
         <div style="background:var(--border-subtle); border:1px solid var(--border-color); border-radius:var(--radius-md); padding:12px 16px; margin-bottom:18px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
@@ -1508,7 +1595,7 @@ if (clustersMasterList) {
       });
     });
 
-    // 2. Predicted Behavioral Shifts / Promoted Concepts (B_k × T_m)
+    // 2. Feature-Conditioned Predicted Shifts (B_k × T_m)
     if (currentInspectorMode === "pair") {
       const promoted = data.promoted_concepts || [];
       const suppressed = data.suppressed_concepts || [];
@@ -1516,7 +1603,7 @@ if (clustersMasterList) {
         const kStr = p.data_cluster_k != null ? `B_${p.data_cluster_k}` : "Global";
         allInspectorSignals.push({
           key: `shift_promoted_${p.feature_cluster_m}`,
-          category: "shifts",
+          category: "fc",
           clusterType: "feature",
           clusterId: p.feature_cluster_m,
           badgeClass: "badge-t",
@@ -1532,7 +1619,7 @@ if (clustersMasterList) {
         const kStr = s.data_cluster_k != null ? `B_${s.data_cluster_k}` : "Global";
         allInspectorSignals.push({
           key: `shift_suppressed_${s.feature_cluster_m}`,
-          category: "shifts",
+          category: "fc",
           clusterType: "feature",
           clusterId: s.feature_cluster_m,
           badgeClass: "badge-t",
@@ -1551,22 +1638,49 @@ if (clustersMasterList) {
         const kId = s.prompt_cluster_k;
         const mId = s.response_cluster_m;
         allInspectorSignals.push({
-          key: `shift_${mId}`,
-          category: "shifts",
+          key: `shift_fc_${mId}`,
+          category: "fc",
           clusterType: "feature",
           clusterId: mId,
           badgeClass: "badge-t",
           badgeText: `T_${mId}`,
-          title: `Predicted Shift: T_${mId} (from Data Topic B_${kId})`,
+          title: `Feature-Cond Shift: T_${mId} (Topic B_${kId})`,
           summary: s.interpretation || "Predicted post-training shift",
           tagHtml: `<span class="pill ${isChosen ? 'pill-chosen' : 'pill-rejected'}">${esc(s.effect_direction)}</span>`,
           explanation: s.interpretation,
           metaHtml: `Hypothesis: <strong>B_${esc(kId)} × T_${esc(mId)}</strong> | Effect Δ: <strong>${(s.delta > 0 ? '+' : '') + Number(s.delta).toFixed(5)}</strong> | Welch z: <strong>${Number(s.z_score).toFixed(2)}</strong> | Cohen's d: <strong>${Number(s.cohens_d).toFixed(2)}</strong>`
         });
       });
+
+      // 3. Prompt-Conditioned Predicted Shifts (A_k × R_m)
+      const pcShifts = data.prompt_conditioned_shifts || [];
+      pcShifts.forEach(pc => {
+        const isAmp = pc.delta > 0;
+        allInspectorSignals.push({
+          key: `shift_pc_${pc.prompt_cluster_k}_${pc.response_cluster_m}`,
+          category: "pc",
+          k: pc.prompt_cluster_k,
+          m: pc.response_cluster_m,
+          delta: pc.delta,
+          zScore: pc.z_score,
+          cohensD: pc.cohens_d,
+          relevanceScore: pc.relevance_score,
+          promptTokens: pc.prompt_tokens || [],
+          responseTokens: pc.response_tokens || [],
+          promptExamples: pc.prompt_examples || [],
+          responseExamples: pc.response_examples || [],
+          badgeClass: "badge-t",
+          badgeText: `A_${pc.prompt_cluster_k} × R_${pc.response_cluster_m}`,
+          title: `Prompt-Cond Shift: A_${pc.prompt_cluster_k} → R_${pc.response_cluster_m}`,
+          summary: pc.interpretation,
+          tagHtml: `<span class="pill ${isAmp ? 'pill-chosen' : 'pill-rejected'}">${esc(pc.effect_direction)}</span>`,
+          explanation: pc.interpretation,
+          metaHtml: `Local Pair: <strong>A_${esc(pc.prompt_cluster_k)} × R_${esc(pc.response_cluster_m)}</strong> | Cohen's d: <strong>${Number(pc.cohens_d).toFixed(2)}</strong> | Δ: <strong>${(pc.delta > 0 ? '+' : '') + Number(pc.delta).toFixed(5)}</strong> | Welch z: <strong>${Number(pc.z_score).toFixed(2)}</strong>`
+        });
+      });
     }
 
-    // 3. Top Fired SAE Features
+    // 4. Top Fired SAE Features
     const feats = data.top_sae_features || [];
     feats.forEach(f => {
       allInspectorSignals.push({
@@ -1598,14 +1712,15 @@ if (clustersMasterList) {
 
     // Filter Pill Controls
     const filterAll = document.getElementById("inspector-filter-all");
-    const filterShifts = document.getElementById("inspector-filter-shifts");
+    const filterFC = document.getElementById("inspector-filter-fc");
+    const filterPC = document.getElementById("inspector-filter-pc");
     const filterClusters = document.getElementById("inspector-filter-clusters");
     const filterFeatures = document.getElementById("inspector-filter-features");
 
-    [filterAll, filterShifts, filterClusters, filterFeatures].forEach(btn => {
+    [filterAll, filterFC, filterPC, filterClusters, filterFeatures].forEach(btn => {
       if (btn) {
         btn.addEventListener("click", () => {
-          [filterAll, filterShifts, filterClusters, filterFeatures].forEach(b => b && b.classList.remove("active"));
+          [filterAll, filterFC, filterPC, filterClusters, filterFeatures].forEach(b => b && b.classList.remove("active"));
           btn.classList.add("active");
           currentInspectorFilter = btn.dataset.filter;
           renderInspectorMasterList();

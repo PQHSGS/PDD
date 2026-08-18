@@ -318,6 +318,78 @@ class ViewerState:
             })
         return sorted(scored, key=lambda x: x["relevance_score"], reverse=True)
 
+    def _score_prompt_conditioned_hypotheses(self, prompt_text: str, p_feat: np.ndarray, top_k: int = 10) -> List[Dict[str, Any]]:
+        """Extract top local Prompt-Conditioned hypotheses (A_k x R_m) matching the prompt."""
+        import re
+        pc_ex = self._load_pc_cluster_examples()
+        prompt_hypos_map = self.prompt_hypotheses_map
+        if not prompt_hypos_map:
+            return []
+
+        prompt_tokens_map = pc_ex.get("prompt_cluster_tokens", {}) if pc_ex else {}
+        prompt_words = set(re.findall(r"\w+", prompt_text.lower()))
+
+        scored_ak: List[Tuple[int, float]] = []
+        for k_str, tokens in prompt_tokens_map.items():
+            try:
+                k = int(k_str)
+            except Exception:
+                continue
+            if not tokens:
+                continue
+            match_count = sum(1 for t in tokens if t.lower() in prompt_words or any(t.lower() in w for w in prompt_words))
+            if match_count > 0:
+                scored_ak.append((k, float(match_count) / max(1, len(tokens))))
+
+        if not scored_ak:
+            scored_ak = [(int(k), 1.0) for k in list(prompt_hypos_map.keys())[:10]]
+
+        scored_ak.sort(key=lambda x: x[1], reverse=True)
+
+        pc_shifts: List[Dict[str, Any]] = []
+        for k, score in scored_ak[:top_k]:
+            hypos = prompt_hypos_map.get(k, [])
+            if not hypos:
+                continue
+            sorted_h = sorted(hypos, key=lambda h: abs(float(h.get("cohens_d", 0.0))), reverse=True)
+            for h in sorted_h[:2]:
+                m = h.get("m")
+                delta = float(h.get("delta", 0.0))
+                z = float(h.get("z_score", 0.0))
+                d = float(h.get("cohens_d", 0.0))
+                is_amplified = delta > 0
+
+                p_tokens = self._pc_cluster_tokens("prompt", k)
+                r_tokens = self._pc_cluster_tokens("response", m)
+
+                direction_word = "AMPLIFIED (Boosted)" if is_amplified else "SUPPRESSED (Inhibited)"
+                interpretation = (
+                    f"Prompt matches prompt-feature cluster A_{k} (expressed by: {', '.join(p_tokens[:4]) if p_tokens else 'local prompt subspace'}). "
+                    f"In local preference data, this condition shifts response-delta cluster R_{m} "
+                    f"(expressed by: {', '.join(r_tokens[:4]) if r_tokens else 'response disparity features'}) "
+                    f"with local effect size Cohen's d = {d:.2f} (Δ = {delta:+.5f}, Welch z = {z:.2f}), "
+                    f"predicting post-training will {direction_word} this response pattern."
+                )
+
+                pc_shifts.append({
+                    "prompt_cluster_k": k,
+                    "response_cluster_m": m,
+                    "pipeline_type": "prompt_conditioned",
+                    "delta": delta,
+                    "effect_direction": "Amplified after DPO" if is_amplified else "Suppressed after DPO",
+                    "z_score": z,
+                    "cohens_d": d,
+                    "relevance_score": float(score),
+                    "prompt_tokens": p_tokens[:8],
+                    "response_tokens": r_tokens[:8],
+                    "prompt_examples": self._pc_cluster_top_examples("prompt", k, top_n=2),
+                    "response_examples": self._pc_cluster_top_examples("response", m, top_n=2),
+                    "interpretation": interpretation,
+                })
+
+        pc_shifts.sort(key=lambda s: abs(float(s["cohens_d"])) * float(s.get("relevance_score", 1.0)), reverse=True)
+        return pc_shifts[:10]
+
     @staticmethod
     def _project_clusters(scored: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Drop the internal hypos/best_hypothesis payload before sending to the client."""
@@ -1198,7 +1270,7 @@ def inspect_prompt(req: PromptInspectionRequest) -> Dict[str, Any]:
     scored_clusters = state._score_data_clusters(act, p_feat)[:req.top_k]
     matched_clusters = state._project_clusters(scored_clusters)
 
-    # 3. Extract Predicted Shifts from live-evidence-ranked hypotheses
+    # 3. Extract Feature-Conditioned Predicted Shifts (B_k x T_m) from live-evidence-ranked hypotheses
     predicted_shifts = []
     for c in scored_clusters:
         ordered = sorted(c["hypos"], key=lambda h: abs(float(h.get("delta", 0.0))) * abs(act.get(h.get("m"), 0.0)), reverse=True)
@@ -1222,6 +1294,7 @@ def inspect_prompt(req: PromptInspectionRequest) -> Dict[str, Any]:
             predicted_shifts.append({
                 "prompt_cluster_k": k,
                 "response_cluster_m": m,
+                "pipeline_type": "feature_conditioned",
                 "delta": delta,
                 "effect_direction": "Amplified after DPO" if is_amplified else "Suppressed after DPO",
                 "z_score": z,
@@ -1233,6 +1306,9 @@ def inspect_prompt(req: PromptInspectionRequest) -> Dict[str, Any]:
     predicted_shifts.sort(key=lambda s: abs(float(s["delta"])) * abs(float(s.get("live_activity", 0.0))), reverse=True)
     predicted_shifts = predicted_shifts[:10]
 
+    # 4. Extract Prompt-Conditioned Predicted Shifts (A_k x R_m)
+    pc_shifts = state._score_prompt_conditioned_hypotheses(prompt_text, p_feat, top_k=req.top_k)
+
     top_feats = state._top_sae_features(p_feat)
     state._prewarm_neuronpedia_features([f["feature_index"] for f in top_feats])
 
@@ -1240,6 +1316,7 @@ def inspect_prompt(req: PromptInspectionRequest) -> Dict[str, Any]:
         "prompt": prompt_text,
         "matched_clusters": matched_clusters,
         "predicted_behavior_shifts": predicted_shifts,
+        "prompt_conditioned_shifts": pc_shifts,
         "top_sae_features": top_feats,
     }
 
