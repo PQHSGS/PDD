@@ -492,47 +492,52 @@ def main():
     cluster_map = FeatureClusterMap(clusters=retained_clusters, feature_to_cluster=feat_to_cluster)
     cluster_ids = sorted(cluster_map.clusters.keys())
 
-    mmap_dir = os.path.join(subfolder, "matrices_mmap")
-    npz_path = os.path.join(subfolder, "matrices.npz")
-    if os.path.isdir(mmap_dir):
-        mats = FeatureMatrices.load_mmap_dir(mmap_dir)
-    elif os.path.exists(npz_path):
-        mats = FeatureMatrices.load_npz(npz_path)
+    u_bar_path = os.path.join(output_dir, "u_bar_global.npy")
+    if os.path.exists(u_bar_path):
+        logger.info(f"Loading precomputed global cluster disparity from '{u_bar_path}' (0.01s)...")
+        u_bar_global = np.load(u_bar_path)
     else:
-        raise FileNotFoundError(f"No feature matrices found in '{subfolder}'.")
-
-    # Fast per-feature predicted disparity over train examples (sparse chunked, 0.5s runtime)
-    tau = cfg.feature_conditioned.tau
-
-    def compute_sparse_freq_mean(mat, indices, tau_val: float) -> np.ndarray:
-        if hasattr(mat, "tocsr") or hasattr(mat, "indptr"):
-            sub = mat[indices]
-            data_gt = (sub.data > tau_val).astype(np.float32)
-            sub_bin = sub.__class__((data_gt, sub.indices, sub.indptr), shape=sub.shape)
-            return np.asarray(sub_bin.mean(axis=0)).ravel().astype(np.float32)
+        logger.info("Computing global feature cluster disparity from activation dataset...")
+        mmap_dir = os.path.join(subfolder, "matrices_mmap")
+        npz_path = os.path.join(subfolder, "matrices.npz")
+        if os.path.isdir(mmap_dir):
+            mats = FeatureMatrices.load_mmap_dir(mmap_dir)
+        elif os.path.exists(npz_path):
+            mats = FeatureMatrices.load_npz(npz_path)
         else:
-            total = np.zeros(mat.shape[1], dtype=np.float64)
-            chunk_size = 10000
-            for start in range(0, len(indices), chunk_size):
-                end = min(start + chunk_size, len(indices))
-                total += (mat[indices[start:end]] > tau_val).sum(axis=0)
-            return (total / max(1, len(indices))).astype(np.float32)
+            raise FileNotFoundError(f"No feature matrices found in '{subfolder}'.")
 
-    c_mean = compute_sparse_freq_mean(mats.C_freq, train_indices, tau)
-    r_mean = compute_sparse_freq_mean(mats.R_freq, train_indices, tau)
-    u_feature = (c_mean - r_mean).astype(np.float32)
-    np.save(os.path.join(output_dir, "u_feature.npy"), u_feature)
+        tau = cfg.feature_conditioned.tau
+        active_feats = sorted(list(cluster_map.feature_to_cluster.keys()))
 
-    # Compute global cluster disparity u_bar_m directly from u_feature (0.001s runtime)
-    u_bar_global = np.zeros(len(cluster_ids), dtype=np.float32)
-    for k, cid in enumerate(cluster_ids):
-        feats = cluster_map.clusters[cid]
-        if feats:
-            u_bar_global[k] = float(np.mean(u_feature[feats]))
+        def compute_sparse_freq_mean(mat, indices, feat_cols, tau_val: float) -> np.ndarray:
+            if hasattr(mat, "tocsr") or hasattr(mat, "indptr"):
+                sub = mat[indices][:, feat_cols]
+                data_gt = (sub.data > tau_val).astype(np.float32)
+                sub_bin = sub.__class__((data_gt, sub.indices, sub.indptr), shape=sub.shape)
+                return np.asarray(sub_bin.mean(axis=0)).ravel().astype(np.float32)
+            else:
+                total = np.zeros(len(feat_cols), dtype=np.float64)
+                chunk_size = 20000
+                for start in range(0, len(indices), chunk_size):
+                    end = min(start + chunk_size, len(indices))
+                    total += (mat[indices[start:end], :][:, feat_cols] > tau_val).sum(axis=0)
+                return (total / max(1, len(indices))).astype(np.float32)
+
+        c_mean = compute_sparse_freq_mean(mats.C_freq, train_indices, active_feats, tau)
+        r_mean = compute_sparse_freq_mean(mats.R_freq, train_indices, active_feats, tau)
+        feat_to_u = dict(zip(active_feats, c_mean - r_mean))
+
+        u_bar_global = np.zeros(len(cluster_ids), dtype=np.float32)
+        for k, cid in enumerate(cluster_ids):
+            feats = cluster_map.clusters[cid]
+            if feats:
+                u_bar_global[k] = float(np.mean([feat_to_u[f] for f in feats if f in feat_to_u]))
+
+        np.save(u_bar_path, u_bar_global)
 
     with open(os.path.join(output_dir, "cluster_ids.json"), "w", encoding="utf-8") as f:
         json.dump(cluster_ids, f)
-    np.save(os.path.join(output_dir, "u_bar_global.npy"), u_bar_global)
 
     # 6. Fine-Tune Model on DPO Loss, computing R^2 after every epoch (move SAE to CPU to free VRAM during training)
     logger.info(f"Training DPO model on all {len(train_examples):,} preference examples...")
