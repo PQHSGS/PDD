@@ -130,8 +130,8 @@ class ViewerState:
             try:
                 with open(lbl_file, "r", encoding="utf-8") as f:
                     self.cluster_labels = json.load(f).get("labels", [])
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Error loading auto-labels: {e}")
 
         # 4. Instant Seed from Summary
         # Seed with summary top hypotheses initially
@@ -438,12 +438,13 @@ class ViewerState:
                     import orjson
                     with open(ex_path, "rb") as f:
                         self._examples = orjson.loads(f.read())
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"orjson examples load failed ({e}); falling back to stdlib json.")
                     try:
                         with open(ex_path, "r", encoding="utf-8") as f:
                             self._examples = json.load(f)
-                    except Exception as e:
-                        logger.warning(f"Error loading examples for interpretation: {e}")
+                    except Exception as e2:
+                        logger.warning(f"Error loading examples for interpretation: {e2}")
         return self._examples
 
     def _load_pc_cluster_examples(self):
@@ -605,7 +606,12 @@ class ViewerState:
         return res
 
     def _cluster_top_examples(self, m: int, top_n: int = 5) -> List[Dict[str, Any]]:
-        """Top dataset examples firing feature cluster T_m in < 10ms via searchsorted on CSR indices."""
+        """Top dataset examples firing feature cluster T_m, ranked by vectorized row scores.
+
+        One pass per matrix: ``isin`` over the CSR indices locates entries of the top
+        member features, and ``bincount`` sums them per example row — no Python loop
+        over the (potentially millions of) matching entries.
+        """
         mats = self._load_feature_matrices()
         examples = self._load_examples()
         m_int = int(m)
@@ -614,38 +620,35 @@ class ViewerState:
             return []
 
         top_mems = self._top_cluster_features(m_int, top_n=5)
-        top_f_indices = np.array([f["feature_index"] for f in top_mems], dtype=np.int64)
-        if len(top_f_indices) == 0:
+        top_f = np.array([f["feature_index"] for f in top_mems], dtype=np.int64)
+        if len(top_f) == 0:
             return []
 
-        row_scores: Dict[int, float] = {}
-        try:
-            for mat in (mats.C_max, mats.R_max):
-                mask = np.isin(mat.indices, top_f_indices)
-                if not np.any(mask):
-                    continue
-                pos = np.nonzero(mask)[0]
-                rows = np.searchsorted(mat.indptr, pos, side="right") - 1
-                weights = mat.data[pos]
-                for r, w in zip(rows, weights):
-                    r_int = int(r)
-                    row_scores[r_int] = row_scores.get(r_int, 0.0) + float(w)
-        except Exception as e:
-            logger.warning(f"Fast example lookup fallback: {e}")
+        n = mats.C_max.shape[0]
+        scores = np.zeros(n, dtype=np.float64)
+        for mat in (mats.C_max, mats.R_max):
+            pos = np.nonzero(np.isin(mat.indices, top_f))[0]
+            if len(pos) == 0:
+                continue
+            rows = np.searchsorted(mat.indptr, pos, side="right") - 1
+            scores += np.bincount(rows, weights=mat.data[pos], minlength=n)
 
-        order = sorted(row_scores.keys(), key=lambda x: row_scores[x], reverse=True)[:top_n]
         out: List[Dict[str, Any]] = []
-        for i in order:
+        for i in np.argsort(scores)[::-1]:
+            if scores[i] <= 0:
+                break
             if int(i) >= len(examples):
                 continue
             ex = examples[int(i)]
             out.append({
                 "index": int(i),
-                "score": float(row_scores[i]),
+                "score": float(scores[i]),
                 "prompt": self._ex_get(ex, "prompt")[-600:],
                 "chosen": self._ex_get(ex, "chosen")[-400:],
                 "rejected": self._ex_get(ex, "rejected")[-400:],
             })
+            if len(out) >= top_n:
+                break
         return out
 
     def _feature_detail(self, f: int, top_n: int = 5) -> Dict[str, Any]:
