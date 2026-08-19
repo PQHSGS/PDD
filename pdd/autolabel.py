@@ -634,8 +634,10 @@ class AutoLabelingPipeline:
         counts: Dict[str, int] = {}
 
         if fc_res is None:
-            logger.info("Re-running B.1 feature-conditioned pipeline for auto-labeling (no precomputed result passed).")
-            fc_res = FeatureConditionedPipeline(FeatureConditionedConfig()).run(matrices, cluster_map, seed=seed)
+            logger.info("Resolving B.1 feature-conditioned pipeline for auto-labeling...")
+            fc_res = FeatureConditionedPipeline(FeatureConditionedConfig()).run(
+                matrices, cluster_map, seed=seed, checkpoint_dir=checkpoint_dir
+            )
         counts["data_clusters"] = self._label_data_clusters(labeler, examples, fc_res, seed=seed)
 
         if not self.cfg.skip_feature_clusters:
