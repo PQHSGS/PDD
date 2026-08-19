@@ -224,16 +224,23 @@ def train_dpo_model(
 
     model.train()
 
-    if lora_rank == 0 and hasattr(model, "enable_input_require_grads"):
+    # enable_input_require_grads is needed for BOTH full and LoRA modes.
+    # For LoRA: frozen base embeddings don't require grad; without this hook the backward
+    # graph is severed at the embedding layer → loss.backward() raises "element 0 of tensors
+    # does not require grad and does not have a grad_fn".
+    if hasattr(model, "enable_input_require_grads"):
         try:
             model.enable_input_require_grads()
         except Exception as e:
             logger.warning(f"enable_input_require_grads unsupported ({e}); continuing without input grads.")
 
-    if hasattr(model, "gradient_checkpointing_enable"):
+    # gradient_checkpointing BREAKS LoRA: it detaches intermediate activations across
+    # checkpointed segments, severing the path to LoRA adapter gradients.
+    # Only enable for full fine-tuning (lora_rank == 0) where all weights require grad.
+    if lora_rank == 0 and hasattr(model, "gradient_checkpointing_enable"):
         try:
             model.gradient_checkpointing_enable()
-            logger.info("Gradient checkpointing enabled for low-VRAM training.")
+            logger.info("Gradient checkpointing enabled for full fine-tuning.")
         except Exception as e:
             logger.warning(f"Gradient checkpointing unavailable ({e}); continuing without it.")
 
