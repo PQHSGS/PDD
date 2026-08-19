@@ -66,7 +66,7 @@
     "max_examples": 10
   },
   "dpo_validation": {
-    "train_samples": 50000,
+    "train_samples": 10000,
     "eval_prompts": 500,
     "batch_size": 2,
     "grad_accum": 32,
