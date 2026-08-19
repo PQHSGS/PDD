@@ -633,11 +633,10 @@ class AutoLabelingPipeline:
 
         counts: Dict[str, int] = {}
 
-        if not getattr(self.cfg, "skip_data_clusters", False):
-            if fc_res is None:
-                logger.info("Re-running B.1 feature-conditioned pipeline for auto-labeling (no precomputed result passed).")
-                fc_res = FeatureConditionedPipeline(FeatureConditionedConfig()).run(matrices, cluster_map, seed=seed)
-            counts["data_clusters"] = self._label_data_clusters(labeler, examples, fc_res, seed=seed)
+        if fc_res is None:
+            logger.info("Re-running B.1 feature-conditioned pipeline for auto-labeling (no precomputed result passed).")
+            fc_res = FeatureConditionedPipeline(FeatureConditionedConfig()).run(matrices, cluster_map, seed=seed)
+        counts["data_clusters"] = self._label_data_clusters(labeler, examples, fc_res, seed=seed)
 
         if not self.cfg.skip_feature_clusters:
             counts["feature_clusters"] = self._label_feature_clusters(
@@ -652,96 +651,3 @@ class AutoLabelingPipeline:
             counts["pc_clusters"] = self._pc_cluster_examples(pc_res, examples, self.cfg.pc_n_top)
 
         return counts
-
-
-def main() -> None:
-    """Standalone CLI entry point to run auto-labeling directly on an existing run/checkpoint."""
-    import argparse
-    from .config import PipelineConfig, AutoLabelConfig
-    from .feature_matrices import FeatureMatrixExtractor
-    from .feature_clusters import FeatureClusterMap
-
-    parser = argparse.ArgumentParser(description="Run PDD Auto-Labeling on an existing checkpoint/run.")
-    parser.add_argument("--config", type=str, default=None, help="Path to config JSON (e.g. configs/qwen3_1.7b_batchtopk_65k.json)")
-    parser.add_argument("--run_dir", type=str, default=None, help="Run directory (e.g. runs/qwen3_1.7b_batchtopk_65k)")
-    parser.add_argument("--device", type=str, default=None, help="Device override for label model ('cuda' or 'cpu')")
-    parser.add_argument("--skip_data_clusters", action="store_true", help="Skip Pass 1 (B_k data clusters) to avoid B.1 MiniBatchKMeans re-run")
-    parser.add_argument("--skip_pc_examples", action="store_true", help="Skip Pass 3 (A_k/R_m examples) to avoid B.2 SVD re-run")
-    args = parser.parse_args()
-
-    run_dir = args.run_dir
-    auto_label_cfg = None
-
-    if args.config and os.path.exists(args.config):
-        cfg = PipelineConfig.load_json(args.config)
-        if not run_dir:
-            run_dir = cfg.output_dir
-        auto_label_cfg = cfg.auto_label
-    elif run_dir:
-        summary_path = os.path.join(run_dir, "pdd_summary.json")
-        if os.path.exists(summary_path):
-            with open(summary_path, "r", encoding="utf-8") as f:
-                sum_data = json.load(f)
-                auto_label_cfg = AutoLabelConfig(**sum_data.get("config", {}).get("auto_label", {}))
-        else:
-            auto_label_cfg = AutoLabelConfig()
-    else:
-        print("Error: Specify either --config or --run_dir.", file=sys.stderr)
-        sys.exit(1)
-
-    if auto_label_cfg is None:
-        auto_label_cfg = AutoLabelConfig()
-
-    if args.device:
-        auto_label_cfg.device = args.device
-    if args.skip_data_clusters:
-        auto_label_cfg.skip_data_clusters = True
-    if args.skip_pc_examples:
-        auto_label_cfg.skip_pc_examples = True
-
-    # Resolve checkpoint subfolder from summary or search
-    summary_path = os.path.join(run_dir, "pdd_summary.json")
-    ckpt_dir = None
-    if os.path.exists(summary_path):
-        with open(summary_path, "r", encoding="utf-8") as f:
-            ckpt_dir = json.load(f).get("checkpoint_subfolder")
-
-    if not ckpt_dir or not os.path.exists(ckpt_dir):
-        for root, _, files in os.walk("checkpoints"):
-            if "matrices_mmap" in _ or "matrices.npz" in files:
-                ckpt_dir = root
-                break
-
-    if not ckpt_dir:
-        print(f"Error: Could not resolve checkpoint directory for run '{run_dir}'", file=sys.stderr)
-        sys.exit(1)
-
-    logger.info(f"Booting AutoLabeling on run '{run_dir}' using checkpoint '{ckpt_dir}'...")
-
-    # Instant matrix load (< 1s from mmap)
-    extractor = FeatureMatrixExtractor(None, None, None, 0, "cpu")
-    matrices = extractor.extract(None, os.path.join(ckpt_dir, "matrices.npz"), use_checkpoint=True)
-
-    clusters_path = os.path.join(ckpt_dir, "clusters.json")
-    if not os.path.exists(clusters_path):
-        print(f"Error: clusters.json not found in '{ckpt_dir}'", file=sys.stderr)
-        sys.exit(1)
-
-    with open(clusters_path, "r", encoding="utf-8") as f:
-        clusters_data = json.load(f)
-        f_to_c = {int(k): int(v) for k, v in clusters_data.get("feature_to_cluster", {}).items()}
-        c_dict = {int(k): v for k, v in clusters_data["clusters"].items()}
-        cluster_map = FeatureClusterMap(clusters=c_dict, feature_to_cluster=f_to_c)
-
-    pipeline = AutoLabelingPipeline(auto_label_cfg, run_dir)
-    results = pipeline.run(
-        matrices=matrices,
-        cluster_map=cluster_map,
-        seed=0,
-        checkpoint_dir=ckpt_dir,
-    )
-    logger.info(f"Auto-labeling complete: {results}")
-
-
-if __name__ == "__main__":
-    main()
