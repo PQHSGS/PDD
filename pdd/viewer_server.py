@@ -789,9 +789,10 @@ class ViewerState:
 
     def _expected_member_cols(self) -> np.ndarray:
         """Sorted unique member columns across all feature clusters."""
-        return np.unique(np.concatenate(
-            [np.asarray(f, dtype=np.int64) for f in self.feature_clusters.values() if f]
-        ))
+        non_empty = [np.asarray(f, dtype=np.int64) for f in self.feature_clusters.values() if len(f) > 0]
+        if not non_empty:
+            return np.empty(0, dtype=np.int64)
+        return np.unique(np.concatenate(non_empty))
 
     def _member_positions(self, mats, attr: str) -> np.ndarray:
         """Flat positions in the CSR arrays of entries belonging to any member column.
@@ -1188,7 +1189,7 @@ class ViewerState:
         m_int = int(m)
         k = max(1, min(int(k), 200))
         side = side if side in ("amplify", "suppress") else "amplify"
-        cache_key = f"inspectSamples_{m_int}_{side}"
+        cache_key = f"inspectSamples_{m_int}_{side}_k{k}"
 
         def build() -> Dict[str, Any]:
             feats = np.asarray(self.feature_clusters.get(m_int, []), dtype=np.int64)
@@ -1198,6 +1199,7 @@ class ViewerState:
                 "label": label or {"title": f"Feature cluster T_{m}", "description": "", "keywords": []},
                 "n_features": int(len(feats)),
                 "side": side,
+                "total_matching": 0,
                 "samples": [],
             }
             if len(feats) == 0:
@@ -1236,7 +1238,90 @@ class ViewerState:
                     "chosen": self._example_field(ex, "chosen")[-400:],
                     "rejected": self._example_field(ex, "rejected")[-400:],
                 })
-            return {**base, "samples": samples}
+            return {**base, "total_matching": int(len(present)), "samples": samples}
+
+        return self._cached_info(cache_key, build)
+
+    def _inspect_compound_samples(self, conditions: List[Tuple[int, str, float]], k: int) -> Dict[str, Any]:
+        """Top samples satisfying EVERY condition: (m, direction, tau).
+
+        amplify  => u_m >  tau (chosen carries the cluster more than rejected);
+        suppress => u_m < -tau (rejected carries it more). Because example_u is a
+        260k x K table, a compound query is just per-condition column masks ANDed
+        together, then ranked by total excess score = sum |u_m| / tau over conditions
+        (a sample wins by clearing every condition with a healthy margin). ~ms.
+        """
+        k = max(1, min(int(k), 200))
+        conds: List[Tuple[int, str, float]] = []
+        for m, direction, tau in conditions:
+            direction = direction if direction in ("amplify", "suppress") else "amplify"
+            tau = float(tau) if tau is not None and float(tau) > 0 else 0.1
+            conds.append((int(m), direction, tau))
+        if not conds:
+            return {"compound": True, "k": k, "total_matching": 0, "conditions": [], "samples": []}
+        cache_key = "compound_" + "_".join(f"{m}:{d}:{t:.3g}" for m, d, t in conds) + f"_k{k}"
+
+        def build() -> Dict[str, Any]:
+            base = {"compound": True, "k": k, "total_matching": 0, "conditions": [], "samples": []}
+            mats = self._load_feature_matrices()
+            examples = self._load_examples()
+            if mats is None or examples is None:
+                return base
+            self._ensure_example_scores(mats)
+            if self._example_u is None or self._example_s is None or self._example_cluster_ids is None:
+                return base
+            col_u, col_s = [], []
+            mask = None
+            for m, direction, tau in conds:
+                pos = int(np.searchsorted(self._example_cluster_ids, m))
+                if pos >= len(self._example_cluster_ids) or int(self._example_cluster_ids[pos]) != m:
+                    return base
+                u = np.asarray(self._example_u[:, pos], dtype=np.float32)
+                s = np.asarray(self._example_s[:, pos], dtype=np.float32)
+                cond = (u > tau) if direction == "amplify" else (u < -tau)
+                mask = cond if mask is None else (mask & cond)
+                col_u.append(u)
+                col_s.append(s)
+            if mask is None:
+                return base
+            idxs = np.flatnonzero(mask)
+            if len(idxs) == 0:
+                return base
+            score = np.zeros(len(idxs), dtype=np.float32)
+            for (m, direction, tau), u in zip(conds, col_u):
+                score += np.abs(u[idxs]) / tau
+            order = idxs[np.argsort(-score, kind="stable")]
+            labels = self._load_feature_cluster_labels()
+            cond_list = []
+            for m, direction, tau in conds:
+                label = labels.get(int(m))
+                cond_list.append({
+                    "m": int(m),
+                    "direction": direction,
+                    "tau": tau,
+                    "label": label or {"title": f"Feature cluster T_{m}", "description": "", "keywords": []},
+                })
+            samples = []
+            for i in order[:k]:
+                i = int(i)
+                if i >= len(examples):
+                    continue
+                ex = examples[i]
+                u_map = {str(m): float(u[i]) for (m, _, _), u in zip(conds, col_u)}
+                samples.append({
+                    "index": i,
+                    "u": u_map,
+                    "s": {str(m): float(s[i]) for (m, _, _), s in zip(conds, col_s)},
+                    "score": float(sum(abs(u_map[str(m)]) / t for (m, _, t) in conds)),
+                    "effect_directions": {
+                        str(m): "Amplified after DPO" if u[i] > 0 else "Suppressed after DPO"
+                        for (m, _, _), u in zip(conds, col_u)
+                    },
+                    "prompt": self._example_field(ex, "prompt")[-600:],
+                    "chosen": self._example_field(ex, "chosen")[-400:],
+                    "rejected": self._example_field(ex, "rejected")[-400:],
+                })
+            return {**base, "total_matching": int(len(idxs)), "conditions": cond_list, "samples": samples}
 
         return self._cached_info(cache_key, build)
 
@@ -1394,11 +1479,37 @@ def get_feature_cluster_info(m: int = Query(..., description="Feature cluster id
 
 
 @app.get("/api/inspect_feature_samples")
-def get_inspect_feature_samples(m: int = Query(..., description="Feature cluster id T_m"),
+def get_inspect_feature_samples(m: Optional[int] = Query(None, description="Feature cluster id T_m (single-cluster query)"),
                                 k: int = Query(50, ge=1, le=200, description="Number of top samples"),
-                                side: str = Query("amplify", description="'amplify' (chosen carries concept) or 'suppress' (rejected carries concept)")) -> Dict[str, Any]:
-    """Inverse of /api/inspect_prompt: top training examples whose labels amplify/suppress feature cluster T_m."""
+                                side: str = Query("amplify", description="'amplify' (chosen carries concept) or 'suppress' (rejected carries concept)"),
+                                conditions: Optional[str] = Query(None, description="Compound query: comma-separated 'm:amplify|suppress[:tau]' e.g. '1:amplify:0.2,3:suppress'")) -> Dict[str, Any]:
+    """Inverse of /api/inspect_prompt: top training examples whose labels amplify/suppress feature cluster T_m.
+
+    With `conditions`, runs a compound query: top examples satisfying EVERY condition
+    (amplify = u_m > tau, suppress = u_m < -tau), ranked by total excess score.
+    """
     state = get_state()
+    if conditions:
+        parsed = []
+        for part in conditions.split(","):
+            fields = part.strip().split(":")
+            if len(fields) < 2:
+                continue
+            try:
+                cm = int(fields[0])
+            except ValueError:
+                continue
+            direction = fields[1].strip() if fields[1].strip() in ("amplify", "suppress") else "amplify"
+            try:
+                tau = float(fields[2]) if len(fields) > 2 and fields[2].strip() else 0.1
+            except ValueError:
+                tau = 0.1
+            parsed.append((cm, direction, tau))
+        if parsed:
+            return state._inspect_compound_samples(parsed, k)
+        raise HTTPException(400, "No valid conditions parsed; expected 'm:amplify|suppress[:tau],...'")
+    if m is None:
+        raise HTTPException(400, "Provide either m (single-cluster) or conditions (compound query).")
     return state._inspect_feature_samples(m, k, side)
 
 

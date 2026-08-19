@@ -278,6 +278,23 @@
               <input type="text" id="samples-cluster-search" placeholder="🔍 Search feature clusters by label (refusal, math, code) or T_ id..." class="search-input">
             </div>
           </div>
+
+          <!-- Compound query builder (multi-cluster conditions) -->
+          <div class="compound-bar">
+            <div class="compound-builder">
+              <span class="guide-title">🔀 Compound query</span>
+              <select id="compound-cluster" class="compound-select" title="Feature cluster condition"></select>
+              <select id="compound-dir" class="compound-select" title="Direction">
+                <option value="amplify">Amplify (chosen carries concept)</option>
+                <option value="suppress">Suppress (rejected carries concept)</option>
+              </select>
+              <input type="number" id="compound-tau" value="0.1" step="0.05" min="0.01" class="compound-tau" title="|u| threshold this condition must exceed">
+              <button id="compound-add" class="btn btn-secondary" title="Add this condition">+ Add condition</button>
+              <button id="compound-run" class="btn btn-primary" title="Rank samples matching ALL conditions">🔍 Run compound</button>
+            </div>
+            <div id="compound-conditions" class="compound-conditions"><span class="compound-hint">Add ≥2 conditions to find samples that amplify AND/OR suppress multiple clusters at once (a sample carries a u-score for every cluster, so it can satisfy many conditions).</span></div>
+          </div>
+
           <div class="samples-meta-row" id="samples-meta-row">Select a cluster to begin.</div>
           <div id="samples-lists" class="samples-grid"></div>
         </div>

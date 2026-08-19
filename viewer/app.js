@@ -1788,10 +1788,17 @@ if (clustersMasterList) {
   const samplesSearch = document.getElementById("samples-cluster-search");
   const samplesMetaRow = document.getElementById("samples-meta-row");
   const samplesLists = document.getElementById("samples-lists");
+  const compoundCluster = document.getElementById("compound-cluster");
+  const compoundDir = document.getElementById("compound-dir");
+  const compoundTau = document.getElementById("compound-tau");
+  const compoundAdd = document.getElementById("compound-add");
+  const compoundRun = document.getElementById("compound-run");
+  const compoundConds = document.getElementById("compound-conditions");
   const SAMPLE_TOP_K = 50;
 
   let samplesClusters = [];
   let activeSampleCluster = null;
+  let compoundConditions = [];
 
   function initInspectorSamples(data) {
     const tmLabels = data.feature_cluster_labels || {};
@@ -1808,8 +1815,97 @@ if (clustersMasterList) {
       };
     }).sort((a, b) => (b.hasHypos - a.hasHypos) || (a.m - b.m));
     if (samplesSearch) samplesSearch.addEventListener("input", renderInspectorSampleChips);
+    populateCompoundSelect();
+    if (compoundAdd) compoundAdd.addEventListener("click", addCompoundCondition);
+    if (compoundRun) compoundRun.addEventListener("click", runCompoundQuery);
     renderInspectorSampleChips();
     if (samplesClusters.length > 0) selectInspectorSampleCluster(samplesClusters[0].m);
+  }
+
+  function populateCompoundSelect() {
+    if (!compoundCluster) return;
+    compoundCluster.innerHTML = samplesClusters.map(c =>
+      `<option value="${esc(c.m)}">T_${c.m} ${esc(c.title)}</option>`).join("");
+  }
+
+  function addCompoundCondition() {
+    if (!compoundCluster || !compoundDir || !compoundTau) return;
+    const m = Number(compoundCluster.value);
+    const direction = compoundDir.value;
+    const tau = Math.max(0.01, parseFloat(compoundTau.value) || 0.1);
+    const dup = compoundConditions.find(c => c.m === m && c.direction === direction && c.tau === tau);
+    if (!dup) compoundConditions.push({ m, direction, tau });
+    renderCompoundConditions();
+  }
+
+  function removeCompoundCondition(idx) {
+    compoundConditions.splice(idx, 1);
+    renderCompoundConditions();
+  }
+
+  function renderCompoundConditions() {
+    if (!compoundConds) return;
+    compoundConds.innerHTML = compoundConditions.length
+      ? compoundConditions.map((c, i) => {
+          const cl = samplesClusters.find(s => s.m === c.m);
+          return `<span class="pill ${c.direction === 'amplify' ? 'pill-chosen' : 'pill-rejected'}">
+            T_${c.m} ${c.direction === 'amplify' ? '▲' : '▼'} · u${c.direction === 'amplify' ? '>' : '<−'}${c.tau} ${esc(cl ? cl.title : "")}
+            <button class="compound-remove" data-compound-idx="${i}" title="Remove condition">✕</button></span>`;
+        }).join("")
+      : '<span class="compound-hint">Add ≥2 conditions to find samples that amplify AND/OR suppress multiple clusters at once (a sample carries a u-score for every cluster, so it can satisfy many conditions).</span>';
+    document.querySelectorAll("[data-compound-idx]").forEach(btn => {
+      btn.addEventListener("click", () => removeCompoundCondition(Number(btn.dataset.compoundIdx)));
+    });
+  }
+
+  async function runCompoundQuery() {
+    if (!compoundConditions.length) {
+      samplesLists.innerHTML = '<p class="loading-cell">Add at least one condition first.</p>';
+      return;
+    }
+    const condStr = compoundConditions.map(c => `${c.m}:${c.direction}:${c.tau}`).join(",");
+    samplesLists.innerHTML = '<p class="loading-cell">Ranking samples that satisfy ALL conditions...</p>';
+    try {
+      const res = await fetch(`/api/inspect_feature_samples?conditions=${encodeURIComponent(condStr)}&k=${SAMPLE_TOP_K}`).then(r => r.json());
+      renderCompoundResults(res);
+    } catch (err) {
+      samplesLists.innerHTML = `<p class="loading-cell">Compound query failed: ${esc(err.message)}</p>`;
+    }
+  }
+
+  function renderCompoundSampleRow(s) {
+    const condPills = compoundConditions.map(c => {
+      const u = s.u != null ? Number(s.u[c.m]) : NaN;
+      const isAmp = !isNaN(u) && u > 0;
+      return `<span class="pill ${isAmp ? 'pill-chosen' : 'pill-rejected'}">T_${c.m} ${isAmp ? '▲' : '▼'} ${isNaN(u) ? '—' : u.toFixed(3)}</span>`;
+    }).join("");
+    return `
+      <div class="example-item" style="margin-bottom:8px; padding:8px; background:var(--bg-card); border:1px solid var(--border-color); border-radius:6px;">
+        <div style="font-size:0.75rem; margin-bottom:4px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+          <span class="keyword-tag">#${esc(s.index)}</span>${condPills}
+          <span class="keyword-tag">score=${Number(s.score).toFixed(2)}</span>
+        </div>
+        <div class="example-item-prompt" style="font-size:0.82rem;"><strong>Prompt:</strong> ${esc(s.prompt)}</div>
+        <div class="example-item-chosen" style="font-size:0.82rem; margin-top:4px; color:#4caf7d;"><strong>Chosen (+):</strong> ${esc(s.chosen)}</div>
+        <div class="example-item-rejected" style="font-size:0.82rem; margin-top:4px; color:#e06c75;"><strong>Rejected (-):</strong> ${esc(s.rejected)}</div>
+      </div>`;
+  }
+
+  function renderCompoundResults(res) {
+    const condDesc = compoundConditions.map(c => {
+      const cl = samplesClusters.find(x => x.m === c.m);
+      return `T_${c.m} ${c.direction === 'amplify' ? '▲ amplify' : '▼ suppress'} (${esc(cl ? cl.title : "")})`;
+    }).join(" + ");
+    const totalMatch = res.total_matching != null ? res.total_matching : (res.samples || []).length;
+    const nShown = (res.samples || []).length;
+    samplesLists.innerHTML = `
+      <div style="width:100%; margin-bottom:10px; padding:10px 12px; background:var(--border-subtle); border:1px solid var(--border-color); border-radius:6px;">
+        <span class="guide-title">🔀 Compound results</span>
+        <div style="font-size:0.85rem; color:var(--text-muted); margin-top:4px;">
+          ${esc(condDesc)} — <strong>${nShown}</strong> shown of <strong>${totalMatch.toLocaleString()}</strong> matching samples (out of 260k total) that satisfy every condition.
+        </div>
+      </div>
+      ${(res.samples || []).map(renderCompoundSampleRow).join("") || '<p class="loading-cell">No samples satisfy all conditions — lower the thresholds.</p>'}`;
   }
 
   function renderInspectorSampleChips() {
