@@ -434,6 +434,7 @@ document.addEventListener("DOMContentLoaded", () => {
       updatePanelCardMeta();
       initClusterExplorer(data);
       initStatExplorer(data);
+      initInspectorSamples(data);
     } catch (err) {
       console.error("Failed to load run data:", err);
     }
@@ -1610,40 +1611,26 @@ if (clustersMasterList) {
 
     // 2. Feature-Conditioned Predicted Shifts (B_k × T_m)
     if (currentInspectorMode === "pair") {
-      const promoted = data.promoted_concepts || [];
-      const suppressed = data.suppressed_concepts || [];
-      promoted.forEach(p => {
-        const kStr = p.data_cluster_k != null ? `B_${p.data_cluster_k}` : "Global";
-        allInspectorSignals.push({
-          key: `shift_promoted_${p.feature_cluster_m}`,
-          pipeline: "fc",
-          category: "shifts",
-          clusterType: "feature",
-          clusterId: p.feature_cluster_m,
-          badgeClass: "badge-t",
-          badgeText: `T_${p.feature_cluster_m}`,
-          title: `Promoted Concept T_${p.feature_cluster_m} (${kStr})`,
-          summary: p.explanation,
-          tagHtml: '<span class="pill pill-chosen">✅ Promoted (Reward)</span>',
-          explanation: p.explanation,
-          metaHtml: `Pair: <strong>${kStr} × T_${esc(p.feature_cluster_m)}</strong> | Disparity Δ: <strong>+${Number(p.delta).toFixed(4)}</strong> | Welch z: <strong>${Number(p.z_score).toFixed(2)}</strong> | Strength: <strong>${esc(p.signal_strength)}</strong>`
-        });
-      });
-      suppressed.forEach(s => {
-        const kStr = s.data_cluster_k != null ? `B_${s.data_cluster_k}` : "Global";
-        allInspectorSignals.push({
-          key: `shift_suppressed_${s.feature_cluster_m}`,
-          pipeline: "fc",
-          category: "shifts",
-          clusterType: "feature",
-          clusterId: s.feature_cluster_m,
-          badgeClass: "badge-t",
-          badgeText: `T_${s.feature_cluster_m}`,
-          title: `Suppressed Concept T_${s.feature_cluster_m} (${kStr})`,
-          summary: s.explanation,
-          tagHtml: '<span class="pill pill-rejected">❌ Suppressed (Penalty)</span>',
-          explanation: s.explanation,
-          metaHtml: `Pair: <strong>${kStr} × T_${esc(s.feature_cluster_m)}</strong> | Disparity Δ: <strong>${Number(s.delta).toFixed(4)}</strong> | Welch z: <strong>${Number(s.z_score).toFixed(2)}</strong> | Strength: <strong>${esc(s.signal_strength)}</strong>`
+      [
+        { items: data.promoted_concepts || [], keyPrefix: "promoted", word: "Promoted", pill: "pill-chosen", emoji: "✅", suffix: "Reward" },
+        { items: data.suppressed_concepts || [], keyPrefix: "suppressed", word: "Suppressed", pill: "pill-rejected", emoji: "❌", suffix: "Penalty" },
+      ].forEach(({ items, keyPrefix, word, pill, emoji, suffix }) => {
+        items.forEach(p => {
+          const kStr = p.data_cluster_k != null ? `B_${p.data_cluster_k}` : "Global";
+          allInspectorSignals.push({
+            key: `shift_${keyPrefix}_${p.feature_cluster_m}`,
+            pipeline: "fc",
+            category: "shifts",
+            clusterType: "feature",
+            clusterId: p.feature_cluster_m,
+            badgeClass: "badge-t",
+            badgeText: `T_${p.feature_cluster_m}`,
+            title: `${word} Concept T_${p.feature_cluster_m} (${kStr})`,
+            summary: p.explanation,
+            tagHtml: `<span class="pill ${pill}">${emoji} ${word} (${suffix})</span>`,
+            explanation: p.explanation,
+            metaHtml: `Pair: <strong>${kStr} × T_${esc(p.feature_cluster_m)}</strong> | Disparity Δ: <strong>+${Number(p.delta).toFixed(4)}</strong> | Welch z: <strong>${Number(p.z_score).toFixed(2)}</strong> | Strength: <strong>${esc(p.signal_strength)}</strong>`
+          });
         });
       });
     } else {
@@ -1796,6 +1783,97 @@ if (clustersMasterList) {
       inspectBtn.textContent = "⚡ Inspect & Debug";
     }
   });
+
+  // --- FEATURE → TOP SAMPLES EXPLORER (TAB 4) — inverse of the Prompt Debugger ---
+  const samplesSearch = document.getElementById("samples-cluster-search");
+  const samplesMetaRow = document.getElementById("samples-meta-row");
+  const samplesLists = document.getElementById("samples-lists");
+  const SAMPLE_TOP_K = 50;
+
+  let samplesClusters = [];
+  let activeSampleCluster = null;
+
+  function initInspectorSamples(data) {
+    const tmLabels = data.feature_cluster_labels || {};
+    const fcHypos = data.top_feature_conditioned_hypotheses || [];
+    const knownM = new Set(fcHypos.map(h => h.m).filter(x => x != null));
+    samplesClusters = Object.keys(tmLabels).map(m => {
+      const l = tmLabels[m] || {};
+      return {
+        m: Number(m),
+        title: l.title || `T_${m}`,
+        description: l.description || "",
+        keywords: l.keywords || [],
+        hasHypos: knownM.has(Number(m)),
+      };
+    }).sort((a, b) => (b.hasHypos - a.hasHypos) || (a.m - b.m));
+    if (samplesSearch) samplesSearch.addEventListener("input", renderInspectorSampleChips);
+    renderInspectorSampleChips();
+    if (samplesClusters.length > 0) selectInspectorSampleCluster(samplesClusters[0].m);
+  }
+
+  function renderInspectorSampleChips() {
+    const q = samplesSearch ? samplesSearch.value.trim().toLowerCase() : "";
+    const filtered = samplesClusters.filter(c =>
+      !q || c.title.toLowerCase().includes(q) || c.description.toLowerCase().includes(q) ||
+      c.keywords.some(k => k.toLowerCase().includes(q)) ||
+      `T_${c.m}` === q.toLowerCase()
+    );
+    const chips = filtered.map(c => `
+      <button class="cluster-pill-btn ${c.m === activeSampleCluster ? "active" : ""}" data-samp-m="${esc(c.m)}" title="${esc(c.description)}">
+        T_${c.m}${c.hasHypos ? " ★" : ""} ${esc(c.title)}
+      </button>`).join("");
+    samplesMetaRow.innerHTML = `
+      <div style="font-size:0.85rem;color:var(--text-muted); margin-bottom:6px;">${filtered.length} feature clusters — click one to rank its training samples ${chips ? "· ★ = has B.1 hypotheses" : ""}</div>
+      <div class="cluster-pills-bar" style="max-height:120px; overflow-y:auto;">${chips || '<span style="color:var(--text-muted);">No matching clusters.</span>'}</div>`;
+    document.querySelectorAll("[data-samp-m]").forEach(btn => {
+      btn.addEventListener("click", () => selectInspectorSampleCluster(Number(btn.dataset.sampM)));
+    });
+  }
+
+  async function selectInspectorSampleCluster(m) {
+    activeSampleCluster = m;
+    renderInspectorSampleChips();
+    samplesLists.innerHTML = '<p class="loading-cell">Ranking top training samples for this cluster...</p>';
+    try {
+      const [amp, sup] = await Promise.all([
+        fetch(`/api/inspect_feature_samples?m=${m}&k=${SAMPLE_TOP_K}&side=amplify`).then(r => r.json()),
+        fetch(`/api/inspect_feature_samples?m=${m}&k=${SAMPLE_TOP_K}&side=suppress`).then(r => r.json()),
+      ]);
+      renderInspectorSampleLists(amp, sup);
+    } catch (err) {
+      samplesLists.innerHTML = `<p class="loading-cell">Failed to load samples: ${esc(err.message)}</p>`;
+    }
+  }
+
+  function renderInspectorSampleRow(s) {
+    const isAmp = s.u > 0;
+    return `
+      <div class="example-item" style="margin-bottom:8px; padding:8px; background:var(--bg-card); border:1px solid var(--border-color); border-radius:6px;">
+        <div style="font-size:0.75rem; margin-bottom:4px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+          <span class="keyword-tag">#${esc(s.index)}</span>
+          <span class="pill ${isAmp ? 'pill-chosen' : 'pill-rejected'}">${esc(s.effect_direction)} · u=${Number(s.u).toFixed(3)}</span>
+          <span class="keyword-tag">s=${Number(s.s).toFixed(0)}</span>
+        </div>
+        <div class="example-item-prompt" style="font-size:0.82rem;"><strong>Prompt:</strong> ${esc(s.prompt)}</div>
+        <div class="example-item-chosen" style="font-size:0.82rem; margin-top:4px; color:#4caf7d;"><strong>Chosen (+):</strong> ${esc(s.chosen)}</div>
+        <div class="example-item-rejected" style="font-size:0.82rem; margin-top:4px; color:#e06c75;"><strong>Rejected (-):</strong> ${esc(s.rejected)}</div>
+      </div>`;
+  }
+
+  function renderInspectorSampleLists(amp, sup) {
+    const ampLabel = (amp.label && amp.label.title) || `T_${amp.cluster_m}`;
+    const supLabel = (sup.label && sup.label.title) || `T_${sup.cluster_m}`;
+    samplesLists.innerHTML = `
+      <div class="samples-col">
+        <div class="pane-header"><span class="pane-title">🎯 Chosen-Leaning (u&gt;0) — Amplified after DPO</span><span class="pane-count">${esc(ampLabel)}</span></div>
+        ${(amp.samples || []).map(renderInspectorSampleRow).join("") || '<p class="loading-cell">No amplifying samples found.</p>'}
+      </div>
+      <div class="samples-col">
+        <div class="pane-header"><span class="pane-title">🚫 Rejected-Leaning (u&lt;0) — Suppressed after DPO</span><span class="pane-count">${esc(supLabel)}</span></div>
+        ${(sup.samples || []).map(renderInspectorSampleRow).join("") || '<p class="loading-cell">No suppressing samples found.</p>'}
+      </div>`;
+  }
 
   // Event Listeners
   refreshBtn.addEventListener("click", () => {

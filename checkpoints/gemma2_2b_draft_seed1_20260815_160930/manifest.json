@@ -1,0 +1,75 @@
+{
+  "name": "gemma2_2b_draft",
+  "seed": 1,
+  "timestamp": "2026-08-17 19:46:48",
+  "config": {
+    "name": "gemma2_2b_draft",
+    "seed": 1,
+    "output_dir": "runs/gemma2_2b_dolci",
+    "checkpoint_dir": "checkpoints",
+    "use_checkpoint": true,
+    "model": {
+      "path": "google/gemma-2-2b",
+      "dtype": "bfloat16",
+      "device": "cuda"
+    },
+    "sae": {
+      "type": "auto",
+      "repo": "gemma-scope-2b-pt-res-canonical",
+      "sae_id": "layer_12/width_16k/canonical",
+      "layer": 12,
+      "d_in": 2048,
+      "d_sae": 16384,
+      "k": null,
+      "device": "cuda",
+      "sae_cpu": false
+    },
+    "data": {
+      "path": "allenai/Dolci-Instruct-DPO",
+      "split": "train",
+      "prompt_col": "prompt",
+      "chosen_col": "chosen",
+      "rejected_col": "rejected",
+      "max_samples": 10000,
+      "batch_size": 1,
+      "datasets_dir": "datasets",
+      "save_every_batches": 5000
+    },
+    "feature_clusters": {
+      "top_pct": 1.0,
+      "min_community_size": 4,
+      "min_firing_freq": 0.0001,
+      "block_size": 2048,
+      "resolution_parameter": 1.5
+    },
+    "feature_conditioned": {
+      "tau": 0.01,
+      "silent_pct": 5.0,
+      "n_data_clusters": 128,
+      "min_feat_cluster_size": 10,
+      "min_data_cluster_size": 25,
+      "split_half_eps": 1e-06
+    },
+    "prompt_conditioned": {
+      "min_prompt_count": 200,
+      "min_resp_count": 200,
+      "min_resp_sigma": 0.001,
+      "min_resp_abs_delta": 0.0001,
+      "n_sample_emb": 30000,
+      "n_svd": 128,
+      "n_prompt_clusters": 512,
+      "n_resp_clusters": 512
+    },
+    "auto_label": {
+      "enabled": true,
+      "label_model": "Qwen/Qwen3-1.7B",
+      "heuristic": false,
+      "num_clusters": -1,
+      "skip_feature_clusters": false,
+      "skip_pc_examples": false,
+      "pc_n_top": 12,
+      "max_prompt_chars": 600,
+      "max_examples": 10
+    }
+  }
+}

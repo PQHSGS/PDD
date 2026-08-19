@@ -684,6 +684,22 @@ body {
   margin-bottom: 4px;
 }
 
+/* Tab 4: Feature → Top Samples */
+.samples-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.samples-col {
+  min-width: 0;
+}
+
+.samples-meta-row {
+  margin-top: 10px;
+}
+
 .cluster-tag {
   cursor: pointer;
   border-color: var(--color-accent);

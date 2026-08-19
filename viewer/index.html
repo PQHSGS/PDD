@@ -53,7 +53,8 @@
     <nav class="tab-nav">
       <button class="tab-btn active" data-tab="tab-stat">📊 Stat (B.1 + B.2)</button>
       <button class="tab-btn" data-tab="tab-labels">Cluster Auto-Labels</button>
-      <button class="tab-btn" data-tab="tab-inspector">⚡ Live Prompt Debugger</button>
+      <button class="tab-btn" data-tab="tab-inspector">⚡ Prompt → Behavior</button>
+      <button class="tab-btn" data-tab="tab-samples">🎯 Behavior → Prompt</button>
     </nav>
 
     <!-- Main Content Area -->
@@ -160,13 +161,13 @@
         </div>
       </section>
 
-      <!-- TAB 3: Live Prompt Debugger Master-Detail Explorer -->
+      <!-- TAB 3: Prompt -> Behavior Predictor (inverse of tab 4's Behavior -> Samples) -->
       <section id="tab-inspector" class="tab-content">
         <div class="inspector-card">
           <div class="inspector-header">
             <div>
-              <h2 class="section-title">Live Prompt Concept & Behavior Predictor</h2>
-              <p class="section-desc">Type or paste any user query to match against prompt clusters and predict which response concepts DPO post-training will amplify or suppress before you train.</p>
+              <h2 class="section-title">Prompt → Behavior Predictor</h2>
+              <p class="section-desc">Type or paste any user query to match against prompt clusters and predict which response concepts DPO post-training will amplify or suppress before you train. The inverse of <strong>Behavior → Prompt</strong>: this tab goes prompt → predicted behavior, that tab goes behavior → the training prompts that drive it.</p>
             </div>
             <!-- Interpretation Guide Box -->
             <div class="guide-box">
@@ -255,6 +256,30 @@
               </div>
             </div>
           </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: Behavior -> Prompt (inverse of tab 3's Prompt -> Behavior) -->
+      <section id="tab-samples" class="tab-content">
+        <div class="explorer-card">
+          <div class="explorer-header">
+            <div>
+              <h2 class="section-title">Behavior → Prompt</h2>
+              <p class="section-desc">The inverse of <strong>Prompt → Behavior</strong>: instead of asking what a prompt predicts about a behavior, pick a response-feature cluster (refusal, math) and surface the preference pairs whose labels most strongly amplify or suppress it across the whole extracted dataset.</p>
+            </div>
+            <div class="guide-box">
+              <span class="guide-title">💡 How to Read the Two Lists:</span>
+              <span class="guide-text"><strong>u &gt; 0 (Chosen-leaning):</strong> the chosen response carries the concept more than the rejected one — post-training amplifies this behavior. | <strong>u &lt; 0 (Rejected-leaning):</strong> the rejected response carries it — post-training suppresses this behavior. | <strong>s</strong> = cluster members firing anywhere in the pair.</span>
+            </div>
+          </div>
+
+          <div class="toolbar cluster-toolbar">
+            <div class="search-box cluster-search-box">
+              <input type="text" id="samples-cluster-search" placeholder="🔍 Search feature clusters by label (refusal, math, code) or T_ id..." class="search-input">
+            </div>
+          </div>
+          <div class="samples-meta-row" id="samples-meta-row">Select a cluster to begin.</div>
+          <div id="samples-lists" class="samples-grid"></div>
         </div>
       </section>
     </main>

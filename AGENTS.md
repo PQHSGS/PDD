@@ -59,15 +59,16 @@ LaTeX source) — read the relevant appendix section before touching a module.
 
 ## Viewer API & Run Artifacts (for wiring)
 
-- `GET /api/runs`, `/api/run_data` (returns `summary`, `validation_metrics`, `top_feature_conditioned_hypotheses`, `top_prompt_conditioned_hypotheses`, `cluster_labels`, `feature_cluster_labels`), `/api/feature_cluster_info?m=<k>&top_n=...`, `/api/cluster_detail?type=feature|data&id=...`, `/api/neuronpedia_*`.
+- `GET /api/runs`, `/api/run_data` (returns `summary`, `validation_metrics`, `top_feature_conditioned_hypotheses`, `top_prompt_conditioned_hypotheses`, `cluster_labels`, `feature_cluster_labels`), `/api/feature_cluster_info?m=<k>&top_n=...`, `/api/cluster_detail?type=feature|data&id=...`, `/api/inspect_feature_samples?m=<T_m>&k=50&side=amplify|suppress`, `/api/neuronpedia_*`.
+- Tab 4 (Behavior → Prompt) = the inverse search: pick a T_m, get the top preference pairs whose labels amplify (u>0, chosen fires the cluster more) or suppress (u<0, rejected fires it more) it. `_inspect_feature_samples` reads per-example u/s from the precomputed `viewer_cache/example_u.npy` + `example_s.npy` (N×K f32, one-time blocked matmul via `_ensure_example_scores` over the dense C_max/R_max member matrices, fingerprint-validated like `_member_cache_meta`; query = a 260k column sort, ~ms). The `inspect_*` naming/`effect_direction` ("Amplified/Suppressed after DPO") mirrors `/api/inspect_prompt` — the two are inverse views. B.1 T_m dropdown examples are presence-ranked (C_max+R_max); tab 4 examples are label-disparity-ranked — keep the two axes distinct.
 - Run artifact files under `<run>/`: `cluster_labels.json` (B_k), `feature_cluster_labels.json` (T_m), `prompt_conditioned_cluster_examples.json` (A_k/R_m), `feature_conditioned_hypotheses.json`, `pdd_summary.json`; under `<run>/p4_validation/`: `p4_r2_metrics.json` + `p4_r2_by_epoch.json` (R² is measured ONLY over the hypothesis-set clusters — see Experiment Scripts).
-- Server-side helper conventions: `_cached_info(key, build)` memoizes per-cluster lookups (call `build` even on cache hit ONLY for side-effects like prewarm); `_parse_hypotheses` builds `k -> list_of_hypotheses`; `_neuronpedia_verified`/`_sae_feature_item`/`_worker` keep handlers thin.
+- Server-side helper conventions: `_cached_info(key, build)` memoizes per-cluster lookups (call `build` even on cache hit ONLY for side-effects like prewarm); `_reload_if_changed(path, cache_attr, mtime_attr)` is the shared mtime-reload for the three label artifact loaders (`_load_data_cluster_labels`, `_load_feature_cluster_labels`, `_load_pc_cluster_examples`) — don't re-expand them, and never bypass it with direct cache-attr reads; `_parse_hypotheses` builds `k -> list_of_hypotheses`; `_neuronpedia_verified`/`_sae_feature_item`/`_worker` keep handlers thin. Endpoint families: `/api/inspect_*` = derivation/inverse-search (prompt → predicted shifts, cluster → driving samples); `/api/feature_cluster_info` + `/api/cluster_detail` + `/api/feature_detail` + `/api/pc_cluster_examples` = lookup. Config key `min_feat_cluster_size` abbreviates "feature" — rename would silently change old-run defaults, so it stays.
 
 ## Experiment Scripts (`experiments/`)
 
 - `p4_dpo_validation.py`: DPO validation. `load_validated_cluster_ids()` builds the hypothesis-set cluster IDs from the config thresholds — this IS the validation universe (R² is measured ONLY over these clusters, never the whole Leiden partition; falls back to the full partition with a warning if `feature_conditioned_hypotheses.json` is missing); `compute_cluster_validation(..., valid_ids=...)` computes the metrics; `eval_epoch` emits per-epoch metrics saved to `p4_r2_metrics.json`/`p4_r2_by_epoch.json`. Observed on the 65k run: hypothesis-set R²=0.0171 (29 of 118 clusters) — still noise-level, so the low R² is a signal-quality issue (u_bar vs empirical Δ mismatch), not a cluster-count/threshold one.
 - Known tokenizer facts: Qwen3 has NO BOS and right-pads; Gemma2 has BOS + left-pads. Robust positional mask = `attention_mask.argmax() + prompt_len + tokenizer_offset`.
-- LoRA only: `enable_input_require_grads()` is gated on `lora_rank == 0` (adds leaf-grad hooks; pointless when base is frozen anyway). Batched SAE encodes: zero-pad the window, do ONE `sae.encode`, then slice back — matches per-window output.
+- LoRA gradient graph: `enable_input_require_grads()` is called for **both** full and LoRA modes — for LoRA, frozen base embeddings don't require grad by default, so without this hook the backward graph is severed and `loss.backward()` raises "element 0 of tensors does not require grad". `gradient_checkpointing_enable()` is gated on `lora_rank == 0` only — it breaks LoRA by detaching intermediate activations across checkpointed segments. Batched SAE encodes: zero-pad the window, do ONE `sae.encode`, then slice back — matches per-window output.
 
 ## Paper Recipe (Implementation Checklist)
 
@@ -108,3 +109,14 @@ LaTeX source) — read the relevant appendix section before touching a module.
 - Work in strict category order: 1) redundant/duplicate code, 2) implicit fallbacks (silent `except: pass` / `or {}` MUST become `logger.warning`), 3) un-needed complex if-else / dead paths, 4) function sizing/overlap (no forced splits; merge only honest duplicates). Run the full verify battery after EACH pass.
 - Per-function `import numpy as np` is function-scoped: when extracting a helper that uses np, the OUTER function loses np if it still references it — re-add the import to the outer scope or the refactor silently breaks the non-tested branch.
 - Keep math modules (`feature_conditioned.py`, `prompt_conditioned.py`, `feature_clusters.py`) untouched; never alter checkpoint/data artifacts (see Data Preservation rule).
+
+<!-- CODEGRAPH_START -->
+## CodeGraph
+
+In repositories indexed by CodeGraph (a `.codegraph/` directory exists at the repo root), reach for it BEFORE grep/find or reading files when you need to understand or locate code:
+
+- **MCP tool** (when available): `codegraph_explore` answers most code questions in one call — the relevant symbols' verbatim source plus the call paths between them, including dynamic-dispatch hops grep can't follow. Name a file or symbol in the query to read its current line-numbered source. If it's listed but deferred, load it by name via tool search.
+- **Shell** (always works): `codegraph explore "<symbol names or question>"` prints the same output.
+
+If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.
+<!-- CODEGRAPH_END -->

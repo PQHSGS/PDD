@@ -12,9 +12,23 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 from dataclasses import asdict
 from typing import List, Optional, Set
+
+# Kaggle/Colab compatibility: block torchvision/torchaudio from being imported by transformers.
+# PDD is a pure NLP pipeline and never uses these packages.
+# IMPORTANT: do NOT call __import__ here — on the local server torchvision/torchaudio ARE installed
+# and __import__ would fully load their C++ extension (_C.so), which registers fake ops via
+# torch.library.register_fake and corrupts PyTorch 2.4's Autograd dispatcher, breaking loss.backward().
+# Only block packages that aren't already in sys.modules (i.e. haven't been imported yet).
+for _pkg in ("torchvision", "torchaudio"):
+    if _pkg not in sys.modules:
+        sys.modules[_pkg] = None
+        sys.modules[f"{_pkg}.io"] = None
+        sys.modules[f"{_pkg}.ops"] = None
+
 import numpy as np
 import torch
 
@@ -501,12 +515,27 @@ def main():
         summary_data = json.load(f)
 
     subfolder = summary_data.get("checkpoint_subfolder")
+    if subfolder and not os.path.exists(subfolder):
+        # Fallback for cloud/portable environments (e.g. Kaggle/Colab) where absolute paths differ:
+        # Check relative subfolder path inside cfg.checkpoint_dir
+        base_sub = os.path.basename(subfolder.rstrip("/\\"))
+        candidate = os.path.join(cfg.checkpoint_dir, base_sub)
+        if os.path.exists(candidate):
+            subfolder = candidate
+        elif os.path.exists(cfg.checkpoint_dir):
+            subfolder = cfg.checkpoint_dir
 
-    # 1. Load actual cached examples
-    ex_path = os.path.join(subfolder, "examples.json")
-    with open(ex_path, "r", encoding="utf-8") as f:
-        ex_dicts = json.load(f)
-    examples = [PreferenceExample.from_dict(d) for d in ex_dicts]
+    # 1. Load actual cached examples (or fallback to HF dataset if the 1.5GB examples.json was not uploaded)
+    # NOTE: Keep this fallback active for portable cloud/Kaggle runs where giant json files are omitted from Git.
+    ex_path = os.path.join(subfolder, "examples.json") if subfolder else None
+    if ex_path and os.path.exists(ex_path):
+        with open(ex_path, "r", encoding="utf-8") as f:
+            ex_dicts = json.load(f)
+        examples = [PreferenceExample.from_dict(d) for d in ex_dicts]
+    else:
+        from pdd.data import DatasetLoader
+        logger.info(f"Local 'examples.json' not found; loading preference dataset directly from Hugging Face Hub ({cfg.data.path})...")
+        examples = DatasetLoader(cfg.data).load(use_checkpoint=False)
 
     train_samples = v.train_samples
     eval_prompts_count = v.eval_prompts

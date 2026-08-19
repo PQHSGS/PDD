@@ -1,6 +1,19 @@
 """SAE & Model Backends: Clean OOP loading for Transformer Models & Sparse Autoencoders."""
 from __future__ import annotations
 
+import sys
+# Kaggle/Colab compatibility: block torchvision/torchaudio from being imported by transformers.
+# PDD is a pure NLP pipeline and never uses these packages.
+# IMPORTANT: do NOT call __import__ here — on the local server torchvision/torchaudio ARE installed
+# and __import__ would fully load their C++ extension (_C.so), which registers fake ops via
+# torch.library.register_fake and corrupts PyTorch 2.4's Autograd dispatcher, breaking loss.backward().
+# Only block packages that aren't already in sys.modules (i.e. haven't been imported yet).
+for _pkg in ("torchvision", "torchaudio"):
+    if _pkg not in sys.modules:
+        sys.modules[_pkg] = None
+        sys.modules[f"{_pkg}.io"] = None
+        sys.modules[f"{_pkg}.ops"] = None
+
 import torch
 from huggingface_hub import hf_hub_download
 from transformers import AutoModelForCausalLM, AutoTokenizer

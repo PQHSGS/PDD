@@ -1,0 +1,121 @@
+{
+  "feature_clusters": {
+    "1": {
+      "title": "Labeling Clusters of Response Texts",
+      "description": "Cluster of response texts grouped by similar content or themes.",
+      "keywords": [
+        "response clustering",
+        "text grouping",
+        "cluster analysis"
+      ]
+    },
+    "2": {
+      "title": "Step-by-Step Guide for Signal Processing in MATLAB",
+      "description": "A detailed guide on performing signal recognition and smoothing processing for single angle pulse data from a strain gauge test using MATLAB.",
+      "keywords": [
+        "MATLAB",
+        "signal processing",
+        "strain gauge",
+        "pulse data"
+      ]
+    },
+    "3": {
+      "title": "Python Programming",
+      "description": "Cluster of Python code examples related to data structures, algorithms, and web development.",
+      "keywords": [
+        "python",
+        "data structures",
+        "algorithms",
+        "web development"
+      ]
+    },
+    "4": {
+      "title": "Mathematics and Physics Problems",
+      "description": "Cluster of problems involving geometry, calculus, probability, and physics concepts.",
+      "keywords": [
+        "geometry",
+        "calculus",
+        "probability",
+        "physics"
+      ]
+    },
+    "5": {
+      "title": "Cluster of Response Texts on Mental Health and Self-Harm",
+      "description": "Cluster of response texts discussing mental health, self-harm, and seeking support, with a focus on emotional well-being and professional help.",
+      "keywords": [
+        "mental health",
+        "self-harm",
+        "support",
+        "professional help"
+      ]
+    },
+    "6": {
+      "title": "Labeling Clusters of Response Texts",
+      "description": "Cluster responses based on similar content and themes.",
+      "keywords": [
+        "response clustering",
+        "labeling",
+        "text grouping"
+      ]
+    },
+    "7": {
+      "title": "Android RecyclerView Tutorial",
+      "description": "Guides on constructing an efficient and elegant RecyclerView for displaying diverse product data.",
+      "keywords": [
+        "RecyclerView",
+        "Android",
+        "data binding",
+        "image loading",
+        "diffing"
+      ]
+    },
+    "8": {
+      "title": "The World of 'You Will Own Everything, You Want for Free'",
+      "description": "A speculative exploration of a future society shaped by radical shifts in economics, technology, and human values, featuring a post-scarcity economy and advanced technological advancements.",
+      "keywords": [
+        "speculative fiction",
+        "utopian idealism",
+        "technological advancement",
+        "philosophical transformation"
+      ]
+    },
+    "9": {
+      "title": "RESTful API Implementation",
+      "description": "Cluster of responses related to implementing a RESTful API with JWT authentication, RBAC, error handling, and test cases.",
+      "keywords": [
+        "RESTful API",
+        "JWT authentication",
+        "RBAC",
+        "error handling",
+        "test cases"
+      ]
+    },
+    "10": {
+      "title": "Chemical Reaction Analysis",
+      "description": "Analysis of chemical reactions and mechanisms involving compounds and their transformations.",
+      "keywords": [
+        "chemical reactions",
+        "mechanisms",
+        "compounds"
+      ]
+    },
+    "11": {
+      "title": "Cluster of Response Texts",
+      "description": "Cluster of response texts sampled from an RLHF preference dataset",
+      "keywords": [
+        "RLHF",
+        "response texts",
+        "cluster"
+      ]
+    },
+    "12": {
+      "title": "The Pond of Pungent Peril",
+      "description": "Two friends, Boromir and \u00c9omer, spend a peaceful day in the countryside, sharing stories and debating food preferences, while discussing the challenges of maintaining a healthy lifestyle.",
+      "keywords": [
+        "friends",
+        "countryside",
+        "lifestyle"
+      ]
+    }
+  }
+}

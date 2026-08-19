@@ -93,7 +93,7 @@ class ViewerState:
         self.summary: Dict[str, Any] = {}
         self.checkpoint_dir: Optional[Path] = None
         self.feature_clusters: Dict[int, List[int]] = {}
-        self.cluster_labels: List[Dict[str, Any]] = []
+        self._cluster_labels_raw: Optional[Any] = None
         self.fc_hypos: List[Dict[str, Any]] = []
         self.pc_hypos: List[Dict[str, Any]] = []
         self.k_to_fc: Dict[int, List[Dict[str, Any]]] = {}
@@ -104,8 +104,8 @@ class ViewerState:
         self._feature_matrices = None
         self._examples = None
         self._feat_delta: Optional[np.ndarray] = None
-        self._pc_cluster_examples = None
-        self._feature_cluster_labels: Optional[Dict[int, Dict[str, Any]]] = None
+        self._pc_cluster_examples: Optional[Any] = None
+        self._feature_cluster_labels: Optional[Any] = None
         self._feature_cluster_labels_mtime: float = 0.0
         self._pc_cluster_examples_mtime: float = 0.0
         self._cluster_labels_mtime: float = 0.0
@@ -118,6 +118,9 @@ class ViewerState:
         self._all_member_cols: Optional[np.ndarray] = None
         self._member_positions_cache: Dict[str, np.ndarray] = {}
         self._member_matrices: Dict[str, np.ndarray] = {}
+        self._example_u: Optional[np.ndarray] = None
+        self._example_s: Optional[np.ndarray] = None
+        self._example_cluster_ids: Optional[np.ndarray] = None
 
         self.load()
 
@@ -147,7 +150,7 @@ class ViewerState:
                 self.feature_clusters = {int(k): v for k, v in raw_clusters.get("clusters", {}).items()}
 
         # 3. Auto-Labels (B_k, T_m, A_k/R_m) are read lazily and refresh automatically
-        #    when the pipeline rewrites them (see _data_cluster_labels, _load_feature_cluster_labels,
+        #    when the pipeline rewrites them (see _load_data_cluster_labels, _load_feature_cluster_labels,
         #    _load_pc_cluster_examples) — no manual rebuild step.
 
         # 4. Instant Seed from Summary
@@ -160,18 +163,20 @@ class ViewerState:
             f"{len(self.feature_clusters)} feature clusters, ready for instant requests."
         )
 
-    def _data_cluster_labels(self) -> List[Dict[str, Any]]:
+    def _load_data_cluster_labels(self) -> List[Dict[str, Any]]:
         """B_k labels, re-read when cluster_labels.json changes (auto-label pipeline update)."""
-        path = Path(cluster_labels_path(str(self.run_dir)))
+        raw = self._reload_if_changed(
+            Path(cluster_labels_path(str(self.run_dir))), "_cluster_labels_raw", "_cluster_labels_mtime")
+        return raw.get("labels", []) if raw is not None else []
+
+    def _reload_if_changed(self, path: Path, cache_attr: str, mtime_attr: str) -> Any:
+        """Re-read a JSON artifact when its mtime changes; memoize the raw value otherwise."""
         mtime = _mtime_of(path)
-        if mtime != self._cluster_labels_mtime:
-            labels: List[Dict[str, Any]] = []
-            raw = _read_json(path)
-            if raw is not None:
-                labels = raw.get("labels", [])
-            self.cluster_labels = labels
-            self._cluster_labels_mtime = mtime
-        return self.cluster_labels
+        cached = getattr(self, cache_attr)
+        if cached is None or mtime != getattr(self, mtime_attr):
+            setattr(self, cache_attr, _read_json(path))
+            setattr(self, mtime_attr, mtime)
+        return getattr(self, cache_attr)
 
     @staticmethod
     def _parse_hypotheses(data: Any) -> Tuple[List[Dict[str, Any]], Dict[int, List[Dict[str, Any]]]]:
@@ -297,7 +302,7 @@ class ViewerState:
         features; Mode B: mean of per-feature u). Each scored cluster carries its
         hypotheses + best hypothesis for the downstream shift extraction.
         """
-        label_map = {cl.get("cluster_id"): cl for cl in self._data_cluster_labels()}
+        label_map = {cl.get("cluster_id"): cl for cl in self._load_data_cluster_labels()}
         scored = []
         for k, hypos in self.feature_hypotheses_map.items():
             ev = self._hypothesis_evidence(hypos, signal)
@@ -679,7 +684,7 @@ class ViewerState:
         return self._feature_matrices
 
     @staticmethod
-    def _ex_get(ex: Any, key: str) -> str:
+    def _example_field(ex: Any, key: str) -> str:
         if isinstance(ex, dict):
             return ex.get(key, "") or ""
         return getattr(ex, key, "") or ""
@@ -696,9 +701,9 @@ class ViewerState:
             out.append({
                 "index": int(i),
                 "score": float(scores[i]),
-                "prompt": self._ex_get(ex, "prompt")[-600:],
-                "chosen": self._ex_get(ex, "chosen")[-400:],
-                "rejected": self._ex_get(ex, "rejected")[-400:],
+                "prompt": self._example_field(ex, "prompt")[-600:],
+                "chosen": self._example_field(ex, "chosen")[-400:],
+                "rejected": self._example_field(ex, "rejected")[-400:],
             })
             if len(out) >= top_n:
                 break
@@ -730,12 +735,8 @@ class ViewerState:
         gives each A_k/R_m a concrete, readable meaning via the real examples that
         express it (no SAE feature breakdown). Re-reads when the file changes.
         """
-        path = Path(pc_cluster_examples_path(str(self.run_dir)))
-        mtime = _mtime_of(path)
-        if self._pc_cluster_examples is None or mtime != self._pc_cluster_examples_mtime:
-            self._pc_cluster_examples = _read_json(path)
-            self._pc_cluster_examples_mtime = mtime
-        return self._pc_cluster_examples
+        return self._reload_if_changed(
+            Path(pc_cluster_examples_path(str(self.run_dir))), "_pc_cluster_examples", "_pc_cluster_examples_mtime")
 
     def _pc_cluster_tokens(self, cluster_type: str, cid: int) -> List[str]:
         """Score-weighted top content tokens expressing prompt cluster A_k / response-delta cluster R_m."""
@@ -766,9 +767,9 @@ class ViewerState:
                 desc = f"prompt expressing A_{cid}"
             out.append({
                 "index": int(i),
-                "prompt": self._ex_get(ex, "prompt"),
-                "chosen": self._ex_get(ex, "chosen"),
-                "rejected": self._ex_get(ex, "rejected"),
+                "prompt": self._example_field(ex, "prompt"),
+                "chosen": self._example_field(ex, "chosen"),
+                "rejected": self._example_field(ex, "rejected"),
                 "note": desc,
             })
         return out
@@ -779,16 +780,12 @@ class ViewerState:
         Re-reads when the file changes so a re-run of the auto-label pipeline is picked
         up without restarting the viewer.
         """
-        path = Path(feature_cluster_labels_path(str(self.run_dir)))
-        mtime = _mtime_of(path)
-        if self._feature_cluster_labels is None or mtime != self._feature_cluster_labels_mtime:
-            labels: Dict[int, Dict[str, Any]] = {}
-            raw = _read_json(path)
-            if raw is not None:
-                labels = {int(k): v for k, v in raw.get("feature_clusters", {}).items()}
-            self._feature_cluster_labels = labels
-            self._feature_cluster_labels_mtime = mtime
-        return self._feature_cluster_labels
+        raw = self._reload_if_changed(
+            Path(feature_cluster_labels_path(str(self.run_dir))),
+            "_feature_cluster_labels", "_feature_cluster_labels_mtime")
+        if raw is None:
+            return {}
+        return {int(k): v for k, v in raw.get("feature_clusters", {}).items()}
 
     def _expected_member_cols(self) -> np.ndarray:
         """Sorted unique member columns across all feature clusters."""
@@ -967,7 +964,10 @@ class ViewerState:
                 self._feature_totals = np.load(cache_dir / "feature_totals.npy")
                 fd_path = cache_dir / "feature_delta.npy"
                 if fd_path.exists():
-                    fd_meta = _read_json(cache_dir / "feature_delta_meta.json") or {}
+                    fd_meta = _read_json(cache_dir / "feature_delta_meta.json")
+                    if fd_meta is None:
+                        logger.debug(f"No feature_delta meta in {cache_dir}; assuming default tau.")
+                        fd_meta = {}
                     if float(fd_meta.get("tau", 0.01)) == self._feature_delta_tau():
                         self._feat_delta = np.load(fd_path)
                 logger.info(f"Loaded member cache from {cache_dir} (mmap).")
@@ -1048,7 +1048,7 @@ class ViewerState:
         cache_key = f"B_{k_int}_{top_n_examples}"
 
         def build() -> Dict[str, Any]:
-            label_obj = next((lab for lab in self._data_cluster_labels() if lab.get("cluster_id") == k_int), None)
+            label_obj = next((lab for lab in self._load_data_cluster_labels() if lab.get("cluster_id") == k_int), None)
             if label_obj is None:
                 label_obj = {
                     "cluster_id": k_int,
@@ -1094,6 +1094,151 @@ class ViewerState:
             if M is not None:
                 scores += M[:, slots].sum(axis=1)
         return self._top_examples(scores, examples, top_n)
+
+    def _ensure_example_scores(self, mats) -> None:
+        """Per-example amplify/suppress scores (u, s) for every feature cluster, computed once.
+
+        u_{i,m} = (1/|T_m|) sum_{g in T_m}[1{C_max_{i,g} > tau} - 1{R_max_{i,g} > tau}],
+        s_{i,m} = number of T_m members firing anywhere in the pair (chosen + rejected).
+        A single blocked matmul over the dense C_max/R_max member matrices (reused from the
+        B.1 dropdown) builds both (N, K) tables, persisted under <run>/viewer_cache/ with the
+        same fingerprint as the member cache so re-clustering/rebuilds refresh them. Tab-4
+        queries then only sort a 260k column in-RAM — milliseconds, not a per-query scan.
+        """
+        if self._example_u is not None and self._example_s is not None:
+            return
+        cluster_ids = sorted(int(k) for k in self.feature_clusters.keys())
+        if not cluster_ids:
+            return
+        cache_dir = self.run_dir / "viewer_cache"
+        meta = _read_json(cache_dir / "example_scores_meta.json")
+        if (
+            all((cache_dir / f).exists() for f in ("example_u.npy", "example_s.npy", "example_cluster_ids.npy"))
+            and meta is not None
+            and meta.get("matrices") == self._member_cache_meta(mats)
+            and float(meta.get("tau", -1.0)) == self._feature_delta_tau()
+            and meta.get("cluster_ids") == cluster_ids
+        ):
+            try:
+                self._example_u = np.load(cache_dir / "example_u.npy", mmap_mode="r")
+                self._example_s = np.load(cache_dir / "example_s.npy", mmap_mode="r")
+                self._example_cluster_ids = np.load(cache_dir / "example_cluster_ids.npy")
+                logger.info(f"Loaded per-example scores from {cache_dir} (mmap).")
+                return
+            except Exception as e:
+                logger.warning(f"Failed to load per-example scores ({e}); recomputing.")
+        if self._all_member_cols is None:
+            self._all_member_cols = self._expected_member_cols()
+        n_members = int(len(self._all_member_cols))
+        K = len(cluster_ids)
+        A = np.zeros((n_members, K), dtype=np.float32)
+        for c_idx, cid in enumerate(cluster_ids):
+            feats = np.asarray(self.feature_clusters[cid], dtype=np.int64)
+            if len(feats) == 0:
+                continue
+            slots = np.searchsorted(self._all_member_cols, feats)
+            A[slots, c_idx] = 1.0
+        cluster_sizes = np.maximum(A.sum(axis=0), 1.0)
+        tau = self._feature_delta_tau()
+
+        def fire_counts(M: Optional[np.ndarray]) -> Optional[np.ndarray]:
+            if M is None:
+                return None
+            N = int(M.shape[0])
+            out = np.zeros((N, K), dtype=np.float32)
+            rows_per_block = 20_000
+            for start in range(0, N, rows_per_block):
+                end = min(start + rows_per_block, N)
+                out[start:end] = (M[start:end] > tau).astype(np.float32) @ A
+            return out
+
+        M_c = self._member_matrix(mats, "C_max")
+        M_r = self._member_matrix(mats, "R_max")
+        c_cnt = fire_counts(M_c)
+        r_cnt = fire_counts(M_r)
+        if c_cnt is None or r_cnt is None:
+            logger.warning("Member matrices unavailable; cannot build per-example scores.")
+            return
+        u = (c_cnt - r_cnt) / cluster_sizes[None, :]
+        s = c_cnt + r_cnt
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        self._save_npy(cache_dir / "example_u.npy", u)
+        self._save_npy(cache_dir / "example_s.npy", s)
+        self._save_npy(cache_dir / "example_cluster_ids.npy", np.asarray(cluster_ids, dtype=np.int64))
+        meta_tmp = cache_dir / "example_scores_meta.json.tmp"
+        with open(meta_tmp, "w", encoding="utf-8") as f:
+            json.dump({"tau": tau, "cluster_ids": cluster_ids, "matrices": self._member_cache_meta(mats)}, f)
+        os.replace(meta_tmp, cache_dir / "example_scores_meta.json")
+        self._example_u = u
+        self._example_s = s
+        self._example_cluster_ids = np.asarray(cluster_ids, dtype=np.int64)
+        logger.info(f"Built per-example scores u/s ({u.shape}) and persisted under {cache_dir}.")
+
+    def _inspect_feature_samples(self, m: int, k: int, side: str = "amplify") -> Dict[str, Any]:
+        """Top preference examples whose labels amplify or suppress feature cluster T_m.
+
+        The inverse of inspect_prompt: instead of asking what a prompt predicts about a
+        behavior, pick a behavior (T_m) and get the training pairs whose labels drive it.
+        Amplify  (u > 0): the chosen response fires the cluster more than the rejected one —
+                       post-training rewards this behavior.
+        Suppress (u < 0): the rejected response fires it more — post-training penalizes it.
+        u/s come from the precomputed per-example tables (see _ensure_example_scores), so a
+        query is just a filtered sort of one 260k column — milliseconds.
+        """
+        m_int = int(m)
+        k = max(1, min(int(k), 200))
+        side = side if side in ("amplify", "suppress") else "amplify"
+        cache_key = f"inspectSamples_{m_int}_{side}"
+
+        def build() -> Dict[str, Any]:
+            feats = np.asarray(self.feature_clusters.get(m_int, []), dtype=np.int64)
+            label = self._load_feature_cluster_labels().get(m_int)
+            base = {
+                "cluster_m": m_int,
+                "label": label or {"title": f"Feature cluster T_{m}", "description": "", "keywords": []},
+                "n_features": int(len(feats)),
+                "side": side,
+                "samples": [],
+            }
+            if len(feats) == 0:
+                return base
+            mats = self._load_feature_matrices()
+            examples = self._load_examples()
+            if mats is None or examples is None:
+                return base
+            self._ensure_example_scores(mats)
+            if self._example_u is None or self._example_cluster_ids is None:
+                return base
+            pos = np.searchsorted(self._example_cluster_ids, m_int)
+            if pos >= len(self._example_cluster_ids) or int(self._example_cluster_ids[pos]) != m_int:
+                return base
+            u = np.asarray(self._example_u[:, pos], dtype=np.float32)
+            s = np.asarray(self._example_s[:, pos], dtype=np.float32)
+            present = np.flatnonzero(s > 0)
+            if len(present) == 0:
+                return base
+            order = present[np.argsort(-u[present], kind="stable")]
+            if side == "suppress":
+                order = order[::-1]
+            samples = []
+            for i in order[:k]:
+                i = int(i)
+                if i >= len(examples):
+                    continue
+                ex = examples[i]
+                u_i = float(u[i])
+                samples.append({
+                    "index": i,
+                    "u": u_i,
+                    "s": float(s[i]),
+                    "effect_direction": "Amplified after DPO" if u_i > 0 else ("Suppressed after DPO" if u_i < 0 else "Neutral"),
+                    "prompt": self._example_field(ex, "prompt")[-600:],
+                    "chosen": self._example_field(ex, "chosen")[-400:],
+                    "rejected": self._example_field(ex, "rejected")[-400:],
+                })
+            return {**base, "samples": samples}
+
+        return self._cached_info(cache_key, build)
 
     @staticmethod
     def _csr_col(a: Any, i: int) -> np.ndarray:
@@ -1233,7 +1378,7 @@ def get_run_data() -> Dict[str, Any]:
     return {
         "summary": state.summary,
         "validation_metrics": validation_metrics,
-        "cluster_labels": state._data_cluster_labels(),
+        "cluster_labels": state._load_data_cluster_labels(),
         "feature_cluster_labels": state._load_feature_cluster_labels(),
         "top_feature_conditioned_hypotheses": state._cluster_covered_hypos(state.fc_hypos, 30),
         "top_prompt_conditioned_hypotheses": state._cluster_covered_hypos(state.pc_hypos, 5),
@@ -1246,6 +1391,15 @@ def get_feature_cluster_info(m: int = Query(..., description="Feature cluster id
     """Whole-cluster interpretation for SAE feature cluster T_m."""
     state = get_state()
     return state._feature_cluster_info(m, top_n_examples=top_n)
+
+
+@app.get("/api/inspect_feature_samples")
+def get_inspect_feature_samples(m: int = Query(..., description="Feature cluster id T_m"),
+                                k: int = Query(50, ge=1, le=200, description="Number of top samples"),
+                                side: str = Query("amplify", description="'amplify' (chosen carries concept) or 'suppress' (rejected carries concept)")) -> Dict[str, Any]:
+    """Inverse of /api/inspect_prompt: top training examples whose labels amplify/suppress feature cluster T_m."""
+    state = get_state()
+    return state._inspect_feature_samples(m, k, side)
 
 
 @app.get("/api/pc_cluster_examples")
