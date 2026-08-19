@@ -130,14 +130,24 @@ def audit_single_pair(
     # Metric 3: Stochastic Batch Visibility Chance (B=64, N_total=260k)
     batch_visibility_pct = min(100.0, (1.0 - (1.0 - sample_count / 260000.0)**64) * 100.0)
 
-    # Metric 4: Statistical Welch z-score approximation
+    # Metric 4: Statistical Welch z-score against global population (Paper Appendix B.1.4)
     if sample_count <= 1:
-        welch_z = 0.0  # Undefined variance, fails significance test
+        welch_z = 0.0  # Undefined variance, fails significance test (CI -> inf)
     else:
         sample_u = u_mat[matching_indices, pos_a]
-        u_mean = float(np.mean(sample_u))
-        u_std = float(np.std(sample_u)) + 1e-6
-        welch_z = float((u_mean - 0.0) / (u_std / math.sqrt(sample_count)))
+        out_mask = np.ones(u_mat.shape[0], dtype=bool)
+        out_mask[matching_indices] = False
+        out_u = u_mat[out_mask, pos_a]
+
+        mean_in = float(np.mean(sample_u))
+        mean_out = float(np.mean(out_u))
+        var_in = float(np.var(sample_u, ddof=1))
+        var_out = float(np.var(out_u, ddof=1))
+
+        # Effective variance floored at global population variance if sample variance collapses (N=2 identical)
+        effective_var_in = max(var_in, var_out)
+        se = math.sqrt((effective_var_in / sample_count) + (var_out / max(1, len(out_u))))
+        welch_z = float((mean_in - mean_out) / max(1e-6, se))
 
     # Composite Generalization Risk Score
     risk_score = 100.0 * (1.0 - (coverage_ratio / 100.0)) * math.exp(-sample_count / 50.0)
