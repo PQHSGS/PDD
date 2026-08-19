@@ -30,14 +30,14 @@
     "save_every_batches": 1000
   },
   "feature_clusters": {
-    "top_pct": 0.5,
-    "min_community_size": 4,
+    "top_pct": 0.2,
+    "min_community_size": 5,
     "min_firing_freq": 0.001,
     "block_size": 2048,
     "resolution_parameter": 10
   },
   "feature_conditioned": {
-    "tau": 0.1,
+    "tau": 0.03,
     "silent_pct": 5.0,
     "n_data_clusters": 1024,
     "min_feat_cluster_size": 10,
