@@ -1625,11 +1625,11 @@ if (clustersMasterList) {
             clusterId: p.feature_cluster_m,
             badgeClass: "badge-t",
             badgeText: `T_${p.feature_cluster_m}`,
-            title: `${word}: T_${p.feature_cluster_m} (${kStr})`,
+            title: `${word}: T_${p.feature_cluster_m} ${p.feature_cluster_title ? `— ${p.feature_cluster_title}` : `(${kStr})`}`,
             summary: p.explanation,
             tagHtml: `<span class="pill ${pill}">${emoji} ${word}</span>`,
             explanation: p.explanation,
-            metaHtml: `Pair: <strong>${kStr} × T_${esc(p.feature_cluster_m)}</strong> | Disparity Δ: <strong>+${Number(p.delta).toFixed(4)}</strong> | Welch z: <strong>${Number(p.z_score).toFixed(2)}</strong> | Strength: <strong>${esc(p.signal_strength)}</strong>`
+            metaHtml: `Pair: <strong>${kStr} × T_${esc(p.feature_cluster_m)}</strong> | Disparity Δ: <strong>${Number(p.delta) >= 0 ? '+' : ''}${Number(p.delta).toFixed(4)}</strong> | Welch z: <strong>${Number(p.z_score).toFixed(2)}</strong> | Strength: <strong>${esc(p.signal_strength)}</strong>`
           });
         });
       });
@@ -1923,7 +1923,7 @@ if (clustersMasterList) {
       </button>`).join("");
     samplesMetaRow.innerHTML = `
       <div style="font-size:0.85rem;color:var(--text-muted); margin-bottom:6px;">${filtered.length} feature clusters — click one to rank its training samples ${chips ? "· ★ = has B.1 hypotheses" : ""}</div>
-      <div class="cluster-pills-bar" style="max-height:120px; overflow-y:auto;">${chips || '<span style="color:var(--text-muted);">No matching clusters.</span>'}</div>`;
+      <div class="cluster-pills-bar" style="max-height:220px; overflow-y:auto; padding:4px;">${chips || '<span style="color:var(--text-muted);">No matching clusters.</span>'}</div>`;
     document.querySelectorAll("[data-samp-m]").forEach(btn => {
       btn.addEventListener("click", () => selectInspectorSampleCluster(Number(btn.dataset.sampM)));
     });

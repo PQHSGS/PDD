@@ -30,14 +30,14 @@
     "save_every_batches": 1000
   },
   "feature_clusters": {
-    "top_pct": 0.3,
-    "min_community_size": 5,
-    "min_firing_freq": 0.0001,
+    "top_pct": 0.5,
+    "min_community_size": 4,
+    "min_firing_freq": 0.001,
     "block_size": 2048,
     "resolution_parameter": 10
   },
   "feature_conditioned": {
-    "tau": 0.05,
+    "tau": 0.1,
     "silent_pct": 5.0,
     "n_data_clusters": 1024,
     "min_feat_cluster_size": 10,
@@ -56,12 +56,12 @@
   },
   "auto_label": {
     "enabled": true,
-    "label_model": "Qwen/Qwen3-1.7B",
+    "label_model": "google/gemma-3-4b-it",
     "heuristic": false,
     "num_clusters": -1,
     "skip_feature_clusters": false,
     "skip_pc_examples": false,
-    "pc_n_top": 15,
+    "pc_n_top": 10,
     "max_prompt_chars": 600,
     "max_examples": 20
   },

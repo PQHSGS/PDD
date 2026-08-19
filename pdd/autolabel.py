@@ -79,7 +79,8 @@ _STOPWORDS = frozenset({
     "there", "these", "things", "those", "though", "through", "together", "toward",
     "under", "until", "using", "various", "welcome", "where", "whether", "which",
     "while", "whose", "within", "without", "would", "write", "writing", "yours",
-    "assistant", "human", "prompt", "response", "chosen", "rejected",
+    "assistant", "human", "prompt", "response", "chosen", "rejected", "promoted",
+    "suppressed",
 })
 
 
@@ -165,7 +166,10 @@ class ClusterAutoLabeler:
     def _keyword_label(self, cluster_id: int, centroid_prompts: List[str], sample_prompts: List[str]) -> ClusterLabel:
         """Keyword-heuristic label (used directly as the LLM fallback for feature clusters too)."""
         all_text = " ".join(centroid_prompts + sample_prompts).lower()
-        words = [w.strip(".,!?;:\"'") for w in all_text.split() if len(w) > 4 and w not in _STOPWORDS]
+        words = [
+            w for w in (w.strip(".,!?;:'\"()") for w in all_text.split())
+            if len(w) > 4 and w not in _STOPWORDS
+        ]
 
         from collections import Counter
         word_counts = Counter(words)
@@ -253,6 +257,8 @@ class LLMClusterLabeler(ClusterAutoLabeler):
 
         logger.info(f"Loading label model {self.model_path} on {device}...")
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_path)
+        if self._tokenizer.pad_token_id is None:
+            self._tokenizer.pad_token_id = self._tokenizer.eos_token_id
         self._model = AutoModelForCausalLM.from_pretrained(
             self.model_path, torch_dtype=dtype, device_map=device
         )
@@ -264,6 +270,18 @@ class LLMClusterLabeler(ClusterAutoLabeler):
     def _truncate(text: str, max_chars: int) -> str:
         text = text.strip().replace("\n", " ")
         return text[:max_chars] if len(text) > max_chars else text
+
+    @staticmethod
+    def _chat_template_kwargs() -> Dict[str, Any]:
+        """Thinking-control kwargs for the label model's chat template.
+
+        The kwarg name is model-family-specific: Qwen3 templates read
+        ``enable_thinking``; Gemma3 reads ``thinking`` + ``max_thinking_length``.
+        Jinja silently ignores unknown template vars (no exception), so a wrong
+        name is a silent no-op — pass all known names and let each template pick
+        up the one it knows.
+        """
+        return {"enable_thinking": False, "thinking": False, "max_thinking_length": 0}
 
     @staticmethod
     def _extract_json(text: str) -> Optional[Dict[str, Any]]:
@@ -350,39 +368,58 @@ class LLMClusterLabeler(ClusterAutoLabeler):
 
         if not texts:
             return None
-        examples = "\n".join(f"{i}. {self._truncate(t, self.max_prompt_chars)}" for i, t in enumerate(texts, 1))
-        what = "responses" if kind == "response" else "prompts"
-        instruction = (
-            f"Summarize the common theme of these representative {what} from an RLHF preference dataset into a dense semantic concept label.\n\n"
-            f"{examples}\n\n"
-            "Rules:\n"
-            "- 'title': 2-5 words naming the specific topic/task. NEVER include meta words like 'Cluster', 'User Prompts', 'Response', or 'Labeling'.\n"
-            "- 'description': 1 concise sentence describing the core topic directly without filler phrases.\n"
-            "- 'keywords': 3-5 specific domain keywords (lowercase).\n\n"
-            'Output ONLY a valid JSON object, e.g. {"title": "Gardening Tips", "description": "Prompts about pruning, trimming and plant care.", "keywords": ["pruning", "gardening", "plants"]}. '
-            "Do NOT reason. Do NOT explain. Output ONLY the JSON object, nothing else."
-        )
+        self.load()
+        examples = "\n\n".join(f"[{i}]\n{self._truncate(t, self.max_prompt_chars)}" for i, t in enumerate(texts, 1))
+
+        if kind == "response":
+            instruction = (
+                "You are analyzing a Sparse Autoencoder (SAE) feature cluster extracted from model activations. "
+                "Below are representative prompt-response pairs from an RLHF dataset where this specific feature cluster fires strongly:\n\n"
+                f"{examples}\n\n"
+                "Task: Identify the specific concept, coding pattern, mathematical/reasoning technique, tone, or domain topic shared across these firing responses.\n\n"
+                "Rules:\n"
+                "- 'title': 2-5 words naming the core concept specifically (e.g. 'Binary Search Algorithms', 'LaTeX Proof Formulations', 'HTML Form Input Validation', 'Python Type Annotations'). NEVER use meta words like 'Cluster', 'User Prompts', 'Response', or 'Labeling'.\n"
+                "- 'description': 1 concise sentence describing the shared semantic concept or behavioral attribute.\n"
+                "- 'keywords': 3-5 specific domain keywords (lowercase).\n\n"
+                'Output ONLY a valid JSON object, e.g. {"title": "Binary Tree Traversal", "description": "Implementations and explanations of tree traversal algorithms.", "keywords": ["binary tree", "tree traversal", "algorithms", "recursion"]}.\n'
+                "Do NOT output markdown commentary or conversational filler. Output ONLY the JSON object."
+            )
+        else:
+            instruction = (
+                "You are analyzing a prompt topic cluster from an instruction-tuning preference dataset. "
+                "Below are representative user prompts belonging to this cluster:\n\n"
+                f"{examples}\n\n"
+                "Task: Identify the specific task category, user intent, or domain topic shared across these prompts.\n\n"
+                "Rules:\n"
+                "- 'title': 2-5 words naming the specific user intent or domain (e.g. 'Python Scripting Assistance', 'Creative Short Story Writing', 'Algebra Problem Solving'). NEVER use meta words like 'Cluster', 'User Prompts', 'Response', or 'Labeling'.\n"
+                "- 'description': 1 concise sentence describing the user requests in this cluster.\n"
+                "- 'keywords': 3-5 specific domain keywords (lowercase).\n\n"
+                'Output ONLY a valid JSON object, e.g. {"title": "Python Scripting Assistance", "description": "User requests for writing, debugging, and explaining Python scripts.", "keywords": ["python", "scripting", "debugging", "functions"]}.\n'
+                "Do NOT output markdown commentary or conversational filler. Output ONLY the JSON object."
+            )
         messages = [{"role": "user", "content": instruction}]
+        template_kwargs = self._chat_template_kwargs()
         try:
             inputs = self._tokenizer.apply_chat_template(
                 messages, tokenize=True, add_generation_prompt=True,
-                chat_template_kwargs={"enable_thinking": False}, return_tensors="pt",
+                return_tensors="pt", **template_kwargs,
             ).to(self._device)
         except Exception as e:
             logger.warning(
-                f"Chat template does not accept enable_thinking=False ({e}); "
+                f"Chat template rejected thinking-control kwargs {template_kwargs} ({e}); "
                 "falling back to the plain chat template (thinking mode may be on)."
             )
             inputs = self._tokenizer.apply_chat_template(
                 messages, tokenize=True, add_generation_prompt=True, return_tensors="pt",
             ).to(self._device)
 
+        pad_token_id = self._tokenizer.pad_token_id if self._tokenizer.pad_token_id is not None else self._tokenizer.eos_token_id
         with torch.no_grad():
             outputs = self._model.generate(
                 inputs,
                 max_new_tokens=512,
                 do_sample=False,
-                pad_token_id=self._tokenizer.eos_token_id,
+                pad_token_id=pad_token_id,
             )
         gen_ids = outputs[0][inputs.shape[1]:]
         text = self._tokenizer.decode(gen_ids, skip_special_tokens=True)
@@ -514,11 +551,16 @@ class AutoLabelingPipeline:
             # Dynamic sample scaling: 10 to 20 representative firing examples based on cluster size
             n_samples = min(20, max(10, len(feats) // 2))
             idxs = [int(i) for i in np.argsort(scores)[-n_samples:][::-1] if scores[int(i)] > 0 and int(i) < len(examples)]
-            texts = [(examples[i].chosen or examples[i].rejected or examples[i].prompt or "").strip() for i in idxs]
+            texts = [
+                f"Prompt: {(examples[i].prompt or '').strip()[:180]}\n"
+                f"Chosen (Promoted): {(examples[i].chosen or '').strip()[:200]}\n"
+                f"Rejected (Suppressed): {(examples[i].rejected or '').strip()[:200]}"
+                for i in idxs
+            ]
 
+            fallback = labeler._keyword_label(m, texts, [])
             if isinstance(labeler, LLMClusterLabeler):
                 # Keyword-heuristic fallback only — never fire an extra LLM call here.
-                fallback = labeler._keyword_label(m, texts, [])
                 parsed = labeler._label_dict(texts, kind="response")
                 if parsed is None:
                     logger.warning(f"LLM label for T_{m} was not valid JSON; using keyword fallback.")
@@ -526,7 +568,6 @@ class AutoLabelingPipeline:
                 else:
                     title, desc, kws = labeler._clean_label(parsed, fallback)
             else:
-                fallback = labeler.generate_label(m, texts, [])
                 title, desc, kws = fallback.title, fallback.description, fallback.keywords
 
             labels[str(m)] = {

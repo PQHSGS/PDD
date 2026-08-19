@@ -113,16 +113,14 @@ class AutoLabelConfig:
     feature_cluster_labels.json, prompt_conditioned_cluster_examples.json).
     """
     enabled: bool = True
-    label_model: str = "Qwen/Qwen3-1.7B"     # Local chat model (post-trained variant) for LLM labels
-                                           # NB: prompt template MUST include a full JSON example for
-                                           # reliable output (see LLMClusterLabeler._label_dict)
-    heuristic: bool = False                    # Keyword labels instead of the local LLM
-    num_clusters: int = -1                     # Data clusters B_k to label (-1 = all active)
-    skip_feature_clusters: bool = False        # Skip Pass 2 (T_m whole-cluster labels)
-    skip_pc_examples: bool = False             # Skip Pass 3 (A_k / R_m example indices)
-    pc_n_top: int = 12                         # Examples per A_k / R_m in Pass 3
-    max_prompt_chars: int = 600                # Max text length shown to the LLM
-    max_examples: int = 10                     # Max examples per cluster shown to the LLM
+    label_model: str = "google/gemma-3-4b-it" # Local chat model for LLM labels
+    heuristic: bool = False                   # Keyword labels instead of the local LLM
+    num_clusters: int = -1                    # Data clusters B_k to label (-1 = all active)
+    skip_feature_clusters: bool = False       # Skip Pass 2 (T_m whole-cluster labels)
+    skip_pc_examples: bool = False            # Skip Pass 3 (A_k / R_m example indices)
+    pc_n_top: int = 15                        # Examples per A_k / R_m in Pass 3
+    max_prompt_chars: int = 600               # Max text length shown to the LLM
+    max_examples: int = 15                    # Max examples per cluster shown to the LLM
 
     def validate(self) -> None:
         if not self.label_model:

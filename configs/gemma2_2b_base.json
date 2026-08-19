@@ -56,14 +56,14 @@
   },
   "auto_label": {
     "enabled": true,
-    "label_model": "Qwen/Qwen3-1.7B",
+    "label_model": "google/gemma-3-4b-it",
     "heuristic": false,
     "num_clusters": -1,
     "skip_feature_clusters": false,
     "skip_pc_examples": false,
-    "pc_n_top": 12,
+    "pc_n_top": 15,
     "max_prompt_chars": 600,
-    "max_examples": 10
+    "max_examples": 15
   },
   "dpo_validation": {
     "train_samples": -1,

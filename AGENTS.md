@@ -67,6 +67,9 @@ LaTeX source) — read the relevant appendix section before touching a module.
 ## Experiment Scripts (`experiments/`)
 
 - `p4_dpo_validation.py`: DPO validation. `load_validated_cluster_ids()` builds the hypothesis-set cluster IDs from the config thresholds — this IS the validation universe (R² is measured ONLY over these clusters, never the whole Leiden partition; falls back to the full partition with a warning if `feature_conditioned_hypotheses.json` is missing); `compute_cluster_validation(..., valid_ids=...)` computes the metrics; `eval_epoch` emits per-epoch metrics saved to `p4_r2_metrics.json`/`p4_r2_by_epoch.json`. Observed on the 65k run: hypothesis-set R²=0.0171 (29 of 118 clusters) — still noise-level, so the low R² is a signal-quality issue (u_bar vs empirical Δ mismatch), not a cluster-count/threshold one.
+- `audit_feature_clusters.py`: Standalone diagnostic tool for Leiden cluster size distributions, SAE feature retention rates, and hypothesis coverage across `--config`, `--run_dir`, or `--clusters_json`.
+- `test_mode_a_prediction.py`: Combined Mode A (Prompt -> Predicted Shifts) + Tab 4 (Behavior -> Driving Dataset Pairs) causal test tool. Evaluates live prompt activations on the GPU and fetches ground-truth training pairs that explain each predicted shift (`--url http://localhost:9000`, `--prompt "..."`, or `--test_cluster <m>`). Includes 10 cross-domain benchmark test cases.
+- `test_mode_b_prediction.py`: Mode B (Preference Pair Audit) live disparity test tool. Executes live batched GPU forward passes on $(x, y_c, y_r)$ to measure exact SAE feature disparity $u = \mathbf{1}\{C > 0.01\} - \mathbf{1}\{R > 0.01\}$, surfacing ▲ Promoted vs ▼ Suppressed concepts across 8 diverse domains.
 - Known tokenizer facts: Qwen3 has NO BOS and right-pads; Gemma2 has BOS + left-pads. Robust positional mask = `attention_mask.argmax() + prompt_len + tokenizer_offset`.
 - LoRA gradient graph: `enable_input_require_grads()` is called for **both** full and LoRA modes — for LoRA, frozen base embeddings don't require grad by default, so without this hook the backward graph is severed and `loss.backward()` raises "element 0 of tensors does not require grad". `gradient_checkpointing_enable()` is gated on `lora_rank == 0` only — it breaks LoRA by detaching intermediate activations across checkpointed segments. Batched SAE encodes: zero-pad the window, do ONE `sae.encode`, then slice back — matches per-window output.
 
@@ -85,9 +88,11 @@ LaTeX source) — read the relevant appendix section before touching a module.
 - Feature clusters: binary-MI graph (top 1% off-diagonal pairs, normalized MI),
   Leiden, keep communities ≥4 features.
 - Auto-labeling stage (B.1.7 + viewer interpretation, `pdd/autolabel.py`, final
-  pipeline stage): Pass 1 labels data clusters B_k from real centroid/random
-  sampled prompts via the B.1 `s_matrix`; Pass 2 labels feature clusters T_m from
-  the real response examples firing them (C_max+R_max), independent of Neuronpedia;
+  pipeline stage): Powered by `google/gemma-3-4b-it` (128k context, 90.2% IFEval)
+  for structured semantic synthesis. Pass 1 labels data clusters B_k from real
+  centroid/random sampled prompts via the B.1 `s_matrix` (30 centroid + 20 random prompts, 600 chars);
+  Pass 2 labels feature clusters T_m using structured Prompt + Chosen (Promoted) + Rejected (Suppressed)
+  exemplars firing them (C_max+R_max), capturing the full preference delta contrast;
   Pass 3 maps prompt clusters A_k / response-delta clusters R_m to their strongest
   real examples (c_matrix / |u_matrix|). Reuses the in-memory fc/pc results — no
   recompute. Artifact paths are shared with the viewer via the helpers in

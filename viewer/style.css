@@ -857,13 +857,15 @@ body {
   display: grid;
   grid-template-columns: 380px 1fr;
   gap: 20px;
-  height: 720px;
+  min-height: 680px;
+  height: calc(100vh - 210px);
 }
 
 @media (max-width: 900px) {
   .clusters-explorer-grid {
     grid-template-columns: 1fr;
     height: auto;
+    min-height: 0;
   }
 }
 
@@ -874,6 +876,8 @@ body {
   border-radius: var(--radius-md);
   background: var(--bg-page);
   overflow: hidden;
+  min-height: 0;
+  height: 100%;
 }
 
 .pane-header {
@@ -885,6 +889,7 @@ body {
   border-bottom: 1px solid var(--border-color);
   font-size: 0.85rem;
   font-weight: 700;
+  flex-shrink: 0;
 }
 
 .pane-count {
@@ -900,6 +905,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-height: 0;
 }
 
 .cluster-master-item {
@@ -912,9 +918,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-width: 100%;
-  overflow: hidden;
+  width: 100%;
   box-sizing: border-box;
+  flex-shrink: 0;
 }
 
 .cluster-master-item:hover {
@@ -934,7 +940,7 @@ body {
   align-items: flex-start;
   gap: 8px;
   flex-wrap: wrap;
-  max-width: 100%;
+  width: 100%;
 }
 
 .cluster-badge {
@@ -956,10 +962,8 @@ body {
   font-size: 0.86rem;
   font-weight: 600;
   color: var(--text-main);
-  line-height: 1.3;
+  line-height: 1.35;
   word-break: break-word;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .cluster-item-meta {

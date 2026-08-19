@@ -231,16 +231,19 @@ class ViewerState:
         return self.k_to_fc
 
     @property
+    def _fc_cfg(self) -> Dict[str, Any]:
+        """The run's feature-conditioned config block (all thresholds are config-driven)."""
+        return self.summary.get("config", {}).get("feature_conditioned", {})
+
+    @property
     def min_feat_cluster_size(self) -> int:
         """Configured minimum feature cluster size for hypothesis emission and predictions (from config JSON)."""
-        fc_cfg = self.summary.get("config", {}).get("feature_conditioned", {})
-        return int(fc_cfg.get("min_feat_cluster_size", 10))
+        return int(self._fc_cfg.get("min_feat_cluster_size", 10))
 
     @property
     def min_data_cluster_size(self) -> int:
         """Configured minimum data cluster size n_k for hypothesis emission (from config JSON)."""
-        fc_cfg = self.summary.get("config", {}).get("feature_conditioned", {})
-        return int(fc_cfg.get("min_data_cluster_size", 25))
+        return int(self._fc_cfg.get("min_data_cluster_size", 25))
 
     @property
     def min_partition_cluster_size(self) -> int:
@@ -689,6 +692,14 @@ class ViewerState:
             return ex.get(key, "") or ""
         return getattr(ex, key, "") or ""
 
+    def _example_view(self, ex: Any) -> Dict[str, str]:
+        """Truncated prompt/chosen/rejected text fields for one example (shared by all sample lists)."""
+        return {
+            "prompt": self._example_field(ex, "prompt")[-600:],
+            "chosen": self._example_field(ex, "chosen")[-400:],
+            "rejected": self._example_field(ex, "rejected")[-400:],
+        }
+
     def _top_examples(self, scores: np.ndarray, examples, top_n: int) -> List[Dict[str, Any]]:
         """Top examples by per-example score: index, score, and truncated text fields."""
         out: List[Dict[str, Any]] = []
@@ -701,9 +712,7 @@ class ViewerState:
             out.append({
                 "index": int(i),
                 "score": float(scores[i]),
-                "prompt": self._example_field(ex, "prompt")[-600:],
-                "chosen": self._example_field(ex, "chosen")[-400:],
-                "rejected": self._example_field(ex, "rejected")[-400:],
+                **self._example_view(ex),
             })
             if len(out) >= top_n:
                 break
@@ -767,9 +776,7 @@ class ViewerState:
                 desc = f"prompt expressing A_{cid}"
             out.append({
                 "index": int(i),
-                "prompt": self._example_field(ex, "prompt"),
-                "chosen": self._example_field(ex, "chosen"),
-                "rejected": self._example_field(ex, "rejected"),
+                **self._example_view(ex),
                 "note": desc,
             })
         return out
@@ -902,7 +909,7 @@ class ViewerState:
 
     def _feature_delta_tau(self) -> float:
         """The B.1 tau threshold the cached per-feature delta was computed with."""
-        return float(self.summary.get("config", {}).get("feature_conditioned", {}).get("tau", 0.01))
+        return float(self._fc_cfg.get("tau", 0.01))
 
     def _persist_feature_delta(self) -> None:
         cache_dir = self.run_dir / "viewer_cache"
@@ -1234,9 +1241,7 @@ class ViewerState:
                     "u": u_i,
                     "s": float(s[i]),
                     "effect_direction": "Amplified after DPO" if u_i > 0 else ("Suppressed after DPO" if u_i < 0 else "Neutral"),
-                    "prompt": self._example_field(ex, "prompt")[-600:],
-                    "chosen": self._example_field(ex, "chosen")[-400:],
-                    "rejected": self._example_field(ex, "rejected")[-400:],
+                    **self._example_view(ex),
                 })
             return {**base, "total_matching": int(len(present)), "samples": samples}
 
@@ -1317,9 +1322,7 @@ class ViewerState:
                         str(m): "Amplified after DPO" if u[i] > 0 else "Suppressed after DPO"
                         for (m, _, _), u in zip(conds, col_u)
                     },
-                    "prompt": self._example_field(ex, "prompt")[-600:],
-                    "chosen": self._example_field(ex, "chosen")[-400:],
-                    "rejected": self._example_field(ex, "rejected")[-400:],
+                    **self._example_view(ex),
                 })
             return {**base, "total_matching": int(len(idxs)), "conditions": cond_list, "samples": samples}
 
@@ -1542,21 +1545,15 @@ def get_cluster_detail(type: str = Query(..., description="'data' (B_k), 'featur
         return {"cluster_family": "B", "cluster_type": "data", "id": id, **state._data_cluster_info(id, top_n_examples=top_n)}
     elif t in ("feature", "t", "tm"):
         return {"cluster_family": "T", "cluster_type": "feature", "id": id, **state._feature_cluster_info(id, top_n_examples=top_n)}
-    elif t in ("prompt", "a", "ak"):
+    elif t in ("prompt", "a", "ak", "response", "r", "rm"):
+        is_prompt = t in ("prompt", "a", "ak")
+        cluster_type = "prompt" if is_prompt else "response"
         return {
-            "cluster_family": "A",
-            "cluster_type": "prompt",
+            "cluster_family": "A" if is_prompt else "R",
+            "cluster_type": cluster_type,
             "id": id,
-            "tokens": state._pc_cluster_tokens("prompt", id),
-            "examples": state._pc_cluster_top_examples("prompt", id, top_n=top_n),
-        }
-    elif t in ("response", "r", "rm"):
-        return {
-            "cluster_family": "R",
-            "cluster_type": "response",
-            "id": id,
-            "tokens": state._pc_cluster_tokens("response", id),
-            "examples": state._pc_cluster_top_examples("response", id, top_n=top_n),
+            "tokens": state._pc_cluster_tokens(cluster_type, id),
+            "examples": state._pc_cluster_top_examples(cluster_type, id, top_n=top_n),
         }
     raise HTTPException(400, f"Unsupported cluster type: '{type}'. Allowed: data (B), feature (T), prompt (A), response (R).")
 
@@ -1685,6 +1682,9 @@ def inspect_preference_pair(req: PreferencePairInspectionRequest) -> Dict[str, A
     # 4. Extract Promoted vs. Suppressed Concepts from the LIVE disparity
     # Map feature cluster m -> strongest hypothesis referencing it (for context).
     best_by_m = state._best_hypothesis_by_m()
+    labels_t = state._load_feature_cluster_labels()
+    labels_b = state._load_data_cluster_labels()
+    b_title_map = {int(lab.get("cluster_id")): lab.get("title", f"Data Cluster B_{lab.get('cluster_id')}") for lab in labels_b if "cluster_id" in lab}
 
     promoted_concepts = []
     suppressed_concepts = []
@@ -1697,17 +1697,23 @@ def inspect_preference_pair(req: PreferencePairInspectionRequest) -> Dict[str, A
         k = h.get("k")
         z = float(h.get("z_score", 0.0))
         is_chosen = uval > 0
+        t_info = labels_t.get(int(m), {}) if m is not None else {}
+        t_title = t_info.get("title", f"Feature cluster T_{m}")
+        b_title = b_title_map.get(int(k), f"Topic B_{k}") if k is not None else "N/A"
+
         item = {
             "feature_cluster_m": m,
+            "feature_cluster_title": t_title,
             "data_cluster_k": k,
+            "data_cluster_title": b_title,
             "delta": float(uval),
             "hypothesis_delta": float(h.get("delta", 0.0)),
             "z_score": z,
             "signal_strength": "Strong" if abs(uval) > 0.15 else ("Moderate" if abs(uval) > 0.05 else "Weak"),
             "explanation": (
-                f"Live SAE disparity: the chosen response fires feature cluster T_{m} "
+                f"Live SAE disparity: the chosen response fires feature cluster T_{m} ({t_title}) "
                 f"more than the rejected (net u = {uval:+.3f})."
-                + (f" Consistent with training hypothesis B_{k} (Δ = {h.get('delta', 0.0):+.4f}, Welch z = {z:.2f})." if k is not None else "")
+                + (f" Consistent with training hypothesis B_{k} ({b_title}) (Δ = {h.get('delta', 0.0):+.4f}, Welch z = {z:.2f})." if k is not None else "")
             ),
         }
         if is_chosen:
@@ -1768,7 +1774,6 @@ def main():
         _STATE.prewarm()
 
     # Pre-warm cached examples in a background daemon thread to eliminate first-click disk latency
-    import threading
     threading.Thread(target=_STATE._load_examples, daemon=True).start()
 
     logger.info(f"Starting PDD Viewer for '{args.run_dir}' at http://localhost:{args.port}")
