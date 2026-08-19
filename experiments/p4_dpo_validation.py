@@ -12,9 +12,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 from dataclasses import asdict
 from typing import List, Optional, Set
+
+# Kaggle/Colab compatibility: prevent broken preinstalled torchvision C++ ABI from crashing transformers
+try:
+    import torchvision  # noqa: F401
+except Exception:
+    sys.modules["torchvision"] = None
+    sys.modules["torchvision.io"] = None
+    sys.modules["torchvision.ops"] = None
+
 import numpy as np
 import torch
 
