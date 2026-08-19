@@ -59,7 +59,10 @@ class FeatureConditionedResult:
         """Persist intermediate matrices and hypotheses to fast npz checkpoint."""
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
         hypo_json = json.dumps([asdict(h) for h in self.hypotheses])
-        tmp_path = filepath + ".tmp"
+        # np.savez automatically appends .npz if not present; use .tmp.npz for atomic replace
+        base_path = filepath[:-4] if filepath.endswith(".npz") else filepath
+        tmp_path = base_path + ".tmp.npz"
+        target_path = base_path + ".npz"
         np.savez(
             tmp_path,
             s_matrix=self.s_matrix,
@@ -69,7 +72,7 @@ class FeatureConditionedResult:
             silent_mask=self.silent_mask,
             hypotheses_json=np.array(hypo_json),
         )
-        os.replace(tmp_path, filepath)
+        os.replace(tmp_path, target_path)
 
     @classmethod
     def load_checkpoint(cls, filepath: str) -> FeatureConditionedResult:

@@ -54,7 +54,10 @@ class PromptConditionedResult:
         hypo_json = json.dumps([asdict(h) for h in self.hypotheses])
         p_clusters_json = json.dumps({str(k): v for k, v in self.prompt_clusters.items()})
         r_clusters_json = json.dumps({str(k): v for k, v in self.resp_clusters.items()})
-        tmp_path = filepath + ".tmp"
+        # np.savez automatically appends .npz if not present; use .tmp.npz for atomic replace
+        base_path = filepath[:-4] if filepath.endswith(".npz") else filepath
+        tmp_path = base_path + ".tmp.npz"
+        target_path = base_path + ".npz"
         np.savez(
             tmp_path,
             c_matrix=self.c_matrix,
@@ -63,7 +66,7 @@ class PromptConditionedResult:
             resp_clusters_json=np.array(r_clusters_json),
             hypotheses_json=np.array(hypo_json),
         )
-        os.replace(tmp_path, filepath)
+        os.replace(tmp_path, target_path)
 
     @classmethod
     def load_checkpoint(cls, filepath: str) -> PromptConditionedResult:
