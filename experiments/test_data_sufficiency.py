@@ -190,6 +190,7 @@ def evaluate_sufficiency(
     interference_cluster: Optional[int] = None,
     bottlenecks_json: Optional[str] = None,
     top_k: int = 20,
+    max_joint: int = 10,
     tau: float = 0.08,
     json_file: Optional[str] = None,
     export_report: Optional[str] = None,
@@ -295,7 +296,7 @@ def evaluate_sufficiency(
         else:
             print(f"No target cluster specified. Running auto-discovery on Top {top_k} deficits in mode '{mode}'...")
             if find_bottlenecks is not None:
-                bottlenecks_list = find_bottlenecks(run_dir=run_dir, mode=mode, tau=tau, top_k=top_k)
+                bottlenecks_list = find_bottlenecks(run_dir=run_dir, mode=mode, tau=tau, top_k=top_k, max_joint=max_joint)
             else:
                 print("Error: find_bottlenecks engine could not be imported.", file=sys.stderr)
                 sys.exit(1)
@@ -448,6 +449,7 @@ def main() -> None:
     parser.add_argument("--interference_cluster", type=int, default=None, help="Interference feature cluster ID T_B (optional)")
     parser.add_argument("--bottlenecks_json", type=str, default=None, help="Path to bottlenecks JSON file from test_data_bottlenecks.py (optional)")
     parser.add_argument("--top_k", type=int, default=20, help="Number of top bottlenecks to batch audit when target_cluster is omitted (default: 20)")
+    parser.add_argument("--max_joint", type=int, default=10, help="Maximum joint matching samples to qualify as bottleneck (default: 10)")
     parser.add_argument("--tau", type=float, default=0.08, help="Disparity activation threshold (default: 0.08)")
     parser.add_argument("--json_file", type=str, default=None, help="Custom JSON file containing candidate pairs to evaluate")
     parser.add_argument("--export_report", type=str, default=None, help="Path to export report JSON")
@@ -461,6 +463,7 @@ def main() -> None:
         interference_cluster=args.interference_cluster,
         bottlenecks_json=args.bottlenecks_json,
         top_k=args.top_k,
+        max_joint=args.max_joint,
         tau=args.tau,
         json_file=args.json_file,
         export_report=args.export_report,
