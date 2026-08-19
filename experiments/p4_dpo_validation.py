@@ -17,13 +17,14 @@ import time
 from dataclasses import asdict
 from typing import List, Optional, Set
 
-# Kaggle/Colab compatibility: prevent broken preinstalled torchvision C++ ABI from crashing transformers
-try:
-    import torchvision  # noqa: F401
-except Exception:
-    sys.modules["torchvision"] = None
-    sys.modules["torchvision.io"] = None
-    sys.modules["torchvision.ops"] = None
+# Kaggle/Colab compatibility: prevent broken preinstalled torchvision/torchaudio C++ ABI from crashing transformers
+for _pkg in ("torchvision", "torchaudio"):
+    try:
+        __import__(_pkg)
+    except Exception:
+        sys.modules[_pkg] = None
+        sys.modules[f"{_pkg}.io"] = None
+        sys.modules[f"{_pkg}.ops"] = None
 
 import numpy as np
 import torch
