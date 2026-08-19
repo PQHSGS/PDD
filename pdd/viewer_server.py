@@ -1594,6 +1594,10 @@ def inspect_prompt(req: PromptInspectionRequest) -> Dict[str, Any]:
 
     # 3. Extract Feature-Conditioned Predicted Shifts (B_k x T_m) from live-evidence-ranked hypotheses
     predicted_shifts = []
+    labels_t = state._load_feature_cluster_labels()
+    labels_b = state._load_data_cluster_labels()
+    b_title_map = {int(lab.get("cluster_id")): lab.get("title", f"Data Cluster B_{lab.get('cluster_id')}") for lab in labels_b if "cluster_id" in lab}
+
     for c in scored_clusters:
         ordered = sorted(c["hypos"], key=lambda h: abs(float(h.get("delta", 0.0))) * abs(act.get(h.get("m"), 0.0)), reverse=True)
         for h in ordered[:2]:
@@ -1605,10 +1609,15 @@ def inspect_prompt(req: PromptInspectionRequest) -> Dict[str, Any]:
             evidence = act.get(m, 0.0)
             is_amplified = delta > 0
 
+            t_info = labels_t.get(int(m), {}) if m is not None else {}
+            t_title = t_info.get("title", f"Feature cluster T_{m}")
+            t_desc = t_info.get("description", "")
+            b_title = b_title_map.get(int(k), f"Topic B_{k}") if k is not None else "N/A"
+
             direction_word = "AMPLIFIED (Boosted)" if is_amplified else "SUPPRESSED (Inhibited)"
             interpretation = (
-                f"This prompt fires SAE feature cluster T_{m} with live activity {evidence:.3f}. "
-                f"In the training data, examples of type B_{k} are chosen-leaning on this cluster "
+                f"This prompt fires SAE feature cluster T_{m} ({t_title}) with live activity {evidence:.3f}. "
+                f"In the training data, examples of type B_{k} ({b_title}) are chosen-leaning on this cluster "
                 f"(Δ = {delta:+.5f}, Welch z = {z:.2f}), so post-training will likely {direction_word} "
                 f"this response behavior for similar prompts."
             )
@@ -1616,6 +1625,9 @@ def inspect_prompt(req: PromptInspectionRequest) -> Dict[str, Any]:
             predicted_shifts.append({
                 "prompt_cluster_k": k,
                 "response_cluster_m": m,
+                "feature_cluster_title": t_title,
+                "feature_cluster_description": t_desc,
+                "data_cluster_title": b_title,
                 "pipeline_type": "feature_conditioned",
                 "delta": delta,
                 "effect_direction": "Amplified after DPO" if is_amplified else "Suppressed after DPO",

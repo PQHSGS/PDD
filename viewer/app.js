@@ -1331,7 +1331,7 @@ if (clustersMasterList) {
         return `
           <div class="cluster-master-item ${isActive}" data-key="${esc(s.key)}">
             <div class="cluster-item-head">
-              <div style="display:flex; align-items:center; gap:6px;">
+              <div style="display:flex; align-items:flex-start; gap:6px; min-width:0; flex:1 1 auto;">
                 <span class="cluster-badge ${esc(s.badgeClass)}">${esc(s.badgeText)}</span>
                 <span class="cluster-item-title" style="margin:0; font-size:0.85rem;">${esc(s.title)}</span>
               </div>
@@ -1603,7 +1603,7 @@ if (clustersMasterList) {
         badgeText: `B_${c.cluster_id}`,
         title: `Data Topic B_${c.cluster_id}: ${c.title || 'Matched Topic'}`,
         summary: c.description || "Matched training data distribution cluster",
-        tagHtml: '<span class="pill pill-neutral">Matched Data Topic B_' + esc(c.cluster_id) + '</span>',
+        tagHtml: '<span class="pill pill-neutral">Topic B_' + esc(c.cluster_id) + '</span>',
         explanation: c.description,
         metaHtml: `Data Cluster: <strong>B_${esc(c.cluster_id)}</strong> | Matched Keywords: ${(c.matched_keywords || []).map(k => `<span class="keyword-tag">${esc(k)}</span>`).join("")}`
       });
@@ -1612,9 +1612,9 @@ if (clustersMasterList) {
     // 2. Feature-Conditioned Predicted Shifts (B_k × T_m)
     if (currentInspectorMode === "pair") {
       [
-        { items: data.promoted_concepts || [], keyPrefix: "promoted", word: "Promoted", pill: "pill-chosen", emoji: "✅", suffix: "Reward" },
-        { items: data.suppressed_concepts || [], keyPrefix: "suppressed", word: "Suppressed", pill: "pill-rejected", emoji: "❌", suffix: "Penalty" },
-      ].forEach(({ items, keyPrefix, word, pill, emoji, suffix }) => {
+        { items: data.promoted_concepts || [], keyPrefix: "promoted", word: "Promoted", pill: "pill-chosen", emoji: "▲" },
+        { items: data.suppressed_concepts || [], keyPrefix: "suppressed", word: "Suppressed", pill: "pill-rejected", emoji: "▼" },
+      ].forEach(({ items, keyPrefix, word, pill, emoji }) => {
         items.forEach(p => {
           const kStr = p.data_cluster_k != null ? `B_${p.data_cluster_k}` : "Global";
           allInspectorSignals.push({
@@ -1625,9 +1625,9 @@ if (clustersMasterList) {
             clusterId: p.feature_cluster_m,
             badgeClass: "badge-t",
             badgeText: `T_${p.feature_cluster_m}`,
-            title: `${word} Concept T_${p.feature_cluster_m} (${kStr})`,
+            title: `${word}: T_${p.feature_cluster_m} (${kStr})`,
             summary: p.explanation,
-            tagHtml: `<span class="pill ${pill}">${emoji} ${word} (${suffix})</span>`,
+            tagHtml: `<span class="pill ${pill}">${emoji} ${word}</span>`,
             explanation: p.explanation,
             metaHtml: `Pair: <strong>${kStr} × T_${esc(p.feature_cluster_m)}</strong> | Disparity Δ: <strong>+${Number(p.delta).toFixed(4)}</strong> | Welch z: <strong>${Number(p.z_score).toFixed(2)}</strong> | Strength: <strong>${esc(p.signal_strength)}</strong>`
           });
@@ -1639,6 +1639,8 @@ if (clustersMasterList) {
         const isChosen = s.delta > 0;
         const kId = s.prompt_cluster_k;
         const mId = s.response_cluster_m;
+        const tTitle = s.feature_cluster_title || `Feature cluster T_${mId}`;
+        const bTitle = s.data_cluster_title || `Topic B_${kId}`;
         allInspectorSignals.push({
           key: `shift_fc_${mId}`,
           pipeline: "fc",
@@ -1647,11 +1649,11 @@ if (clustersMasterList) {
           clusterId: mId,
           badgeClass: "badge-t",
           badgeText: `T_${mId}`,
-          title: `Predicted Shift: T_${mId} (Topic B_${kId})`,
+          title: `T_${mId}: ${tTitle}`,
           summary: s.interpretation || "Predicted post-training shift",
           tagHtml: `<span class="pill ${isChosen ? 'pill-chosen' : 'pill-rejected'}">${esc(s.effect_direction)}</span>`,
           explanation: s.interpretation,
-          metaHtml: `Hypothesis: <strong>B_${esc(kId)} × T_${esc(mId)}</strong> | Effect Δ: <strong>${(s.delta > 0 ? '+' : '') + Number(s.delta).toFixed(5)}</strong> | Welch z: <strong>${Number(s.z_score).toFixed(2)}</strong> | Cohen's d: <strong>${Number(s.cohens_d).toFixed(2)}</strong>`
+          metaHtml: `Concept: <strong>T_${esc(mId)} (${esc(tTitle)})</strong> | Context: <strong>B_${esc(kId)} (${esc(bTitle)})</strong> | Effect Δ: <strong>${(s.delta > 0 ? '+' : '') + Number(s.delta).toFixed(5)}</strong> | Welch z: <strong>${Number(s.z_score).toFixed(2)}</strong> | Cohen's d: <strong>${Number(s.cohens_d).toFixed(2)}</strong>`
         });
       });
 
