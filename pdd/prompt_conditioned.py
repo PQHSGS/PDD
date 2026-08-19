@@ -48,6 +48,37 @@ class PromptConditionedResult:
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
+    def save_checkpoint(self, filepath: str) -> None:
+        """Persist intermediate matrices, cluster assignments, and hypotheses to npz checkpoint."""
+        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+        hypo_json = json.dumps([asdict(h) for h in self.hypotheses])
+        p_clusters_json = json.dumps({str(k): v for k, v in self.prompt_clusters.items()})
+        r_clusters_json = json.dumps({str(k): v for k, v in self.resp_clusters.items()})
+        np.savez_compressed(
+            filepath,
+            c_matrix=self.c_matrix,
+            u_matrix=self.u_matrix,
+            prompt_clusters_json=np.array(p_clusters_json),
+            resp_clusters_json=np.array(r_clusters_json),
+            hypotheses_json=np.array(hypo_json),
+        )
+
+    @classmethod
+    def load_checkpoint(cls, filepath: str) -> PromptConditionedResult:
+        """Load intermediate matrices, cluster assignments, and hypotheses from npz checkpoint."""
+        with np.load(filepath, allow_pickle=True) as data:
+            hypo_data = json.loads(str(data["hypotheses_json"]))
+            hypotheses = [PromptConditionedHypothesis(**h) for h in hypo_data]
+            p_clusters = {int(k): v for k, v in json.loads(str(data["prompt_clusters_json"])).items()}
+            r_clusters = {int(k): v for k, v in json.loads(str(data["resp_clusters_json"])).items()}
+            return cls(
+                prompt_clusters=p_clusters,
+                resp_clusters=r_clusters,
+                c_matrix=data["c_matrix"],
+                u_matrix=data["u_matrix"],
+                hypotheses=hypotheses,
+            )
+
 
 class PromptConditionedPipeline:
     """Runner for Appendix B.2 Prompt-Conditioned Hypothesis Generation Pipeline."""
@@ -61,7 +92,17 @@ class PromptConditionedPipeline:
         use_max_statistic: bool = False,
         seed: int = 0,
         checkpoint_dir: Optional[str] = None,
+        use_checkpoint: bool = True,
     ) -> PromptConditionedResult:
+        """Execute Prompt-Conditioned Pipeline."""
+        if checkpoint_dir and use_checkpoint:
+            ckpt_file = os.path.join(checkpoint_dir, "prompt_conditioned.npz")
+            if os.path.exists(ckpt_file):
+                logger.info(f"Found cached PromptConditioned result (SVD) at '{ckpt_file}'. Skipping recomputation!")
+                try:
+                    return PromptConditionedResult.load_checkpoint(ckpt_file)
+                except Exception as e:
+                    logger.warning(f"Failed to load checkpoint '{ckpt_file}' ({e}). Recomputing...")
         """Execute Prompt-Conditioned Pipeline.
 
         Memory-safe rewrite: never materializes the full D = C - R matrix nor the
@@ -310,10 +351,20 @@ class PromptConditionedPipeline:
         hypotheses.sort(key=lambda h: abs(h.z_score), reverse=True)
         logger.info(f"Extracted {len(hypotheses)} prompt-conditioned hypotheses.")
 
-        return PromptConditionedResult(
+        result = PromptConditionedResult(
             prompt_clusters=prompt_clusters,
             resp_clusters=resp_clusters,
             c_matrix=c_matrix,
             u_matrix=u_matrix,
             hypotheses=hypotheses,
         )
+
+        if checkpoint_dir and use_checkpoint:
+            ckpt_file = os.path.join(checkpoint_dir, "prompt_conditioned.npz")
+            try:
+                result.save_checkpoint(ckpt_file)
+                logger.info(f"Saved PromptConditioned (SVD) checkpoint to '{ckpt_file}'.")
+            except Exception as e:
+                logger.warning(f"Failed to save PromptConditioned checkpoint ({e}).")
+
+        return result

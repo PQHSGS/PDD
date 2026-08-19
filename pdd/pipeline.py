@@ -137,14 +137,25 @@ class PDDPipeline:
 
         # 4. Feature-Conditioned Pipeline (Appendix B.1)
         fc_runner = FeatureConditionedPipeline(self.cfg.feature_conditioned)
-        fc_res = fc_runner.run(matrices=matrices, cluster_map=cluster_map, seed=self.cfg.seed)
+        fc_res = fc_runner.run(
+            matrices=matrices,
+            cluster_map=cluster_map,
+            seed=self.cfg.seed,
+            checkpoint_dir=run_ckpt_dir,
+            use_checkpoint=self.cfg.use_checkpoint,
+        )
 
         fc_summary_file = os.path.join(self.cfg.output_dir, "feature_conditioned_hypotheses.json")
         fc_res.save_summary(fc_summary_file)
 
         # 5. Prompt-Conditioned Pipeline (Appendix B.2)
         pc_runner = PromptConditionedPipeline(self.cfg.prompt_conditioned)
-        pc_res = pc_runner.run(matrices=matrices, seed=self.cfg.seed, checkpoint_dir=run_ckpt_dir)
+        pc_res = pc_runner.run(
+            matrices=matrices,
+            seed=self.cfg.seed,
+            checkpoint_dir=run_ckpt_dir,
+            use_checkpoint=self.cfg.use_checkpoint,
+        )
 
         pc_summary_file = os.path.join(self.cfg.output_dir, "prompt_conditioned_hypotheses.json")
         pc_res.save_summary(pc_summary_file)

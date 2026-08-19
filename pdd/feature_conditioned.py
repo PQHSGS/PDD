@@ -55,6 +55,35 @@ class FeatureConditionedResult:
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
+    def save_checkpoint(self, filepath: str) -> None:
+        """Persist intermediate matrices and hypotheses to npz checkpoint."""
+        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+        hypo_json = json.dumps([asdict(h) for h in self.hypotheses])
+        np.savez_compressed(
+            filepath,
+            s_matrix=self.s_matrix,
+            u_matrix=self.u_matrix,
+            v_matrix=self.v_matrix,
+            cluster_assignments=self.cluster_assignments,
+            silent_mask=self.silent_mask,
+            hypotheses_json=np.array(hypo_json),
+        )
+
+    @classmethod
+    def load_checkpoint(cls, filepath: str) -> FeatureConditionedResult:
+        """Load intermediate matrices and hypotheses from npz checkpoint."""
+        with np.load(filepath, allow_pickle=True) as data:
+            hypo_data = json.loads(str(data["hypotheses_json"]))
+            hypotheses = [HypothesisPair(**h) for h in hypo_data]
+            return cls(
+                s_matrix=data["s_matrix"],
+                u_matrix=data["u_matrix"],
+                v_matrix=data["v_matrix"],
+                cluster_assignments=data["cluster_assignments"],
+                silent_mask=data["silent_mask"],
+                hypotheses=hypotheses,
+            )
+
 
 class FeatureConditionedPipeline:
     """Runner for Appendix B.1 Feature-Conditioned Hypothesis Generation Pipeline."""
@@ -67,8 +96,18 @@ class FeatureConditionedPipeline:
         matrices: FeatureMatrices,
         cluster_map: FeatureClusterMap,
         seed: int = 0,
+        checkpoint_dir: Optional[str] = None,
+        use_checkpoint: bool = True,
     ) -> FeatureConditionedResult:
         """Execute Feature-Conditioned Pipeline."""
+        if checkpoint_dir and use_checkpoint:
+            ckpt_file = os.path.join(checkpoint_dir, "feature_conditioned.npz")
+            if os.path.exists(ckpt_file):
+                logger.info(f"Found cached FeatureConditioned result at '{ckpt_file}'. Skipping recomputation!")
+                try:
+                    return FeatureConditionedResult.load_checkpoint(ckpt_file)
+                except Exception as e:
+                    logger.warning(f"Failed to load checkpoint '{ckpt_file}' ({e}). Recomputing...")
         N = len(matrices.example_ids)
         K_r = cluster_map.num_clusters
 
@@ -254,7 +293,7 @@ class FeatureConditionedPipeline:
         hypotheses.sort(key=lambda h: h.delta_min, reverse=True)
         logger.info(f"Extracted {len(hypotheses)} verified hypotheses passing split-half validation.")
 
-        return FeatureConditionedResult(
+        result = FeatureConditionedResult(
             s_matrix=s_matrix,
             u_matrix=u_matrix,
             v_matrix=v_matrix,
@@ -262,3 +301,13 @@ class FeatureConditionedPipeline:
             silent_mask=silent_mask,
             hypotheses=hypotheses,
         )
+
+        if checkpoint_dir and use_checkpoint:
+            ckpt_file = os.path.join(checkpoint_dir, "feature_conditioned.npz")
+            try:
+                result.save_checkpoint(ckpt_file)
+                logger.info(f"Saved FeatureConditioned checkpoint to '{ckpt_file}'.")
+            except Exception as e:
+                logger.warning(f"Failed to save FeatureConditioned checkpoint ({e}).")
+
+        return result
