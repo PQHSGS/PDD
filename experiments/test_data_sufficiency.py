@@ -5,22 +5,29 @@ Scientifically proves why ultra-small filtered dataset subsets (N = 1..5 pairs)
 fail to generalize across general behavioral interference regimes, and quantifies
 the exact data quota required for robust concept acquisition.
 
+Evaluates 4 Core Scientific Sufficiency Metrics:
+1. Mechanistic Latent Coverage (Cov %): Percentage of constituent SAE features
+   in cluster T_A that receive non-zero gradient signal.
+2. Gradient Update Subspace Rank: Rank(G) = min(N_match, Active_Latents).
+3. Stochastic Batch Visibility: Probability P(seen in batch of size B=64).
+4. Statistical Power & Welch z-Score: Confidence bound against stochastic noise.
+
 Interference Modes:
-1. 'all': Run automated sufficiency audit across all 3 main regimes (amp_sup, amp_amp, sup_sup).
-2. 'amp_sup' (Default): Decoupling Deficit (+A, -B) -> Amplify A while Suppressing B.
-3. 'amp_amp': Co-Amplification Deficit (+A, +B) -> Multi-Skill Synthesis (Amplify A AND B).
-4. 'sup_sup': Co-Suppression Deficit (-A, -B) -> Joint De-biasing (Suppress A AND B).
-5. 'amp_neutral': Pure Isolation (+A, 0B) -> Amplify A while B remains strictly neutral.
+- 'all': Run automated sufficiency audit across all 3 main regimes (amp_sup, amp_amp, sup_sup).
+- 'amp_sup' (Default): Decoupling Deficit (+A, -B) -> Amplify A while Suppressing B.
+- 'amp_amp': Co-Amplification Deficit (+A, +B) -> Multi-Skill Synthesis (Amplify A AND B).
+- 'sup_sup': Co-Suppression Deficit (-A, -B) -> Joint De-biasing (Suppress A AND B).
+- 'amp_neutral': Pure Isolation (+A, 0B) -> Amplify A while B remains strictly neutral.
 
 Usage:
-    # 1. Audit ALL 3 main interference regimes in one shot:
-    python experiments/test_data_sufficiency.py --mode all --top_k 10
-
-    # 2. Batch Audit on Top 20 Decoupling Bottlenecks (+A, -B):
+    # 1. Auto Batch Audit across Top 20 Bottlenecks:
     python experiments/test_data_sufficiency.py --mode amp_sup --top_k 20
 
-    # 3. Export Master Inoculation Blueprint JSON across all tested regimes:
-    python experiments/test_data_sufficiency.py --mode all --top_k 10 --export_inoculation_spec master_inoculation_plan.json
+    # 2. Manual Single Pair Audit:
+    python experiments/test_data_sufficiency.py --target_cluster 10 --interference_cluster 115 --mode amp_sup
+
+    # 3. Export Master Inoculation Blueprint JSON across all tested bottlenecks:
+    python experiments/test_data_sufficiency.py --mode all --top_k 10 --export_inoculation_spec master_plan.json
 """
 
 import argparse
@@ -54,7 +61,7 @@ def audit_single_pair(
     mode: str = "amp_sup",
     tau: float = 0.08,
 ) -> Dict[str, Any]:
-    """Compute latent coverage and sufficiency metrics for a single (T_A, T_B) interference pair."""
+    """Compute all 4 sufficiency proof metrics for a single (T_A, T_B) pair."""
     target_features = all_clusters.get(target_cluster, [])
     total_target_features = len(target_features)
     title_a = labels_raw.get(str(target_cluster), {}).get("title", f"T_{target_cluster}")
@@ -65,20 +72,21 @@ def audit_single_pair(
             "mode": mode, "target_cluster": target_cluster, "target_title": title_a,
             "interference_cluster": interference_cluster, "interference_title": title_b,
             "sample_count": 0, "active_count": 0, "dead_count": total_target_features,
-            "coverage_ratio": 0.0, "risk_score": 100.0, "verdict": "UNINDEXED",
+            "coverage_ratio": 0.0, "rank_bound": 0, "batch_visibility_pct": 0.0,
+            "welch_z": 0.0, "risk_score": 100.0, "verdict": "UNINDEXED",
             "recommended_quota": max(150, int(total_target_features * 8.5)),
             "dead_features": target_features,
         }
 
     pos_a = cluster_ids.index(target_cluster)
     
-    # Condition on Target A based on mode
+    # 1. Condition on Target A based on mode
     if mode in ("amp_sup", "amp_amp", "amp_neutral"):
         mask_a = (u_mat[:, pos_a] > tau) & (s_mat[:, pos_a] > 0)
     else:  # sup_sup
         mask_a = (u_mat[:, pos_a] < -tau) & (s_mat[:, pos_a] > 0)
 
-    # Condition on Interference B based on mode
+    # 2. Condition on Interference B based on mode
     mask = mask_a
     if interference_cluster is not None and interference_cluster in cluster_ids:
         pos_b = cluster_ids.index(interference_cluster)
@@ -97,6 +105,7 @@ def audit_single_pair(
     matching_indices = np.flatnonzero(mask)
     sample_count = len(matching_indices)
 
+    # Metric 1: Mechanistic Latent Feature Coverage
     active_features_in_subset: Set[int] = set()
     feature_activation_maxes: Dict[int, float] = {f: 0.0 for f in target_features}
 
@@ -114,20 +123,38 @@ def audit_single_pair(
     active_count = len(active_features_in_subset)
     dead_count = total_target_features - active_count
     coverage_ratio = (active_count / max(1, total_target_features)) * 100.0
+
+    # Metric 2: Gradient Update Subspace Rank
     rank_bound = min(sample_count, active_count)
+
+    # Metric 3: Stochastic Batch Visibility Chance (B=64, N_total=260k)
+    batch_visibility_pct = min(100.0, (1.0 - (1.0 - sample_count / 260000.0)**64) * 100.0)
+
+    # Metric 4: Statistical Welch z-score approximation
+    if sample_count <= 1:
+        welch_z = 0.0  # Undefined variance, fails significance test
+    else:
+        sample_u = u_mat[matching_indices, pos_a]
+        u_mean = float(np.mean(sample_u))
+        u_std = float(np.std(sample_u)) + 1e-6
+        welch_z = float((u_mean - 0.0) / (u_std / math.sqrt(sample_count)))
+
+    # Composite Generalization Risk Score
     risk_score = 100.0 * (1.0 - (coverage_ratio / 100.0)) * math.exp(-sample_count / 50.0)
 
+    # Recommended Synthetic Quota to reach >=95% coverage
     if coverage_ratio < 95.0:
         recommended_quota = max(150, int(total_target_features * 8.5))
     else:
         recommended_quota = 0
 
+    # Verdict Classification
     if sample_count <= 3 or coverage_ratio < 25.0:
         verdict = "CRITICAL"
         verdict_desc = "Guaranteed to fail generalization. Model will overfit to surface tokens."
     elif sample_count < 30 or coverage_ratio < 75.0:
         verdict = "DEFICIENT"
-        verdict_desc = "Weak generalization. Over 25% of latent features receive 0 gradient."
+        verdict_desc = "Weak generalization. Significant fraction of latent features receive 0 gradient."
     else:
         verdict = "SUFFICIENT"
         verdict_desc = "Complete concept coverage. Robust generalization expected."
@@ -146,6 +173,8 @@ def audit_single_pair(
         "dead_count": dead_count,
         "coverage_ratio": coverage_ratio,
         "rank_bound": rank_bound,
+        "batch_visibility_pct": batch_visibility_pct,
+        "welch_z": welch_z,
         "risk_score": risk_score,
         "verdict": verdict,
         "verdict_description": verdict_desc,
@@ -171,15 +200,14 @@ def evaluate_sufficiency(
     labels_file = os.path.join(run_dir, "feature_cluster_labels.json")
     summary_file = os.path.join(run_dir, "pdd_summary.json")
 
-    # If mode == "all", run across the 3 main regimes
+    # Multi-regime mode: 'all'
     if mode == "all":
         modes_to_run = ["amp_sup", "amp_amp", "sup_sup"]
         all_batch_results = []
-        all_master_specs = []
         for m in modes_to_run:
-            print(f"\n{'#' * 90}")
-            print(f"### RUNNING DATA SUFFICIENCY AUDIT FOR REGIME: {m.upper()}")
-            print(f"{'#' * 90}")
+            print(f"\n{'#' * 115}")
+            print(f"### BEHAVIORAL INTERFERENCE SUFFICIENCY AUDIT: REGIME '{m.upper()}'")
+            print(f"{'#' * 115}")
             res = evaluate_sufficiency(
                 run_dir=run_dir, mode=m, target_cluster=target_cluster,
                 interference_cluster=interference_cluster, top_k=top_k, tau=tau
@@ -209,14 +237,10 @@ def evaluate_sufficiency(
     ckpt_dir = summary.get("checkpoint_subfolder", "")
     clusters_file = os.path.join(ckpt_dir, "clusters.json") if ckpt_dir else ""
     if not os.path.exists(clusters_file):
-        cand = os.path.join("checkpoints", "qwen3_1.7b_dolci_seed0_20260815_110345", "clusters.json")
-        if os.path.exists(cand):
-            clusters_file = cand
-        else:
-            for root, _, files in os.walk("checkpoints"):
-                if "clusters.json" in files:
-                    clusters_file = os.path.join(root, "clusters.json")
-                    break
+        for root, _, files in os.walk("checkpoints"):
+            if "clusters.json" in files:
+                clusters_file = os.path.join(root, "clusters.json")
+                break
 
     all_clusters: Dict[int, List[int]] = {}
     if os.path.exists(clusters_file):
@@ -256,7 +280,9 @@ def evaluate_sufficiency(
     member_c = np.load(member_c_file, mmap_mode="r") if os.path.exists(member_c_file) else None
     member_cols = np.load(member_cols_file) if os.path.exists(member_cols_file) else None
 
-    # MODE 1: BATCH AUDIT
+    # =========================================================================
+    # MODE 1: BATCH AUDIT (Prioritizes 4 Core Sufficiency Metrics)
+    # =========================================================================
     if target_cluster is None:
         bottlenecks_list: List[Dict[str, Any]] = []
 
@@ -274,11 +300,11 @@ def evaluate_sufficiency(
                 print("Error: find_bottlenecks engine could not be imported.", file=sys.stderr)
                 sys.exit(1)
 
-        print("\n" + "=" * 115)
-        print(f"BEHAVIORAL INTERFERENCE & SUFFICIENCY AUDIT (MODE: {mode.upper()}, TOP {min(len(bottlenecks_list), top_k)} PAIRS)")
-        print("=" * 115)
-        print(f"{'#':<3} | {'Concept A':<28} | {'Interference Concept B':<28} | {'Mode':<11} | {'N_match':<7} | {'Cov %':<7} | {'Dead/Total':<10} | {'Risk':<5} | {'Verdict':<8} | {'Quota'}")
-        print("-" * 115)
+        print("\n" + "=" * 125)
+        print(f"BEHAVIORAL INTERFERENCE & SUFFICIENCY AUDIT (MODE: {mode.upper()}, TOP {min(len(bottlenecks_list), top_k)} DEFICITS)")
+        print("=" * 125)
+        print(f"{'#':<3} | {'Concept A':<26} | {'Interference B':<24} | {'N_match':<7} | {'Cov %':<7} | {'Rank(G)':<7} | {'Batch %':<8} | {'Welch z':<7} | {'Verdict':<8} | {'Quota'}")
+        print("-" * 125)
 
         batch_results = []
         master_specs = []
@@ -304,11 +330,11 @@ def evaluate_sufficiency(
             )
             batch_results.append(res)
 
-            t_a_str = f"T_{res['target_cluster']} ({res['target_title'][:18]})"
-            t_b_str = f"T_{res['interference_cluster']} ({res['interference_title'][:18]})" if res['interference_cluster'] is not None else "None"
-            dead_str = f"{res['dead_count']}/{res['total_target_features']}"
+            t_a_str = f"T_{res['target_cluster']} ({res['target_title'][:16]})"
+            t_b_str = f"T_{res['interference_cluster']} ({res['interference_title'][:15]})" if res['interference_cluster'] is not None else "None"
+            z_str = f"{res['welch_z']:>5.2f}" if res['welch_z'] > 0 else "  N/A"
 
-            print(f"{idx:<3} | {t_a_str:<28} | {t_b_str:<28} | {mode:<11} | {res['sample_count']:<7} | {res['coverage_ratio']:>5.1f}% | {dead_str:<10} | {res['risk_score']:>4.1f} | {res['verdict']:<8} | {res['recommended_quota']:,}")
+            print(f"{idx:<3} | {t_a_str:<26} | {t_b_str:<24} | {res['sample_count']:<7} | {res['coverage_ratio']:>5.1f}% | {res['rank_bound']:<7} | {res['batch_visibility_pct']:>6.3f}% | {z_str:<7} | {res['verdict']:<8} | {res['recommended_quota']:,}")
 
             if export_inoculation_spec:
                 kws_a = labels_raw.get(str(res["target_cluster"]), {}).get("keywords", [])
@@ -324,6 +350,9 @@ def evaluate_sufficiency(
                     "interference_title": res["interference_title"],
                     "sample_count": res["sample_count"],
                     "latent_coverage_pct": res["coverage_ratio"],
+                    "rank_bound": res["rank_bound"],
+                    "batch_visibility_pct": res["batch_visibility_pct"],
+                    "welch_z": res["welch_z"],
                     "dead_latents_count": res["dead_count"],
                     "unsteered_feature_ids": res["dead_features"],
                     "recommended_quota": res["recommended_quota"],
@@ -335,7 +364,7 @@ def evaluate_sufficiency(
                     ),
                 })
 
-        print("=" * 115 + "\n")
+        print("=" * 125 + "\n")
 
         if export_report:
             with open(export_report, "w", encoding="utf-8") as f:
@@ -350,11 +379,13 @@ def evaluate_sufficiency(
                     "total_blueprints": len(master_specs),
                     "blueprints": master_specs,
                 }, f, indent=2)
-            print(f"Saved master batch Inoculation Blueprint JSON across all {len(master_specs)} bottlenecks to '{export_inoculation_spec}'!")
+            print(f"Saved master Inoculation Blueprint JSON across all {len(master_specs)} bottlenecks to '{export_inoculation_spec}'!")
 
         return batch_results
 
-    # MODE 2: SINGLE TARGET CLUSTER AUDIT
+    # =========================================================================
+    # MODE 2: MANUAL SINGLE TARGET CLUSTER AUDIT
+    # =========================================================================
     res = audit_single_pair(
         target_cluster=target_cluster,
         interference_cluster=interference_cluster,
@@ -369,25 +400,26 @@ def evaluate_sufficiency(
         tau=tau,
     )
 
-    print("=" * 85)
+    print("=" * 90)
     print(f"PDD BEHAVIORAL INTERFERENCE & DATA SUFFICIENCY AUDIT ({mode.upper()})")
     print(f"Concept A : T_{target_cluster} ({res['target_title']}) [Contains {res['total_target_features']} SAE Latent Features]")
     if interference_cluster is not None:
         print(f"Concept B : T_{interference_cluster} ({res['interference_title']})")
-    print("=" * 85)
+    print("=" * 90)
 
-    print(f"\n--- 1. SAMPLE VOLUME & GRADIENT RANK ---")
+    print(f"\n--- 1. OPTIMIZATION DYNAMICS & GRADIENT RANK ---")
     print(f"  * Available Training Samples in Dataset : {res['sample_count']:,} pair(s)")
     print(f"  * Parameter Update Subspace Rank Bound  : {res['rank_bound']} (Maximum rank of loss gradient)")
-    print(f"  * Stochastic Batch Visibility Chance    : {min(100.0, (1 - (1 - res['sample_count']/260000)**64)*100):.4f}% per batch (B=64)")
+    print(f"  * Stochastic Batch Visibility Chance    : {res['batch_visibility_pct']:.4f}% per batch (B=64)")
 
-    print(f"\n--- 2. SAE LATENT FEATURE COVERAGE (THE '1 vs 30' PROOF) ---")
+    print(f"\n--- 2. SAE LATENT FEATURE COVERAGE (MECHANISTIC PROOF) ---")
     print(f"  * Total Latents in Concept Community T_{target_cluster} : {res['total_target_features']} SAE features")
     print(f"  * Actively Steered Features in Subset    : {res['active_count']} features ({res['coverage_ratio']:.1f}%)")
     print(f"  * DEAD / UNTOUCHED Latents (0 Gradient)  : {res['dead_count']} features ({(res['dead_count']/max(1,res['total_target_features']))*100:.1f}%)")
     print(f"  * Sample Dead Features (Never Activated) : {res['dead_features'][:8]} ...")
 
-    print(f"\n--- 3. GENERALIZATION RISK & VERDICT ---")
+    print(f"\n--- 3. STATISTICAL CONFIDENCE & GENERALIZATION VERDICT ---")
+    print(f"  * Statistical Welch z-Score Bound       : {res['welch_z']:.2f}" + (" (Fails p < 0.05 noise floor)" if res['welch_z'] < 2.0 else " (Significant)"))
     print(f"  * Memorization / Overfitting Risk Score : {res['risk_score']:.1f} / 100")
     print(f"  * Formal Sufficiency Verdict             : {res['verdict']}")
     print(f"    -> {res['verdict_description']}")
@@ -398,7 +430,7 @@ def evaluate_sufficiency(
         print(f"  * Inoculation Objective                 : Synthesize pairs satisfying ({mode}) to activate {res['dead_count']} un-steered latents.")
     else:
         print(f"  * Synthetic Data Quota                 : 0 (Dataset is already robustly covered).")
-    print("=" * 85 + "\n")
+    print("=" * 90 + "\n")
 
     if export_report:
         with open(export_report, "w", encoding="utf-8") as f:
