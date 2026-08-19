@@ -11,6 +11,7 @@ import functools
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
@@ -98,6 +99,7 @@ class ViewerState:
         self.k_to_fc: Dict[int, List[Dict[str, Any]]] = {}
         self.k_to_pc: Dict[int, List[Dict[str, Any]]] = {}
         self.inspector = None
+        self._examples_lock = threading.Lock()
         self._feat_to_cluster: Optional[Dict[int, int]] = None
         self._feature_matrices = None
         self._examples = None
@@ -108,6 +110,9 @@ class ViewerState:
         self._pc_cluster_examples_mtime: float = 0.0
         self._cluster_labels_mtime: float = 0.0
         self._np_set: Optional[Tuple[str, str]] = None
+        self._np_verifying: bool = False
+        self._np_verify_lock = threading.Lock()
+        self._best_hypo_by_m: Optional[Dict[int, Dict[str, Any]]] = None
         self._cluster_info_cache: Dict[str, Any] = {}
         self._feature_totals: Optional[np.ndarray] = None
         self._all_member_cols: Optional[np.ndarray] = None
@@ -215,11 +220,9 @@ class ViewerState:
             if data is not None:
                 self.fc_hypos, self.k_to_fc = self._parse_hypotheses(data)
             elif not self.fc_hypos and self.summary:
-                self.fc_hypos = self.summary.get("top_feature_conditioned_hypotheses", [])
-                for h in self.fc_hypos:
-                    k = h.get("k")
-                    if k is not None:
-                        self.k_to_fc.setdefault(k, []).append(h)
+                self.fc_hypos, self.k_to_fc = self._parse_hypotheses(
+                    {"hypotheses": self.summary.get("top_feature_conditioned_hypotheses", [])}
+                )
         return self.k_to_fc
 
     @property
@@ -333,7 +336,7 @@ class ViewerState:
         for k_str, tokens in prompt_tokens_map.items():
             try:
                 k = int(k_str)
-            except Exception:
+            except (ValueError, TypeError):
                 continue
             if not tokens:
                 continue
@@ -401,6 +404,21 @@ class ViewerState:
             "relevance_score": c["relevance_score"],
         } for c in scored]
 
+    def _best_hypothesis_by_m(self) -> Dict[int, Dict[str, Any]]:
+        """Strongest hypothesis per feature cluster T_m (by |delta|), computed once per run."""
+        if self._best_hypo_by_m is None:
+            best: Dict[int, Dict[str, Any]] = {}
+            for hypos in self.feature_hypotheses_map.values():
+                for h in hypos:
+                    m = h.get("m")
+                    if m is None:
+                        continue
+                    d = abs(float(h.get("delta", 0.0)))
+                    if d > best.get(m, {}).get("_abs_delta", 0.0):
+                        best[m] = dict(h, _abs_delta=d)
+            self._best_hypo_by_m = best
+        return self._best_hypo_by_m
+
     @property
     def feature_to_cluster_map(self) -> Dict[int, int]:
         """Inverse map feature index -> feature cluster T_m (lazy, cached)."""
@@ -430,9 +448,9 @@ class ViewerState:
     @functools.lru_cache(maxsize=16)
     def _neuronpedia_verified(model_id: str, sae_set: str) -> bool:
         """One-time, cached check that the Neuronpedia slug actually resolves."""
+        import urllib.request
+        url = f"https://www.neuronpedia.org/api/feature/{model_id}/{sae_set}/100"
         try:
-            import urllib.request
-            url = f"https://www.neuronpedia.org/api/feature/{model_id}/{sae_set}/100"
             req = urllib.request.Request(
                 url, method="GET",
                 headers={"User-Agent": "PDD-Viewer/1.0", "Accept": "application/json"},
@@ -461,8 +479,8 @@ class ViewerState:
             try:
                 with open(cache_file, "r", encoding="utf-8") as fp:
                     return json.load(fp)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Corrupt Neuronpedia cache file {cache_file.name}; refetching: {e}")
 
         # 2. Fetch over HTTP
         data = self._neuronpedia_feature(np_set[0], np_set[1], f)
@@ -480,19 +498,14 @@ class ViewerState:
         if not np_set or not feature_indices:
             return
 
-        def _worker(f_idx: int):
-            try:
-                self._get_neuronpedia_feature(int(f_idx))
-            except Exception:
-                pass
+        def _worker() -> None:
+            for f_idx in feature_indices[:16]:
+                try:
+                    self._get_neuronpedia_feature(int(f_idx))
+                except Exception as e:
+                    logger.warning(f"Neuronpedia pre-warm failed for feature {f_idx}: {e}")
 
-        import threading
-        t = threading.Thread(
-            target=lambda: [ _worker(f) for f in feature_indices[:16] ],
-            daemon=True,
-            name="PDD-NeuronpediaPrewarmer"
-        )
-        t.start()
+        threading.Thread(target=_worker, daemon=True, name="PDD-NeuronpediaPrewarmer").start()
 
     @staticmethod
     @functools.lru_cache(maxsize=1024)
@@ -528,18 +541,44 @@ class ViewerState:
         }
 
     def _neuronpedia_set(self) -> Optional[Tuple[str, str]]:
-        """Cached (model_id, sae_set) pair only if the Neuronpedia slug was runtime-verified."""
+        """Cached (model_id, sae_set) pair only if the Neuronpedia slug was runtime-verified.
+
+        Verification runs once in a background thread so no request ever blocks on the
+        slug HTTP check; until it finishes this returns None, so Neuronpedia
+        links/explainers simply appear from the first request after verification completes.
+        """
         if self._np_set is None:
+            with self._np_verify_lock:
+                if self._np_set is None and not self._np_verifying:
+                    self._np_verifying = True
+                    threading.Thread(
+                        target=self._verify_neuronpedia_slug,
+                        daemon=True,
+                        name="PDD-NeuronpediaVerifier",
+                    ).start()
+        return self._np_set
+
+    def _verify_neuronpedia_slug(self) -> None:
+        try:
             slug = self._neuronpedia_sae_set(self.summary.get("config", {}).get("sae", {}))
             if slug and self._neuronpedia_verified(*slug):
                 self._np_set = slug
-        return self._np_set
+        except Exception as e:
+            logger.warning(f"Neuronpedia slug verification failed: {e}")
 
     def _neuronpedia_url(self, feature_index: int) -> Optional[str]:
         np_set = self._neuronpedia_set()
         if np_set is None:
             return None
         return f"https://www.neuronpedia.org/{np_set[0]}/{np_set[1]}/{feature_index}"
+
+    def _sae_feature_item(self, i: int, val: float, m: Optional[int]) -> Dict[str, Any]:
+        """One top-feature entry shared by the robust-cluster and raw fallback paths."""
+        item: Dict[str, Any] = {"feature_index": i, "activation": val, "cluster_m": m}
+        url = self._neuronpedia_url(i)
+        if url:
+            item["neuronpedia_url"] = url
+        return item
 
     def _top_sae_features(self, activations: np.ndarray, top_n: int = 8, min_cluster_size: Optional[int] = None) -> List[Dict[str, Any]]:
         """Top individual SAE features by activation belonging to robust feature clusters (|T_m| >= min_cluster_size)."""
@@ -567,10 +606,7 @@ class ViewerState:
             m = ftoc.get(i)
             # Require feature to belong to a robust cluster (|T_m| >= min_cluster_size from config)
             if m is not None and len(self.feature_clusters.get(m, [])) >= min_cluster_size:
-                item: Dict[str, Any] = {"feature_index": i, "activation": val, "cluster_m": m}
-                url = self._neuronpedia_url(i)
-                if url:
-                    item["neuronpedia_url"] = url
+                item = self._sae_feature_item(i, val, m)
                 if feat_delta is not None and i < feat_delta.shape[0]:
                     d = float(feat_delta[i])
                     item["dp_delta"] = d
@@ -582,12 +618,7 @@ class ViewerState:
         # If no robust-cluster features fired, fallback to top raw features
         if len(out) == 0:
             for i in sorted_indices[:top_n]:
-                i = int(i)
-                item = {"feature_index": i, "activation": float(activations[i]), "cluster_m": ftoc.get(i)}
-                url = self._neuronpedia_url(i)
-                if url:
-                    item["neuronpedia_url"] = url
-                out.append(item)
+                out.append(self._sae_feature_item(int(i), float(activations[i]), ftoc.get(int(i))))
 
         return out
 
@@ -622,8 +653,9 @@ class ViewerState:
                 return None
             try:
                 logger.info("Computing per-feature delta (chunked column scan over C_max/R_max)...")
-                c_rate = self._col_firing_rate(mats.C_max, 0.01)
-                r_rate = self._col_firing_rate(mats.R_max, 0.01)
+                tau = self._feature_delta_tau()
+                c_rate = self._col_firing_rate(mats.C_max, tau)
+                r_rate = self._col_firing_rate(mats.R_max, tau)
                 self._feat_delta = (c_rate - r_rate).astype(np.float32)
                 self._persist_feature_delta()
             except Exception as e:
@@ -673,16 +705,22 @@ class ViewerState:
         return out
 
     def _load_examples(self):
-        """Lazily load the cached dataset examples for example-based cluster interpretation."""
-        if self._examples is None and self.checkpoint_dir is not None:
-            ex_path = self.checkpoint_dir / "examples.json"
-            try:
-                import orjson
-                with open(ex_path, "rb") as f:
-                    self._examples = orjson.loads(f.read())
-            except Exception as e:
-                logger.debug(f"orjson examples load failed ({e}); falling back to stdlib json.")
-                self._examples = _read_json(ex_path)
+        """Lazily load the cached dataset examples for example-based cluster interpretation.
+
+        Guarded by a lock so the background prewarm thread and a concurrent request
+        never both parse the large examples file at once.
+        """
+        if self._examples is None:
+            with self._examples_lock:
+                if self._examples is None and self.checkpoint_dir is not None:
+                    ex_path = self.checkpoint_dir / "examples.json"
+                    try:
+                        import orjson
+                        with open(ex_path, "rb") as f:
+                            self._examples = orjson.loads(f.read())
+                    except Exception as e:
+                        logger.debug(f"orjson examples load failed ({e}); falling back to stdlib json.")
+                        self._examples = _read_json(ex_path)
         return self._examples
 
     def _load_pc_cluster_examples(self):
@@ -853,7 +891,8 @@ class ViewerState:
             return False
         try:
             return all(meta[k] == v for k, v in self._member_cache_meta(mats).items())
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Member cache meta malformed ({e}); rebuilding.")
             return False
 
     @staticmethod
@@ -863,10 +902,18 @@ class ViewerState:
             np.save(f, arr)
         os.replace(tmp, path)
 
+    def _feature_delta_tau(self) -> float:
+        """The B.1 tau threshold the cached per-feature delta was computed with."""
+        return float(self.summary.get("config", {}).get("feature_conditioned", {}).get("tau", 0.01))
+
     def _persist_feature_delta(self) -> None:
         cache_dir = self.run_dir / "viewer_cache"
         if cache_dir.is_dir() and self._feat_delta is not None:
             self._save_npy(cache_dir / "feature_delta.npy", self._feat_delta)
+            meta_tmp = cache_dir / "feature_delta_meta.json.tmp"
+            with open(meta_tmp, "w", encoding="utf-8") as f:
+                json.dump({"tau": self._feature_delta_tau()}, f)
+            os.replace(meta_tmp, cache_dir / "feature_delta_meta.json")
 
     def _persist_member_cache(self, mats) -> None:
         """Atomically write the built member cache under <run_dir>/viewer_cache/."""
@@ -920,7 +967,9 @@ class ViewerState:
                 self._feature_totals = np.load(cache_dir / "feature_totals.npy")
                 fd_path = cache_dir / "feature_delta.npy"
                 if fd_path.exists():
-                    self._feat_delta = np.load(fd_path)
+                    fd_meta = _read_json(cache_dir / "feature_delta_meta.json") or {}
+                    if float(fd_meta.get("tau", 0.01)) == self._feature_delta_tau():
+                        self._feat_delta = np.load(fd_path)
                 logger.info(f"Loaded member cache from {cache_dir} (mmap).")
                 return
             except Exception as e:
@@ -963,23 +1012,32 @@ class ViewerState:
             "neuronpedia_url": self._neuronpedia_url(int(feats[j])),
         } for j in order]
 
+    def _cached_info(self, key: str, build) -> Dict[str, Any]:
+        """Memoize a per-cluster payload in the shared info cache."""
+        cached = self._cluster_info_cache.get(key)
+        if cached is not None:
+            return cached
+        res = build()
+        self._cluster_info_cache[key] = res
+        return res
+
     def _feature_cluster_info(self, m: int, top_n_examples: int = 5) -> Dict[str, Any]:
         """One payload for the T_m dropdown: whole-cluster label + top member features + real examples."""
         m_int = int(m)
         cache_key = f"T_{m_int}_{top_n_examples}"
-        if cache_key in self._cluster_info_cache:
-            return self._cluster_info_cache[cache_key]
 
-        feats = self.feature_clusters.get(m_int, [])
-        label = self._load_feature_cluster_labels().get(m_int)
-        res = {
-            "cluster_m": m_int,
-            "label": label or {"title": f"Feature cluster T_{m}", "description": "", "keywords": []},
-            "n_features": len(feats),
-            "top_features": self._top_cluster_features(m_int, top_n=8),
-            "examples": self._cluster_top_examples(m_int, top_n=top_n_examples),
-        }
-        self._cluster_info_cache[cache_key] = res
+        def build() -> Dict[str, Any]:
+            feats = self.feature_clusters.get(m_int, [])
+            label = self._load_feature_cluster_labels().get(m_int)
+            return {
+                "cluster_m": m_int,
+                "label": label or {"title": f"Feature cluster T_{m}", "description": "", "keywords": []},
+                "n_features": len(feats),
+                "top_features": self._top_cluster_features(m_int, top_n=8),
+                "examples": self._cluster_top_examples(m_int, top_n=top_n_examples),
+            }
+
+        res = self._cached_info(cache_key, build)
         # Pre-warm Neuronpedia metadata in the background for top member features
         self._prewarm_neuronpedia_features([tf["feature_index"] for tf in res["top_features"]])
         return res
@@ -988,29 +1046,28 @@ class ViewerState:
         """Interpretation for data cluster B_k: title, description, keywords, and sampled centroid/random prompts."""
         k_int = int(k)
         cache_key = f"B_{k_int}_{top_n_examples}"
-        if cache_key in self._cluster_info_cache:
-            return self._cluster_info_cache[cache_key]
 
-        label_obj = next((lab for lab in self._data_cluster_labels() if lab.get("cluster_id") == k_int), None)
-        if label_obj is None:
-            label_obj = {
+        def build() -> Dict[str, Any]:
+            label_obj = next((lab for lab in self._data_cluster_labels() if lab.get("cluster_id") == k_int), None)
+            if label_obj is None:
+                label_obj = {
+                    "cluster_id": k_int,
+                    "title": f"Data Cluster B_{k}",
+                    "description": "",
+                    "keywords": [],
+                    "centroid_prompts": [],
+                    "sample_prompts": [],
+                }
+            return {
                 "cluster_id": k_int,
-                "title": f"Data Cluster B_{k}",
-                "description": "",
-                "keywords": [],
-                "centroid_prompts": [],
-                "sample_prompts": [],
+                "title": label_obj.get("title", f"Data Cluster B_{k}"),
+                "description": label_obj.get("description", ""),
+                "keywords": label_obj.get("keywords", []),
+                "centroid_prompts": label_obj.get("centroid_prompts", [])[:top_n_examples],
+                "sample_prompts": label_obj.get("sample_prompts", [])[:top_n_examples],
             }
-        res = {
-            "cluster_id": k_int,
-            "title": label_obj.get("title", f"Data Cluster B_{k}"),
-            "description": label_obj.get("description", ""),
-            "keywords": label_obj.get("keywords", []),
-            "centroid_prompts": label_obj.get("centroid_prompts", [])[:top_n_examples],
-            "sample_prompts": label_obj.get("sample_prompts", [])[:top_n_examples],
-        }
-        self._cluster_info_cache[cache_key] = res
-        return res
+
+        return self._cached_info(cache_key, build)
 
     def _cluster_top_examples(self, m: int, top_n: int = 5) -> List[Dict[str, Any]]:
         """Top dataset examples firing feature cluster T_m, ranked by vectorized row scores.
@@ -1066,41 +1123,41 @@ class ViewerState:
         """Per-feature interpretation: run firing stats, top firing examples, Neuronpedia metadata."""
         f = int(f)
         cache_key = f"feat_{f}_{top_n}"
-        if cache_key in self._cluster_info_cache:
-            return self._cluster_info_cache[cache_key]
 
-        mats = self._load_feature_matrices()
-        examples = self._load_examples()
-        out: Dict[str, Any] = {"feature_index": f}
-        if mats is None:
-            out["error"] = "feature matrices not cached for this run"
+        def build() -> Dict[str, Any]:
+            mats = self._load_feature_matrices()
+            examples = self._load_examples()
+            out: Dict[str, Any] = {"feature_index": f}
+            if mats is None:
+                out["error"] = "feature matrices not cached for this run"
+                return out
+            d_sae = mats.C_max.shape[1]
+            if not (0 <= f < d_sae):
+                out["error"] = f"feature index out of range (d_sae={d_sae})"
+                return out
+
+            act = self._feature_act(mats, f)
+            pos_mask = act > 0
+            n_firing = int(pos_mask.sum())
+            pos_vals = act[pos_mask]
+            firing_stats: Dict[str, float] = {
+                "n_examples": n_firing,
+                "n_total": int(len(act)),
+                "max": float(pos_vals.max()) if n_firing else 0.0,
+                "mean": float(pos_vals.mean()) if n_firing else 0.0,
+            }
+            out["firing"] = firing_stats
+            out["examples"] = self._top_examples(act, examples, top_n) if examples is not None else []
+
+            url = self._neuronpedia_url(f)
+            if url:
+                out["neuronpedia_url"] = url
+                np_data = self._get_neuronpedia_feature(f)
+                if np_data:
+                    out["neuronpedia"] = np_data
             return out
-        d_sae = mats.C_max.shape[1]
-        if not (0 <= f < d_sae):
-            out["error"] = f"feature index out of range (d_sae={d_sae})"
-            return out
 
-        act = self._feature_act(mats, f)
-        pos_mask = act > 0
-        n_firing = int(pos_mask.sum())
-        pos_vals = act[pos_mask]
-        firing_stats: Dict[str, float] = {
-            "n_examples": n_firing,
-            "n_total": int(len(act)),
-            "max": float(pos_vals.max()) if n_firing else 0.0,
-            "mean": float(pos_vals.mean()) if n_firing else 0.0,
-        }
-        out["firing"] = firing_stats
-        out["examples"] = self._top_examples(act, examples, top_n) if examples is not None else []
-
-        url = self._neuronpedia_url(f)
-        if url:
-            out["neuronpedia_url"] = url
-            np_data = self._get_neuronpedia_feature(f)
-            if np_data:
-                out["neuronpedia"] = np_data
-        self._cluster_info_cache[cache_key] = out
-        return out
+        return self._cached_info(cache_key, build)
 
     def get_inspector(self):
         """Get or initialize the NeuralInspector configured for this target run."""
@@ -1350,15 +1407,7 @@ def inspect_preference_pair(req: PreferencePairInspectionRequest) -> Dict[str, A
 
     # 4. Extract Promoted vs. Suppressed Concepts from the LIVE disparity
     # Map feature cluster m -> strongest hypothesis referencing it (for context).
-    best_by_m: Dict[int, Dict[str, Any]] = {}
-    for k, hypos in state.feature_hypotheses_map.items():
-        for h in hypos:
-            m = h.get("m")
-            if m is None:
-                continue
-            d = abs(float(h.get("delta", 0.0)))
-            if d > best_by_m.get(m, {}).get("_abs_delta", 0.0):
-                best_by_m[m] = dict(h, _abs_delta=d)
+    best_by_m = state._best_hypothesis_by_m()
 
     promoted_concepts = []
     suppressed_concepts = []
@@ -1377,7 +1426,7 @@ def inspect_preference_pair(req: PreferencePairInspectionRequest) -> Dict[str, A
             "delta": float(uval),
             "hypothesis_delta": float(h.get("delta", 0.0)),
             "z_score": z,
-            "signal_strength": "Strong" if abs(uval) > 0.15 else "Moderate",
+            "signal_strength": "Strong" if abs(uval) > 0.15 else ("Moderate" if abs(uval) > 0.05 else "Weak"),
             "explanation": (
                 f"Live SAE disparity: the chosen response fires feature cluster T_{m} "
                 f"more than the rejected (net u = {uval:+.3f})."

@@ -1126,6 +1126,8 @@ if (clustersMasterList) {
       modePromptBtn.classList.add("active");
       modePairBtn.classList.remove("active");
       pairInputsContainer.classList.add("hidden");
+      const submodeBar = document.querySelector(".pipeline-submode-bar");
+      if (submodeBar) submodeBar.style.display = "flex";
       if (shiftsBoxTitle) shiftsBoxTitle.textContent = "Predicted Post-Training Behavioral Shifts";
     });
 
@@ -1134,6 +1136,8 @@ if (clustersMasterList) {
       modePairBtn.classList.add("active");
       modePromptBtn.classList.remove("active");
       pairInputsContainer.classList.remove("hidden");
+      const submodeBar = document.querySelector(".pipeline-submode-bar");
+      if (submodeBar) submodeBar.style.display = "none";
       if (shiftsBoxTitle) shiftsBoxTitle.textContent = "Training Data Signal: Promoted & Suppressed Concepts";
     });
   }
@@ -1343,7 +1347,7 @@ if (clustersMasterList) {
       if (!s || !inspectorDetailView) return;
       activeSelectedSignalKey = s.key;
       renderInspectorMasterList();
-      if (s.category === "pc") {
+      if (s.pipeline === "pc") {
         // Prompt-Conditioned Local Hypothesis Detail (A_k x R_m)
         renderInspectorPCSignalDetail(s);
       } else if (s.category === "shifts" || s.category === "fc" || s.category === "clusters") {
@@ -1517,7 +1521,7 @@ if (clustersMasterList) {
           <div class="detail-section-title">🧠 Neuronpedia Semantic Interpretation</div>
           ${featureNpBlock(np)}
           <div class="feature-stats" style="margin-top:10px;">
-            Dataset Firing Rate: <strong>${Number(firing.n_examples || 0).toLocaleString()}</strong> of ${Number(firing.n_total || 0).toLocaleString()} examples (${(Number(firing.rate || 0) * 100).toFixed(2)}%) · Max Firing = <strong>${Number(firing.max_val || 0).toFixed(2)}</strong>
+            Dataset Firing Rate: <strong>${Number(firing.n_examples || 0).toLocaleString()}</strong> of ${Number(firing.n_total || 0).toLocaleString()} examples (${firing.n_total ? (Number(firing.n_examples || 0) / firing.n_total * 100).toFixed(2) : "0.00"}%) · Max Firing = <strong>${Number(firing.max || 0).toFixed(2)}</strong>
           </div>
         </div>
 

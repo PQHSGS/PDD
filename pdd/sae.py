@@ -117,13 +117,18 @@ class SAEBackend:
         return self.sae
 
 
+    def _hf_download(self, repo: str, filename: str) -> str:
+        """Resolve a hub file locally first; fall back to a network download (logged)."""
+        try:
+            return hf_hub_download(repo, filename, local_files_only=True)
+        except Exception:
+            logger.info(f"SAE weights not found in local HF cache ({repo}/{filename}); downloading from hub...")
+            return hf_hub_download(repo, filename)
+
     def _load_qwen_scope(self) -> Any:
         from sae_lens import SAE
 
-        try:
-            path = hf_hub_download(self.cfg.repo, f"layer{self.cfg.layer}.sae.pt", local_files_only=True)
-        except Exception:
-            path = hf_hub_download(self.cfg.repo, f"layer{self.cfg.layer}.sae.pt")
+        path = self._hf_download(self.cfg.repo, f"layer{self.cfg.layer}.sae.pt")
         state = torch.load(path, map_location="cpu", weights_only=True)
 
         weights = {
@@ -171,11 +176,7 @@ class SAEBackend:
         if not subpath.endswith(".pt"):
             subpath = f"{subpath}/ae.pt"
 
-        try:
-            path = hf_hub_download(self.cfg.repo, subpath, local_files_only=True)
-        except Exception:
-            path = hf_hub_download(self.cfg.repo, subpath)
-
+        path = self._hf_download(self.cfg.repo, subpath)
         state = torch.load(path, map_location="cpu", weights_only=True)
 
         if "encoder.weight" in state:

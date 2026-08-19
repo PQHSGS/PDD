@@ -15,18 +15,18 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # Prevent CUDA memory fragmentation for tight GPU VRAM environments
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
-# Force line-buffered unbuffered stdout so tqdm and logs stream immediately to tmux / log files
-if hasattr(sys.stdout, "reconfigure"):
-    try:
-        sys.stdout.reconfigure(line_buffering=True)
-    except Exception:
-        pass
-
 from .config import PipelineConfig
 from .logger import get_logger
 from .pipeline import PDDPipeline
 
 logger = get_logger("PDD.CLI")
+
+# Force line-buffered unbuffered stdout so tqdm and logs stream immediately to tmux / log files
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception as e:
+        logger.warning(f"Could not enable line-buffered stdout: {e}")
 
 
 def main():

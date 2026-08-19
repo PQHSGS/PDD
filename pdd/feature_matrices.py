@@ -65,8 +65,8 @@ def write_matrices_state(dirpath: str, matrices: "FeatureMatrices") -> None:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             os.replace(tmp_path, manifest_path)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not update manifest.json in '{dirpath}': {e}")
 
     # 2. Write matrices_state.json for legacy compatibility
     state_path = os.path.join(dirpath, "matrices_state.json")
@@ -88,8 +88,8 @@ def state_valid(matrices: "FeatureMatrices", dirpath: str) -> bool:
                 data = json.load(f)
             if "extraction_state" in data and data["extraction_state"] == target_state:
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not read extraction state from '{manifest_path}': {e}")
 
     # 2. Try reading matrices_state.json
     state_path = os.path.join(dirpath, "matrices_state.json")
@@ -99,15 +99,15 @@ def state_valid(matrices: "FeatureMatrices", dirpath: str) -> bool:
                 stored = json.load(f)
             if stored == target_state:
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not read extraction state from '{state_path}': {e}")
 
     # 3. Fallback for legacy checkpoints without state files: write state and validate True
     try:
         write_matrices_state(dirpath, matrices)
-        return True
-    except Exception:
-        return True
+    except Exception as e:
+        logger.warning(f"Could not persist extraction state for '{dirpath}': {e}")
+    return True
 
 
 def mmap_dir_complete(dirpath: str) -> bool:
@@ -621,7 +621,8 @@ class FeatureMatrixExtractor:
                         add_generation_prompt=True,
                     )
                     formatted_prompts.append(formatted)
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"apply_chat_template failed for example {ex.example_id} ({e}); using raw prompt.")
                     formatted_prompts.append(ex.prompt)
             else:
                 formatted_prompts.append(ex.prompt)

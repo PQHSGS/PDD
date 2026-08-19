@@ -305,28 +305,39 @@ class LLMClusterLabeler(ClusterAutoLabeler):
         return None
 
     @staticmethod
-    def _clean_title(title: str, fallback: str) -> str:
-        """Strip meta-echoes and verbose prefixes from generated titles."""
-        t = title.strip().strip('"\'')
-        for prefix in ("cluster of response texts on", "cluster of response texts", "cluster of user prompts on",
-                       "cluster of user prompts", "cluster of", "cluster on", "labeling clusters of",
-                       "labeling cluster of", "user_prompts", "response_texts"):
+    def _strip_prefixes(text: str, prefixes: Tuple[str, ...], min_len: int, fallback: str) -> str:
+        """Strip ``prefixes`` from ``text`` and title-case the remainder; ``fallback`` if too short."""
+        t = text.strip().strip('"\'')
+        for prefix in prefixes:
             if t.lower().startswith(prefix):
                 t = t[len(prefix):].strip(" :-,")
-        return t[:1].upper() + t[1:] if len(t) >= 3 else fallback
+        return t[:1].upper() + t[1:] if len(t) >= min_len else fallback
+
+    @staticmethod
+    def _clean_title(title: str, fallback: str) -> str:
+        """Strip meta-echoes and verbose prefixes from generated titles."""
+        return LLMClusterLabeler._strip_prefixes(
+            title,
+            ("cluster of response texts on", "cluster of response texts", "cluster of user prompts on",
+             "cluster of user prompts", "cluster of", "cluster on", "labeling clusters of",
+             "labeling cluster of", "user_prompts", "response_texts"),
+            3,
+            fallback,
+        )
 
     @staticmethod
     def _clean_desc(desc: str, fallback: str) -> str:
         """Strip filler prefixes from generated descriptions."""
-        d = desc.strip().strip('"\'')
-        for prefix in ("cluster of response texts discussing", "cluster of response texts related to",
-                       "cluster of response texts on", "cluster of responses related to",
-                       "cluster of responses discussing", "cluster of user prompts asking about",
-                       "cluster of user prompts related to", "cluster responses based on",
-                       "cluster containing responses associated with", "cluster of"):
-            if d.lower().startswith(prefix):
-                d = d[len(prefix):].strip(" :-,")
-        return d[:1].upper() + d[1:] if len(d) >= 5 else fallback
+        return LLMClusterLabeler._strip_prefixes(
+            desc,
+            ("cluster of response texts discussing", "cluster of response texts related to",
+             "cluster of response texts on", "cluster of responses related to",
+             "cluster of responses discussing", "cluster of user prompts asking about",
+             "cluster of user prompts related to", "cluster responses based on",
+             "cluster containing responses associated with", "cluster of"),
+            5,
+            fallback,
+        )
 
     def _label_dict(self, texts: List[str], kind: str = "prompt") -> Optional[Dict[str, Any]]:
         """Ask the LLM to label a cluster of ``texts``, returning the raw parsed JSON dict.

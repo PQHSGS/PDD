@@ -167,12 +167,12 @@ class DPOValidationConfig:
     """Experiment 4 DPO Training & Rollout Validation settings (paper Table 8 & §4)."""
     train_samples: int = -1             # Preference pairs for DPO training (-1 = full dataset)
     eval_prompts: int = 500             # Held-out evaluation prompts for text rollouts
-    batch_size: int = 4                 # Micro-batch size per GPU step (high throughput, ~4.6 GB VRAM)
+    batch_size: int = 4                 # Micro-batch size per GPU step (high throughput, ~3.2 GB VRAM)
     grad_accum: int = 16                # Gradient accumulation steps (eff_bs = 64)
-    lr: float = 1e-6                    # Learning rate (1e-6 for full finetuning, Table 8)
+    lr: float = 5e-5                    # Learning rate (5e-5 for LoRA, 1e-6 for full finetuning)
     beta: float = 2.0                   # DPO beta parameter (author uses 2.0 on Dolci, Table 8)
     epochs: int = 1                     # DPO training epochs (paper: 1 epoch)
-    lora_rank: int = 0                  # 0 = 100% Full-Parameter Fine-Tuning (paper-exact with AdamW8bit)
+    lora_rank: int = 16                 # LoRA rank (16 = low-VRAM < 3.5 GB safe for shared GPUs)
     warmup_ratio: float = 0.1           # Linear LR warmup ratio (paper: 0.1)
     temperature: float = 0.0            # Rollout decoding temperature (0.0 = greedy, noise-free)
     max_length: int = 512               # Max sequence length (VRAM safe)

@@ -79,12 +79,7 @@ class NeuralInspector:
         except (torch.OutOfMemoryError, RuntimeError) as e:
             if self._is_cuda_failure(e):
                 logger.warning(f"Caught CUDA failure during load ({e}). Retrying the full model+SAE load on CPU...")
-                self._release_components()
-                self.device = "cpu"
-                self.dtype = "float32"
-                torch.cuda.empty_cache()
-                gc.collect()
-                self._load_components()
+                self._retry_load_on_cpu()
             else:
                 raise e
 
@@ -93,15 +88,19 @@ class NeuralInspector:
                 f"Model/SAE device mismatch after load (model on {self._model_device()}, SAE on {self._sae_device()}). "
                 f"Reloading both on CPU..."
             )
-            self._release_components()
-            self.device = "cpu"
-            self.dtype = "float32"
-            torch.cuda.empty_cache()
-            gc.collect()
-            self._load_components()
+            self._retry_load_on_cpu()
 
         self._is_loaded = True
         logger.info(f"NeuralInspector successfully initialized via SAEBackend on {self.device}.")
+
+    def _retry_load_on_cpu(self) -> None:
+        """Drop loaded components and reload the whole model+SAE stack on CPU."""
+        self._release_components()
+        self.device = "cpu"
+        self.dtype = "float32"
+        torch.cuda.empty_cache()
+        gc.collect()
+        self._load_components()
 
     def _load_components(self) -> None:
         logger.info(f"Loading Tokenizer & Model ({self.model_path}) on {self.device}...")
@@ -125,12 +124,6 @@ class NeuralInspector:
 
     def _release_components(self) -> None:
         for attr in ("model", "tokenizer", "sae"):
-            obj = getattr(self, attr, None)
-            if obj is not None:
-                try:
-                    del obj
-                except Exception:
-                    pass
             setattr(self, attr, None)
 
     @staticmethod
@@ -140,21 +133,20 @@ class NeuralInspector:
         msg = str(e).lower()
         return "cuda out of memory" in msg or "cublas" in msg or "cuda error" in msg
 
-    def _model_device(self) -> str:
-        if self.model is None:
+    @staticmethod
+    def _component_device(obj) -> str:
+        if obj is None:
             return "None"
         try:
-            return str(next(self.model.parameters()).device)
+            return str(next(obj.parameters()).device)
         except (StopIteration, AttributeError):
             return "unknown"
 
+    def _model_device(self) -> str:
+        return self._component_device(self.model)
+
     def _sae_device(self) -> str:
-        if self.sae is None:
-            return "None"
-        try:
-            return str(next(self.sae.parameters()).device)
-        except (StopIteration, AttributeError):
-            return "unknown"
+        return self._component_device(self.sae)
 
     def _devices_consistent(self) -> bool:
         if self.model is None or self.sae is None:
@@ -162,11 +154,8 @@ class NeuralInspector:
         return self._model_device().split(":")[0] == self._sae_device().split(":")[0]
 
     @torch.inference_mode()
-    def extract_prompt_features(self, prompt: str) -> np.ndarray:
-        """Single-prompt forward pass on GPU returning max-pooled SAE activations P(x)."""
-        self.load()
-
-        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(self.device)
+    def _encode_inputs(self, inputs) -> torch.Tensor:
+        """Run the hooked forward pass on ``inputs`` and return SAE activations (B, seq, d_sae)."""
         activations = []
 
         def hook_fn(module, input, output):
@@ -184,10 +173,18 @@ class NeuralInspector:
         if not activations:
             raise RuntimeError(f"Failed to hook activations at layer {self.layer}.")
 
-        resid = activations[0]  # (1, seq_len, d_model)
-        sae_acts = self.sae.encode(resid)  # (1, seq_len, d_sae)
+        sae_acts = self.sae.encode(activations[0])  # (B, seq_len, d_sae)
         if isinstance(sae_acts, tuple):
             sae_acts = sae_acts[0]
+        return sae_acts
+
+    @torch.inference_mode()
+    def extract_prompt_features(self, prompt: str) -> np.ndarray:
+        """Single-prompt forward pass on GPU returning max-pooled SAE activations P(x)."""
+        self.load()
+
+        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512).to(self.device)
+        sae_acts = self._encode_inputs(inputs)
 
         # Max pool over sequence tokens on GPU -> CPU numpy
         p_max = sae_acts[0].max(dim=0).values.float().cpu().numpy()
@@ -200,27 +197,7 @@ class NeuralInspector:
 
         texts = [f"{prompt} {chosen}", f"{prompt} {rejected}"]
         inputs = self.tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=512).to(self.device)
-        activations = []
-
-        def hook_fn(module, input, output):
-            res = output[0] if isinstance(output, tuple) else output
-            activations.append(res)
-
-        target_layer = self.model.model.layers[self.layer] if hasattr(self.model, "model") else self.model.layers[self.layer]
-        hook_handle = target_layer.register_forward_hook(hook_fn)
-
-        try:
-            self.model(**inputs)
-        finally:
-            hook_handle.remove()
-
-        if not activations:
-            raise RuntimeError(f"Failed to hook activations at layer {self.layer}.")
-
-        resid = activations[0]  # (2, seq_len, d_model)
-        sae_acts = self.sae.encode(resid)  # (2, seq_len, d_sae)
-        if isinstance(sae_acts, tuple):
-            sae_acts = sae_acts[0]
+        sae_acts = self._encode_inputs(inputs)  # (2, seq_len, d_sae)
 
         # Max pool over sequence tokens on GPU
         # Index 0 = Chosen, Index 1 = Rejected
@@ -236,9 +213,6 @@ class NeuralInspector:
         if not self._is_loaded:
             return
         logger.info(f"Unloading Model ({self.model_path}) and SAE from GPU...")
-        del self.model
-        del self.tokenizer
-        del self.sae
         self.model = None
         self.tokenizer = None
         self.sae = None

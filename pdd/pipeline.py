@@ -184,6 +184,22 @@ class PDDPipeline:
         logger.info(f"=== PDD Pipeline Run Complete! Summary saved to '{summary_file}' ===")
         return summary_data
 
+    @staticmethod
+    def _completed_matrices_score(mat_ckpt: str, mat_mmap_dir: str) -> int:
+        """Progress score (N + 1M) for a subfolder with completed matrices (npz or complete mmap dir)."""
+        import numpy as np
+        try:
+            if os.path.exists(mat_ckpt):
+                with np.load(mat_ckpt, mmap_mode="r") as data:
+                    if "P_max_shape" in data:
+                        return int(data["P_max_shape"][0]) + 1_000_000
+                    return len(data["example_ids"]) + 1_000_000
+            shp = np.load(os.path.join(mat_mmap_dir, "P_max_shape.npy"))
+            return int(shp[0]) + 1_000_000
+        except Exception as e:
+            logger.warning(f"Could not read matrix checkpoint progress ({e}); assuming full completion.")
+            return 1_000_000
+
     def _resolve_checkpoint_subfolder(self, timestamp_str: str) -> str:
         """Find existing matching checkpoint subfolder with maximum progress or create new timestamped subfolder."""
         import numpy as np
@@ -213,18 +229,10 @@ class PDDPipeline:
                     ex_ckpt = os.path.join(full_path, "examples.json")
                     score = 0
                     if os.path.exists(mat_ckpt):
-                        try:
-                            with np.load(mat_ckpt, mmap_mode="r") as data:
-                                score = int(data["P_max_shape"][0]) + 1_000_000 if "P_max_shape" in data else len(data["example_ids"]) + 1_000_000
-                        except Exception:
-                            score = 1_000_000
+                        score = self._completed_matrices_score(mat_ckpt, mat_mmap_dir)
                     elif os.path.isdir(mat_mmap_dir) and mmap_dir_complete(mat_mmap_dir):
                         # Disk-backed consolidation: matrices live in the mmap dir.
-                        try:
-                            shp = np.load(os.path.join(mat_mmap_dir, "P_max_shape.npy"))
-                            score = int(shp[0]) + 1_000_000
-                        except Exception:
-                            score = 1_000_000
+                        score = self._completed_matrices_score(mat_ckpt, mat_mmap_dir)
                     elif os.path.isdir(mat_mmap_dir):
                         # Partial mmap dir (merge crashed before writing shape files):
                         # treat as no progress so surviving chunks drive the resume.

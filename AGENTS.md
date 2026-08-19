@@ -39,6 +39,36 @@ LaTeX source) — read the relevant appendix section before touching a module.
 - **Headless & Reproducible:** Run via `python -m pdd.cli --config configs/gemma2_2b_base.json` with dataclass/JSON configs in `configs/` and `pdd/config.py`, checkpoints in `checkpoints/`, run outputs under `runs/`. The pipeline ends with the auto-label stage (`auto_label` config block, default on): B_k LLM labels, T_m whole-cluster labels, and A_k/R_m example indices are written directly under `<run>/` (cluster_labels.json, feature_cluster_labels.json, prompt_conditioned_cluster_examples.json) so the viewer is fully interpretable after a single run. Launch the viewer with `python -m pdd.viewer --run_dir runs/<name>`; the viewer reads run artifacts lazily and never mutates checkpoints.
 - **CPU-First for Analysis:** Use numpy/sklearn on CPU for statistical analysis. Use RTX 4090 GPU strictly for model/SAE forward passes and DPO training — check `nvidia-smi` first; never kill running processes.
 
+## Shell & Tooling Quirks
+
+- `source ~/.bashrc` prints harmless `juliaup ... command not found: complete` errors — ignore them. After it, chain commands with `;` (NOT `&&`, which aborts on the julia error exit code): `source ~/.bashrc; conda activate pdd; python ...`
+- `rtk grep/rg/sed/read` intermittently fail (server I/O contention). On failure, fall back to the built-in `grep`/`read` tools.
+- Keep startup imports lazy (import numpy inside functions where it's only needed for one branch); module-level heavy imports slow interactive/CLI use on the mechanical HDD.
+
+## Codebase Map & Module Responsibilities
+
+- `pdd/config.py` + `configs/*.json`: pipeline config dataclasses. All thresholds are config-driven, never hardcoded. Key feature-conditioned filters: `min_feat_cluster_size`=10, `min_data_cluster_size`=25, `sign_consistent`=1 (SC).
+- `pdd/cli.py`: entry point (`python -m pdd.cli --config configs/...`), arg parsing, stdout reconfigure (must run AFTER `get_logger`).
+- `pdd/pipeline.py`: orchestrator; `_resolve_checkpoint_subfolder` ranks resume candidates by progress score: complete matrices.npz / full `matrices_mmap` dir (N + 1M, via `_completed_matrices_score`) > surviving `chunks/` (sum of chunk sizes) > `examples.json` (1) > partial mmap dir (0). Resume logic reads chunk sizes with `np.load(..., mmap_mode="r")`.
+- `pdd/feature_matrices.py`: matrix extraction state (`manifest.json` / legacy `matrices_state.json`) + `FeatureMatrixExtractor`. Write/read failures must log warnings, never silently pass.
+- `pdd/neural_inspector.py`: model+SAE stack. `_encode_inputs` shared by `extract_prompt_features`/`extract_pair_features`; `_retry_load_on_cpu`; `_component_device`. Note `sae.encode` returns a tuple in some versions → always index `[0]`.
+- `pdd/sae.py`: `SAEBackend`; `_hf_download` = local-cache-first hub download helper (shared by `_load_qwen_scope`/`_load_batch_topk`).
+- `pdd/autolabel.py`: LLM auto-labeling (`LLMClusterLabeler`, `_strip_prefixes` cleans titles/descs). Bare `except Exception` at the JSON-parse point is intentional (break on malformed LLM output, propagates None to logged fallbacks).
+- `pdd/viewer_server.py` + `viewer/app.js`: single-run FastAPI + JS UI; `python -m pdd.viewer --run_dir runs/<name>` (optionally `--no-prewarm`). Reads run artifacts lazily, never mutates checkpoints; Neuronpedia cache under `<run>/viewer_cache/`.
+- Pipeline math modules (feature-conditioned / prompt-conditioned / feature-cluster algorithms) live in `pdd/feature_conditioned.py`, `pdd/prompt_conditioned.py`, `pdd/feature_clusters.py` — treat as the paper's math, keep stable.
+
+## Viewer API & Run Artifacts (for wiring)
+
+- `GET /api/runs`, `/api/run_data` (returns `summary`, `validation_metrics`, `top_feature_conditioned_hypotheses`, `top_prompt_conditioned_hypotheses`, `cluster_labels`, `feature_cluster_labels`), `/api/feature_cluster_info?m=<k>&top_n=...`, `/api/cluster_detail?type=feature|data&id=...`, `/api/neuronpedia_*`.
+- Run artifact files under `<run>/`: `cluster_labels.json` (B_k), `feature_cluster_labels.json` (T_m), `prompt_conditioned_cluster_examples.json` (A_k/R_m), `feature_conditioned_hypotheses.json`, `pdd_summary.json`; under `<run>/p4_validation/`: `p4_r2_metrics.json` + `p4_r2_by_epoch.json` (R² is measured ONLY over the hypothesis-set clusters — see Experiment Scripts).
+- Server-side helper conventions: `_cached_info(key, build)` memoizes per-cluster lookups (call `build` even on cache hit ONLY for side-effects like prewarm); `_parse_hypotheses` builds `k -> list_of_hypotheses`; `_neuronpedia_verified`/`_sae_feature_item`/`_worker` keep handlers thin.
+
+## Experiment Scripts (`experiments/`)
+
+- `p4_dpo_validation.py`: DPO validation. `load_validated_cluster_ids()` builds the hypothesis-set cluster IDs from the config thresholds — this IS the validation universe (R² is measured ONLY over these clusters, never the whole Leiden partition; falls back to the full partition with a warning if `feature_conditioned_hypotheses.json` is missing); `compute_cluster_validation(..., valid_ids=...)` computes the metrics; `eval_epoch` emits per-epoch metrics saved to `p4_r2_metrics.json`/`p4_r2_by_epoch.json`. Observed on the 65k run: hypothesis-set R²=0.0171 (29 of 118 clusters) — still noise-level, so the low R² is a signal-quality issue (u_bar vs empirical Δ mismatch), not a cluster-count/threshold one.
+- Known tokenizer facts: Qwen3 has NO BOS and right-pads; Gemma2 has BOS + left-pads. Robust positional mask = `attention_mask.argmax() + prompt_len + tokenizer_offset`.
+- LoRA only: `enable_input_require_grads()` is gated on `lora_rank == 0` (adds leaf-grad hooks; pointless when base is frozen anyway). Batched SAE encodes: zero-pad the window, do ONE `sae.encode`, then slice back — matches per-window output.
+
 ## Paper Recipe (Implementation Checklist)
 
 - Feature-conditioned pipeline: `docs/paper/main.tex` §"Feature-Conditioned
@@ -65,3 +95,16 @@ LaTeX source) — read the relevant appendix section before touching a module.
 - Viewer (`pdd/viewer_server.py`, `viewer/`): single-run FastAPI + JS UI. T_m tags
   (inspector + B.1 table) open a whole-cluster dropdown (LLM label + Neuronpedia
   member links + real examples); A_k / R_m links show their strongest examples.
+
+## Dev Workflow — Verify Before You Report
+
+- **Mandatory pre-report checks after editing Python/JS**: `python -m py_compile <changed files>` (syntax) + `ruff check pdd/` (lint) + `node --check viewer/app.js` (JS) + quick module import test.
+- **Viewer smoke test**: boot `python -m pdd.viewer --run_dir runs/<name> --port <free> --no-prewarm` in background, wait ~20–30s (mechanical HDD), `curl /api/run_data` + `/api/feature_cluster_info?m=...` + `/api/cluster_detail`, then kill the server. This catches runtime breakage in `_cached_info`/handler refactors that py_compile/ruff cannot.
+- **Functional tests**: exercise refactored helpers directly (e.g. checkpoint-subfolder ranking across npz/chunks/examples/partial-mmap scenarios) rather than trusting a refactor by inspection.
+- **Pitfall**: `pkill -f "pdd.viewer --run_dir ..."` ALSO matches the user's own long-running viewer instance (different port). Kill by PID (from `pgrep -af "pdd.viewer"`) instead, and never kill the user's viewer without asking.
+
+## Refactor/Cleanup Guidelines (behavior-preserving)
+
+- Work in strict category order: 1) redundant/duplicate code, 2) implicit fallbacks (silent `except: pass` / `or {}` MUST become `logger.warning`), 3) un-needed complex if-else / dead paths, 4) function sizing/overlap (no forced splits; merge only honest duplicates). Run the full verify battery after EACH pass.
+- Per-function `import numpy as np` is function-scoped: when extracting a helper that uses np, the OUTER function loses np if it still references it — re-add the import to the outer scope or the refactor silently breaks the non-tested branch.
+- Keep math modules (`feature_conditioned.py`, `prompt_conditioned.py`, `feature_clusters.py`) untouched; never alter checkpoint/data artifacts (see Data Preservation rule).

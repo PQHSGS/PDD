@@ -10,11 +10,11 @@ Replicates Goodfire's paper (arXiv:2606.12360, §3, §4 & App. B):
 from __future__ import annotations
 
 import argparse
-import gc
 import json
 import os
 import time
 from dataclasses import asdict
+from typing import List, Optional, Set
 import numpy as np
 import torch
 
@@ -41,6 +41,15 @@ class DPODataset(Dataset):
         self.examples = examples
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self._prompt_offset = self._leading_special_tokens()
+
+    def _leading_special_tokens(self) -> int:
+        """Count special tokens the tokenizer prepends to a plain string (<bos> for Gemma2, 0 for Qwen3)."""
+        probe = self.tokenizer.encode("probe prompt text")
+        n = 0
+        while n < len(probe) and probe[n] in self.tokenizer.all_special_ids:
+            n += 1
+        return n
 
     def __len__(self):
         return len(self.examples)
@@ -57,11 +66,11 @@ class DPODataset(Dataset):
         p_len = len(self.tokenizer.encode(prompt, add_special_tokens=False))
 
         c_labels = c_enc.input_ids.squeeze(0).clone()
-        c_labels[:p_len] = -100
+        c_labels[: int(c_enc.attention_mask.squeeze(0).argmax()) + p_len + self._prompt_offset] = -100
         c_labels[c_enc.attention_mask.squeeze(0) == 0] = -100
 
         r_labels = r_enc.input_ids.squeeze(0).clone()
-        r_labels[:p_len] = -100
+        r_labels[: int(r_enc.attention_mask.squeeze(0).argmax()) + p_len + self._prompt_offset] = -100
         r_labels[r_enc.attention_mask.squeeze(0) == 0] = -100
 
         return {
@@ -201,18 +210,18 @@ def train_dpo_model(
 
     model.train()
 
-    if hasattr(model, "enable_input_require_grads"):
+    if lora_rank == 0 and hasattr(model, "enable_input_require_grads"):
         try:
             model.enable_input_require_grads()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"enable_input_require_grads unsupported ({e}); continuing without input grads.")
 
     if hasattr(model, "gradient_checkpointing_enable"):
         try:
             model.gradient_checkpointing_enable()
             logger.info("Gradient checkpointing enabled for low-VRAM training.")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Gradient checkpointing unavailable ({e}); continuing without it.")
 
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     try:
@@ -346,16 +355,29 @@ def sample_rollout_activations(
             full_acts = activations[0]
             inp_len = inputs.input_ids.shape[1]
 
+            windows: List[torch.Tensor] = []
+            lengths: List[int] = []
             for b in range(len(batch_prompts)):
                 sample_gen_tokens = gen_tokens[b, inp_len:]
                 valid_mask = (sample_gen_tokens != pad_id)
                 num_valid = valid_mask.sum().item()
                 if num_valid == 0:
                     continue
-                res_act = full_acts[b, inp_len : inp_len + num_valid]
-                sae_acts = sae.encode(res_act.to(sae.device))
-                mean_freq = (sae_acts > tau).float().mean(dim=0).detach().cpu().numpy()
-                all_feature_means.append(mean_freq)
+                windows.append(full_acts[b, inp_len : inp_len + num_valid])
+                lengths.append(num_valid)
+
+            if windows:
+                max_len = max(lengths)
+                d = windows[0].shape[-1]
+                padded = torch.zeros(len(windows), max_len, d, dtype=windows[0].dtype, device=windows[0].device)
+                for i, (w, ln) in enumerate(zip(windows, lengths)):
+                    padded[i, :ln] = w
+                sae_acts = sae.encode(padded.to(sae.device))
+                if isinstance(sae_acts, tuple):
+                    sae_acts = sae_acts[0]
+                for i, ln in enumerate(lengths):
+                    mean_freq = (sae_acts[i, :ln] > tau).float().mean(dim=0).detach().cpu().numpy()
+                    all_feature_means.append(mean_freq)
 
             del gen_tokens, full_acts
     finally:
@@ -395,9 +417,18 @@ def compute_reward_margin(model, tokenizer, examples, device: str, n: int = 200,
     return float(margins.mean()), float(margins.std()), int(len(margins))
 
 
-def compute_cluster_validation(delta_empirical_all: np.ndarray, cluster_ids, cluster_map, u_bar_global: np.ndarray, num_features: int) -> tuple[ValidationMetrics, np.ndarray, np.ndarray]:
-    """Ranks feature clusters by predicted disparity and returns R^2/Pearson plus the ranked arrays."""
-    sorted_cluster_indices = np.argsort(-np.abs(u_bar_global))
+def compute_cluster_validation(delta_empirical_all: np.ndarray, cluster_ids, cluster_map, u_bar_global: np.ndarray, num_features: int, valid_ids: Optional[Set[int]] = None) -> tuple[ValidationMetrics, np.ndarray, np.ndarray]:
+    """Ranks feature clusters by predicted disparity and returns R^2/Pearson plus the ranked arrays.
+
+    ``valid_ids`` optionally limits validation to a subset of cluster ids — e.g. the
+    clusters referenced by hypotheses passing the paper's B.1 viewer filters — so the R^2
+    measures the predictions the paper actually presents (see load_validated_cluster_ids).
+    """
+    if valid_ids is not None:
+        keep = [i for i, cid in enumerate(cluster_ids) if cid in valid_ids]
+    else:
+        keep = list(range(len(cluster_ids)))
+    sorted_cluster_indices = sorted(keep, key=lambda i: -abs(u_bar_global[i]))
     if num_features > 0:
         sorted_cluster_indices = sorted_cluster_indices[:num_features]
 
@@ -415,6 +446,40 @@ def compute_cluster_validation(delta_empirical_all: np.ndarray, cluster_ids, clu
     delta_emp_arr = np.array(delta_empirical, dtype=np.float64)
     metrics = compute_prediction_validation_metrics(delta_pred_arr, delta_emp_arr)
     return metrics, delta_pred_arr, delta_emp_arr
+
+
+def load_validated_cluster_ids(run_dir: str, fc_cfg, cluster_map) -> Optional[Set[int]]:
+    """Feature clusters T_m referenced by hypotheses passing the paper's B.1 viewer filters.
+
+    Filters are read from config (never hardcoded):
+      |T_m| >= fc_cfg.min_feat_cluster_size, n_k >= fc_cfg.min_data_cluster_size, SC == 1.
+    Returns None (=> full-partition validation) when the hypotheses artifact is missing.
+    """
+    path = os.path.join(run_dir, "feature_conditioned_hypotheses.json")
+    if not os.path.exists(path):
+        logger.warning("feature_conditioned_hypotheses.json not found; validating on the full partition only.")
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    hypos = data.get("hypotheses", data) if isinstance(data, dict) else data
+    valid: Set[int] = set()
+    for h in hypos:
+        m = h.get("m")
+        if m is None:
+            continue
+        if int(h.get("t_m", 0) or 0) < fc_cfg.min_feat_cluster_size:
+            continue
+        if int(h.get("n_k", 0) or 0) < fc_cfg.min_data_cluster_size:
+            continue
+        if not bool(h.get("sign_consistent", False)):
+            continue
+        valid.add(int(m))
+    n_in = sum(1 for m in valid if m in cluster_map.clusters)
+    logger.info(
+        f"Validated cluster set (|T_m|>={fc_cfg.min_feat_cluster_size}, "
+        f"n_k>={fc_cfg.min_data_cluster_size}, SC=1): {n_in} clusters."
+    )
+    return valid
 
 
 def main():
@@ -540,6 +605,13 @@ def main():
     with open(os.path.join(output_dir, "cluster_ids.json"), "w", encoding="utf-8") as f:
         json.dump(cluster_ids, f)
 
+    # 5b. Feature clusters T_m referenced by hypotheses passing the paper's B.1 viewer
+    # filters (|T_m| >= min_feat_cluster_size, n_k >= min_data_cluster_size, SC=1), read
+    # from config — the set the author's viewer would actually present as predictions.
+    # This hypothesis set is THE validation universe: R^2 is measured only over the
+    # clusters the pipeline would actually present, not the whole Leiden partition.
+    valid_cluster_ids = load_validated_cluster_ids(run_dir, cfg.feature_conditioned, cluster_map)
+
     # 6. Fine-Tune Model on DPO Loss, computing R^2 after every epoch (move SAE to CPU to free VRAM during training)
     logger.info(f"Training DPO model on all {len(train_examples):,} preference examples...")
     if hasattr(sae, "to"):
@@ -573,10 +645,20 @@ def main():
         np.save(os.path.join(output_dir, f"delta_emp_full_epoch{epoch}.npy"), delta_emp_full)
         np.save(os.path.join(output_dir, f"delta_all_epoch{epoch}.npy"), delta_empirical_all)
 
-        metrics, _, _ = compute_cluster_validation(delta_empirical_all, cluster_ids, cluster_map, u_bar_global, v.num_features)
+        metrics, _, _ = compute_cluster_validation(
+            delta_empirical_all, cluster_ids, cluster_map, u_bar_global, v.num_features, valid_ids=valid_cluster_ids
+        )
         margin_mean, margin_std, _ = compute_reward_margin(current_model, tokenizer, eval_examples, cfg.model.device, n=200, seed=cfg.seed)
-        per_epoch_metrics.append({"epoch": epoch, **asdict(metrics), "reward_margin": margin_mean, "reward_margin_std": margin_std})
-        logger.info(f"Epoch {epoch}/{v.epochs} R^2 = {metrics.r2_score:.4f} | Pearson r: {metrics.pearson_r:.4f} | reward margin: {margin_mean:.4f} (pre={pre_margin_mean:.4f})")
+        per_epoch_metrics.append({
+            "epoch": epoch,
+            **asdict(metrics),
+            "reward_margin": margin_mean,
+            "reward_margin_std": margin_std,
+        })
+        logger.info(
+            f"Epoch {epoch}/{v.epochs} R^2 = {metrics.r2_score:.4f} | "
+            f"Pearson r: {metrics.pearson_r:.4f} | reward margin: {margin_mean:.4f} (pre={pre_margin_mean:.4f})"
+        )
         if hasattr(sae, "to"):
             sae.to("cpu")
         if torch.cuda.is_available():
@@ -603,7 +685,7 @@ def main():
     final_metrics.save_json(metrics_file)
 
     track = ", ".join(f"ep{m['epoch']}: R2={m['r2_score']:.4f}" for m in per_epoch_metrics)
-    logger.info(f"=== [Phase P4 100% Real DPO Validation Completed!] ===")
+    logger.info("=== [Phase P4 100% Real DPO Validation Completed!] ===")
     logger.info(f"Per-epoch track -> {track}. Final R^2: {final_metrics.r2_score:.4f}. Saved to '{output_dir}'")
 
 
