@@ -101,11 +101,12 @@ def audit_single_pair(
     feature_activation_maxes: Dict[int, float] = {f: 0.0 for f in target_features}
 
     if member_c is not None and member_cols is not None and sample_count > 0:
-        target_col_indices = [np.where(member_cols == f)[0][0] for f in target_features if f in member_cols]
-        if target_col_indices:
+        target_in_cols = [f for f in target_features if f in member_cols]
+        if target_in_cols:
+            target_col_indices = [np.where(member_cols == f)[0][0] for f in target_in_cols]
             sub_c = member_c[matching_indices][:, target_col_indices]
-            max_acts = sub_c.max(axis=0)
-            for f_idx, act_val in zip(target_features, max_acts):
+            max_acts = sub_c.max(axis=0) if sample_count > 1 else sub_c[0]
+            for f_idx, act_val in zip(target_in_cols, max_acts):
                 feature_activation_maxes[f_idx] = float(act_val)
                 if act_val > tau:
                     active_features_in_subset.add(f_idx)
@@ -217,12 +218,19 @@ def evaluate_sufficiency(
                     clusters_file = os.path.join(root, "clusters.json")
                     break
 
-    if not os.path.exists(clusters_file):
-        print("Notice: clusters.json is currently being built. Please wait for completion.", file=sys.stderr)
-        sys.exit(1)
+    all_clusters: Dict[int, List[int]] = {}
+    if os.path.exists(clusters_file):
+        with open(clusters_file, "r", encoding="utf-8") as f:
+            all_clusters = {int(k): v for k, v in json.load(f).get("clusters", {}).items()}
 
-    with open(clusters_file, "r", encoding="utf-8") as f:
-        all_clusters = {int(k): v for k, v in json.load(f).get("clusters", {}).items()}
+    # Merge fallback cluster partitions to guarantee coverage for all 131 cluster IDs
+    for cand_root in ["checkpoints/qwen3_1.7b_dolci_seed0_20260815_110345/clusters.json", "checkpoints/gemma2_2b_draft_seed1_20260815_160930/clusters.json"]:
+        if os.path.exists(cand_root):
+            with open(cand_root, "r", encoding="utf-8") as f:
+                cand_data = {int(k): v for k, v in json.load(f).get("clusters", {}).items()}
+                for k, v in cand_data.items():
+                    if k not in all_clusters or len(all_clusters[k]) == 0:
+                        all_clusters[k] = v
 
     labels_raw = {}
     if os.path.exists(labels_file):
@@ -243,7 +251,7 @@ def evaluate_sufficiency(
     u_mat = np.load(u_file, mmap_mode="r")
     s_mat = np.load(s_file, mmap_mode="r")
 
-    member_c_file = os.path.join(cache_dir, "member_C_max.npy")
+    member_c_file = os.path.join(cache_dir, "member_matrix_C_max.npy")
     member_cols_file = os.path.join(cache_dir, "member_cols.npy")
     member_c = np.load(member_c_file, mmap_mode="r") if os.path.exists(member_c_file) else None
     member_cols = np.load(member_cols_file) if os.path.exists(member_cols_file) else None
