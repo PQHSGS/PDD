@@ -1,0 +1,11 @@
+{
+  "original_examples": 9995,
+  "inoculated_examples": 9940,
+  "purged_clusters": [
+    1,
+    5
+  ],
+  "mean_loss_weight": 0.5017778277397156,
+  "min_loss_weight": 0.4097433388233185,
+  "max_loss_weight": 0.6120926141738892
+}

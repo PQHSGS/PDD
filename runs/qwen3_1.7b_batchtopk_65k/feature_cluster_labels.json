@@ -1,0 +1,1089 @@
+{
+  "feature_clusters": {
+    "1": {
+      "title": "Minimum Spanning Tree",
+      "description": "Finding the MST of a complete graph with edge weights P[u] * P[v]",
+      "keywords": [
+        "minimum spanning tree",
+        "graph theory",
+        "computation"
+      ]
+    },
+    "2": {
+      "title": "Logistic Regression",
+      "description": "Implementation of logistic regression models with regularization and evaluation techniques.",
+      "keywords": [
+        "logistic regression",
+        "regularization",
+        "model evaluation"
+      ]
+    },
+    "3": {
+      "title": "Form Design",
+      "description": "Designing user-friendly HTML forms with validation and styling.",
+      "keywords": [
+        "html forms",
+        "user interface",
+        "validation"
+      ]
+    },
+    "4": {
+      "title": "Climate Change",
+      "description": "The impact of climate change on environmental and societal systems.",
+      "keywords": [
+        "climate change",
+        "environment",
+        "sustainability"
+      ]
+    },
+    "5": {
+      "title": "Math Problem Solving",
+      "description": "Solving mathematical problems step-by-step with explanations.",
+      "keywords": [
+        "math",
+        "problem solving",
+        "algebra",
+        "calculus"
+      ]
+    },
+    "6": {
+      "title": "Topic Cluster 6: Detection/algorithm",
+      "description": "Cluster containing responses associated with detection, algorithm, network, system.",
+      "keywords": []
+    },
+    "7": {
+      "title": "Quadratic Optimization",
+      "description": "Solving quadratic equations to find maximum or minimum values in real-world scenarios.",
+      "keywords": [
+        "quadratic equations",
+        "optimization",
+        "maxima minima",
+        "mathematics"
+      ]
+    },
+    "8": {
+      "title": "Mathematical Problem Solving",
+      "description": "Solving complex mathematical problems using various methods.",
+      "keywords": [
+        "mathematics",
+        "problem solving",
+        "differential equations",
+        "optimization",
+        "statistics"
+      ]
+    },
+    "9": {
+      "title": "Prime Number Summation",
+      "description": "Summing prime numbers in a matrix or list using efficient primality checks.",
+      "keywords": [
+        "prime numbers",
+        "matrix sum",
+        "primality check"
+      ]
+    },
+    "10": {
+      "title": "Python Function Implementation",
+      "description": "Implementation of Python functions for data processing and sorting",
+      "keywords": [
+        "python",
+        "function",
+        "data processing",
+        "sorting",
+        "list operations"
+      ]
+    },
+    "11": {
+      "title": "Topic Cluster 11: Orbitals/theory",
+      "description": "Cluster containing responses associated with orbitals, theory, higher, (e.g.",
+      "keywords": []
+    },
+    "12": {
+      "title": "Model Training",
+      "description": "Steps for training machine learning models using datasets and algorithms.",
+      "keywords": [
+        "model training",
+        "machine learning",
+        "dataset",
+        "algorithms",
+        "classification"
+      ]
+    },
+    "13": {
+      "title": "Model Training",
+      "description": "Training models using datasets and frameworks like PyTorch, TensorFlow, and Hugging Face.",
+      "keywords": [
+        "model training",
+        "machine learning",
+        "deep learning",
+        "training pipelines",
+        "sequence classification"
+      ]
+    },
+    "14": {
+      "title": "Emotional Struggles",
+      "description": "Prompts about personal challenges, anxiety, and mental health experiences.",
+      "keywords": [
+        "anxiety",
+        "mental health",
+        "emotional struggles"
+      ]
+    },
+    "15": {
+      "title": "Computational Astrophysics",
+      "description": "Resources and methods for simulating astrophysical phenomena using computational tools.",
+      "keywords": [
+        "computational astrophysics",
+        "numerical methods",
+        "software packages",
+        "radiative transfer",
+        "turbulence modeling"
+      ]
+    },
+    "16": {
+      "title": "Quantum Mechanics",
+      "description": "Exploration of quantum principles and their applications in technology.",
+      "keywords": [
+        "quantum mechanics",
+        "physics",
+        "technology"
+      ]
+    },
+    "17": {
+      "title": "Software Development",
+      "description": "Prompts about tools, frameworks, and practices in modern software development.",
+      "keywords": [
+        "software",
+        "development",
+        "tools",
+        "frameworks",
+        "practices"
+      ]
+    },
+    "18": {
+      "title": "Overcoming Doubt",
+      "description": "Prompts about confronting internal struggles and self-acceptance.",
+      "keywords": [
+        "doubt",
+        "self-acceptance",
+        "overcoming"
+      ]
+    },
+    "19": {
+      "title": "Career Development",
+      "description": "Prompts about resume customization, skill development, and professional growth.",
+      "keywords": [
+        "resume",
+        "career",
+        "skills"
+      ]
+    },
+    "20": {
+      "title": "Model Training",
+      "description": "Steps to train machine learning models using datasets and libraries.",
+      "keywords": [
+        "model training",
+        "machine learning",
+        "dataset"
+      ]
+    },
+    "21": {
+      "title": "Stigma and Discrimination",
+      "description": "The common theme of responses revolves around the stigmatization and discrimination faced by marginalized groups and individuals in society.",
+      "keywords": [
+        "stigma",
+        "discrimination",
+        "marginalized groups"
+      ]
+    },
+    "22": {
+      "title": "Cultural and Historical Influences",
+      "description": "Prompts about the impact of ancient civilizations on art, politics, and society.",
+      "keywords": [
+        "ancient civilizations",
+        "art influences",
+        "historical legacy"
+      ]
+    },
+    "23": {
+      "title": "Topic Cluster 23: Sleep/mirror",
+      "description": "Cluster containing responses associated with sleep, mirror, ```bash, cloud.",
+      "keywords": []
+    },
+    "24": {
+      "title": "Government Policies",
+      "description": "Prompts about government decisions and their impact on daily life.",
+      "keywords": [
+        "government",
+        "policies",
+        "daily life"
+      ]
+    },
+    "25": {
+      "title": "Game Development",
+      "description": "Creating games with procedural generation and user interaction.",
+      "keywords": [
+        "game development",
+        "procedural generation",
+        "user interaction"
+      ]
+    },
+    "26": {
+      "title": "Web Development",
+      "description": "Building scalable and secure web applications with backend and frontend technologies.",
+      "keywords": [
+        "web development",
+        "backend",
+        "frontend",
+        "api",
+        "cloud"
+      ]
+    },
+    "27": {
+      "title": "Software Development",
+      "description": "Creating and deploying applications using programming languages and tools.",
+      "keywords": [
+        "software",
+        "development",
+        "programming"
+      ]
+    },
+    "28": {
+      "title": "Modern Web Development",
+      "description": "Prompts about responsive design, CSS frameworks, and JavaScript enhancements.",
+      "keywords": [
+        "responsive design",
+        "css frameworks",
+        "javascript enhancements"
+      ]
+    },
+    "29": {
+      "title": "Quantum Entanglement",
+      "description": "A fundamental concept in quantum mechanics that underpins advancements in quantum computing and cryptography.",
+      "keywords": [
+        "quantum entanglement",
+        "quantum mechanics",
+        "quantum computing",
+        "cryptography",
+        "physics"
+      ]
+    },
+    "30": {
+      "title": "Professional Communication",
+      "description": "Messages used in professional settings to request, inform, or request actions in a clear and concise manner.",
+      "keywords": [
+        "professional communication",
+        "email",
+        "request",
+        "inform"
+      ]
+    },
+    "31": {
+      "title": "Code Examples",
+      "description": "Representative code snippets for various programming tasks.",
+      "keywords": [
+        "code",
+        "examples",
+        "programming"
+      ]
+    },
+    "32": {
+      "title": "Machine Learning",
+      "description": "Common theme of technical and algorithmic approaches in various domains.",
+      "keywords": [
+        "machine learning",
+        "algorithms",
+        "data",
+        "models",
+        "computing"
+      ]
+    },
+    "33": {
+      "title": "Quantum Entanglement",
+      "description": "Exploration of quantum entanglement and its applications in quantum cryptography.",
+      "keywords": [
+        "quantum entanglement",
+        "quantum cryptography",
+        "quantum mechanics"
+      ]
+    },
+    "34": {
+      "title": "Quantum Computing",
+      "description": "Exploration of quantum computing principles, advancements, and applications in information processing.",
+      "keywords": [
+        "quantum computing",
+        "qubits",
+        "quantum mechanics",
+        "error correction",
+        "quantum algorithms"
+      ]
+    },
+    "35": {
+      "title": "Medical Research",
+      "description": "Analysis of clinical outcomes and treatment effectiveness in medical studies.",
+      "keywords": [
+        "medical research",
+        "clinical outcomes",
+        "treatment effectiveness"
+      ]
+    },
+    "36": {
+      "title": "Topic Cluster 36: Password/passwords",
+      "description": "Cluster containing responses associated with password, passwords, security, name.",
+      "keywords": []
+    },
+    "37": {
+      "title": "Employment Offer Rejection",
+      "description": "Drafting and communicating the rejection of an employment offer with professionalism and sensitivity.",
+      "keywords": [
+        "employment",
+        "offer",
+        "rejection"
+      ]
+    },
+    "38": {
+      "title": "Workplace Inclusion",
+      "description": "Prompts about creating an inclusive workplace through policies and employee well-being.",
+      "keywords": [
+        "workplace",
+        "inclusion",
+        "policies"
+      ]
+    },
+    "39": {
+      "title": "Quantum Computing",
+      "description": "Exploration of quantum entanglement and its role in advancing quantum computing.",
+      "keywords": [
+        "quantum computing",
+        "entanglement",
+        "technology",
+        "sustainability",
+        "innovation"
+      ]
+    },
+    "40": {
+      "title": "Coping Mechanisms",
+      "description": "Exploration of diverse strategies and methods to manage mental health and emotional challenges.",
+      "keywords": [
+        "coping",
+        "mental health",
+        "strategies"
+      ]
+    },
+    "41": {
+      "title": "Database Operations",
+      "description": "Efficient data manipulation and validation in database systems.",
+      "keywords": [
+        "database",
+        "sql",
+        "validation"
+      ]
+    },
+    "42": {
+      "title": "Machine Learning",
+      "description": "Process of training models to make predictions",
+      "keywords": [
+        "machine learning",
+        "model training",
+        "predictive analytics"
+      ]
+    },
+    "43": {
+      "title": "Security Measures",
+      "description": "Prompts about securing digital accounts and networks through password management, authentication, and network protection.",
+      "keywords": [
+        "security",
+        "passwords",
+        "authentication",
+        "network protection",
+        "cybersecurity"
+      ]
+    },
+    "44": {
+      "title": "Cellular Processes",
+      "description": "Exploration of viral and bacterial mechanisms in cellular interactions and signaling.",
+      "keywords": [
+        "cellular processes",
+        "virus",
+        "bacteria",
+        "signal transduction",
+        "cellular machinery"
+      ]
+    },
+    "45": {
+      "title": "Data Preprocessing",
+      "description": "Steps to clean and prepare data for modeling.",
+      "keywords": [
+        "data preprocessing",
+        "cleaning",
+        "model training"
+      ]
+    },
+    "46": {
+      "title": "Health and Safety",
+      "description": "Prompts about debunking myths, scientific explanations, and health-related misinformation.",
+      "keywords": [
+        "health",
+        "myths",
+        "science"
+      ]
+    },
+    "47": {
+      "title": "Data Analysis",
+      "description": "Analysis of datasets for insights and decision-making.",
+      "keywords": [
+        "data analysis",
+        "dataset",
+        "insights"
+      ]
+    },
+    "48": {
+      "title": "Course Outline",
+      "description": "Structured guide for learning marketing fundamentals",
+      "keywords": [
+        "marketing",
+        "course",
+        "outline"
+      ]
+    },
+    "49": {
+      "title": "Recipe Development",
+      "description": "Prompts about creating gluten-free recipes and cooking techniques.",
+      "keywords": [
+        "gluten-free",
+        "recipes",
+        "cooking"
+      ]
+    },
+    "50": {
+      "title": "Topic Cluster 50: Symmetry/energy",
+      "description": "Cluster containing responses associated with symmetry, energy, structure, t<sub>e\u207a</sub>.",
+      "keywords": []
+    },
+    "51": {
+      "title": "Model Building",
+      "description": "Steps to develop machine learning models using datasets and algorithms.",
+      "keywords": [
+        "model building",
+        "machine learning",
+        "dataset",
+        "algorithms",
+        "classification"
+      ]
+    },
+    "52": {
+      "title": "Recipe Development",
+      "description": "Prompts about ingredient selection, cooking methods, and dietary restrictions.",
+      "keywords": [
+        "recipes",
+        "diet",
+        "ingredients"
+      ]
+    },
+    "53": {
+      "title": "Web Development",
+      "description": "Creating and deploying web applications using Python and Docker",
+      "keywords": [
+        "web development",
+        "python",
+        "docker"
+      ]
+    },
+    "54": {
+      "title": "Research on Hermanubis",
+      "description": "A systematic search and analysis of Hermanubis' historical, religious, and cultural aspects.",
+      "keywords": [
+        "hermanubis",
+        "research",
+        "historical"
+      ]
+    },
+    "55": {
+      "title": "Web Development",
+      "description": "Creating responsive and functional web pages using HTML, Bootstrap, and JavaScript.",
+      "keywords": [
+        "web development",
+        "html",
+        "bootstrap"
+      ]
+    },
+    "56": {
+      "title": "Algorithm Comparison",
+      "description": "Comparing different sorting and data processing algorithms.",
+      "keywords": [
+        "sorting",
+        "algorithms",
+        "data processing"
+      ]
+    },
+    "57": {
+      "title": "Web Development",
+      "description": "Creating modern, accessible, and interactive web applications using HTML, CSS, and JavaScript.",
+      "keywords": [
+        "html",
+        "css",
+        "javascript",
+        "web development",
+        "front-end"
+      ]
+    },
+    "58": {
+      "title": "Electron Transfer",
+      "description": "Prompts about electron transfer in synthetic photosynthetic systems and particle physics.",
+      "keywords": [
+        "electron transfer",
+        "photosynthesis",
+        "supramolecular",
+        "superconductivity",
+        "spontaneous symmetry breaking"
+      ]
+    },
+    "59": {
+      "title": "Quantum Mechanics",
+      "description": "Exploration of quantum principles and their applications in technology and science.",
+      "keywords": [
+        "quantum mechanics",
+        "physics",
+        "technology"
+      ]
+    },
+    "60": {
+      "title": "FinTech Trends",
+      "description": "Prompts about contactless payments, open banking, BNPL, and digital-only banking.",
+      "keywords": [
+        "contactless payments",
+        "open banking",
+        "bnpl",
+        "digital-only banking",
+        "fintech"
+      ]
+    },
+    "61": {
+      "title": "Bio-Marktanalyse",
+      "description": "Analyse der Rolle von N\u00fcssen und Samen im Bio-Markt und deren wachsenden Einfluss auf Gesundheit und Umweltvertr\u00e4glichkeit.",
+      "keywords": [
+        "bio-markt",
+        "n\u00fcsse und samen",
+        "gesundheit",
+        "umweltvertr\u00e4glichkeit",
+        "marktanalyse"
+      ]
+    },
+    "62": {
+      "title": "Quantum Entanglement",
+      "description": "Exploration of quantum entanglement's theoretical and practical aspects.",
+      "keywords": [
+        "quantum entanglement",
+        "theoretical physics",
+        "quantum computing"
+      ]
+    },
+    "63": {
+      "title": "Topic Cluster 63: **use/cloud",
+      "description": "Cluster containing responses associated with **use, cloud, (e.g, **cloud.",
+      "keywords": []
+    },
+    "64": {
+      "title": "Employee Morale",
+      "description": "Strategies to enhance employee engagement, productivity, and satisfaction through positive work environments and supportive leadership.",
+      "keywords": [
+        "employee morale",
+        "workplace engagement",
+        "leadership strategies"
+      ]
+    },
+    "65": {
+      "title": "Symmetric Encryption",
+      "description": "Prompts about secure data storage and retrieval using symmetric encryption algorithms.",
+      "keywords": [
+        "symmetric encryption",
+        "data security",
+        "key management"
+      ]
+    },
+    "66": {
+      "title": "Weyl Spinor Construction",
+      "description": "Constructing massless Weyl spinors in the (0, 1/2) representation of the Lorentz group.",
+      "keywords": [
+        "weyl spinors",
+        "lorentz group",
+        "quantum field theory"
+      ]
+    },
+    "67": {
+      "title": "AI Development",
+      "description": "Development of AI-driven applications and models.",
+      "keywords": [
+        "ai",
+        "development",
+        "machine learning"
+      ]
+    },
+    "68": {
+      "title": "Software Development",
+      "description": "Prompts about building complex applications with multiple features and technical challenges.",
+      "keywords": [
+        "software",
+        "development",
+        "complexity",
+        "technical",
+        "features"
+      ]
+    },
+    "69": {
+      "title": "Web Development",
+      "description": "Creating web components, APIs, and user interfaces with HTML, CSS, JavaScript, and frameworks like Angular, Next.js, and Svelte.",
+      "keywords": [
+        "web development",
+        "html",
+        "javascript",
+        "frameworks",
+        "api"
+      ]
+    },
+    "70": {
+      "title": "Privacy and Security",
+      "description": "Prompts about securing digital information and maintaining online privacy through technical and procedural measures.",
+      "keywords": [
+        "privacy",
+        "security",
+        "encryption",
+        "network",
+        "data"
+      ]
+    },
+    "71": {
+      "title": "Energy Transition",
+      "description": "Prompts about nuclear energy and its role in reducing carbon emissions.",
+      "keywords": [
+        "nuclear energy",
+        "carbon emissions",
+        "sustainability"
+      ]
+    },
+    "72": {
+      "title": "Quantum Computing",
+      "description": "Prompts about the principles and applications of quantum computing based on quantum mechanics.",
+      "keywords": [
+        "quantum computing",
+        "quantum mechanics",
+        "superposition",
+        "entanglement",
+        "qubits"
+      ]
+    },
+    "73": {
+      "title": "Quantum Computing",
+      "description": "Explains the core principles and applications of quantum computing.",
+      "keywords": [
+        "quantum computing",
+        "qubits",
+        "superposition"
+      ]
+    },
+    "74": {
+      "title": "Deep Learning Models",
+      "description": "Implementation of deep learning models using TensorFlow/Keras for various tasks like GANs, regression, and classification.",
+      "keywords": [
+        "deep learning",
+        "tensorflow",
+        "keras",
+        "generative models",
+        "regression"
+      ]
+    },
+    "75": {
+      "title": "Topic Cluster 75: Force/gravity",
+      "description": "Cluster containing responses associated with force, gravity, force**, spacetime.",
+      "keywords": []
+    },
+    "76": {
+      "title": "Career Development",
+      "description": "Prompts about resume creation, job application, and professional skills.",
+      "keywords": [
+        "resume",
+        "career",
+        "professional"
+      ]
+    },
+    "77": {
+      "title": "Code Refactoring",
+      "description": "Improving code structure, clarity, and maintainability through refactoring.",
+      "keywords": [
+        "refactoring",
+        "code structure",
+        "software engineering"
+      ]
+    },
+    "78": {
+      "title": "Metabolism",
+      "description": "Acetyl CoA's role in energy production, fatty acid synthesis, and metabolic pathways.",
+      "keywords": [
+        "acetyl coenzyme a",
+        "metabolism",
+        "energy production",
+        "fatty acid synthesis",
+        "cellular respiration"
+      ]
+    },
+    "79": {
+      "title": "Software Engineering",
+      "description": "A structured approach to developing and maintaining software systems.",
+      "keywords": [
+        "software",
+        "engineering",
+        "development"
+      ]
+    },
+    "80": {
+      "title": "Biological Processes",
+      "description": "Exploration of cellular and molecular mechanisms in living organisms.",
+      "keywords": [
+        "cellular",
+        "molecular",
+        "biological",
+        "processes",
+        "disease"
+      ]
+    },
+    "81": {
+      "title": "Quantum Mechanics",
+      "description": "Explains the fundamental principles and implications of quantum mechanics.",
+      "keywords": [
+        "quantum mechanics",
+        "physics",
+        "subatomic particles"
+      ]
+    },
+    "82": {
+      "title": "Topic Cluster 82: Credit/infrared",
+      "description": "Cluster containing responses associated with credit, infrared, therapy, muscle.",
+      "keywords": []
+    },
+    "83": {
+      "title": "Religious Syncretism",
+      "description": "The blending of different religious beliefs, practices, and deities in ancient cultures.",
+      "keywords": [
+        "syncretism",
+        "religion",
+        "ancient cultures"
+      ]
+    },
+    "84": {
+      "title": "Genetic Variation",
+      "description": "Exploration of genetic diversity and its role in biological processes and fields like evolution and medicine.",
+      "keywords": [
+        "genetic variation",
+        "evolution",
+        "biology",
+        "medicine",
+        "genetics"
+      ]
+    },
+    "85": {
+      "title": "Medical Treatment",
+      "description": "Prompts about antibiotic use and infection management in post-surgery care.",
+      "keywords": [
+        "antibiotics",
+        "infection",
+        "surgery"
+      ]
+    },
+    "86": {
+      "title": "Quantum Mechanics",
+      "description": "Exploration of quantum principles and their applications in technology and physics.",
+      "keywords": [
+        "quantum mechanics",
+        "physics",
+        "technology",
+        "subatomic particles",
+        "wave-particle duality"
+      ]
+    },
+    "87": {
+      "title": "Topic Cluster 87: Carbon/alkyl",
+      "description": "Cluster containing responses associated with carbon, alkyl, \\lambda, grignard.",
+      "keywords": []
+    },
+    "88": {
+      "title": "Data Processing",
+      "description": "Steps for loading, preprocessing, and analyzing datasets in Python.",
+      "keywords": [
+        "data processing",
+        "python",
+        "datasets",
+        "preprocessing",
+        "analysis"
+      ]
+    },
+    "89": {
+      "title": "Database Migration",
+      "description": "Transferring data from PostgreSQL to AWS using AWS SDK and Python.",
+      "keywords": [
+        "migration",
+        "postgresql",
+        "aws",
+        "database",
+        "sdk"
+      ]
+    },
+    "90": {
+      "title": "Topic Cluster 90: Metrics/security",
+      "description": "Cluster containing responses associated with metrics, security, heart, accuracy.",
+      "keywords": []
+    },
+    "91": {
+      "title": "Code Development",
+      "description": "Guides on setting up and running Webpack, PyTorch pipelines, and game scripting.",
+      "keywords": [
+        "webpack",
+        "pytorch",
+        "game scripting"
+      ]
+    },
+    "92": {
+      "title": "Code Examples",
+      "description": "Provided code snippets for various technical tasks.",
+      "keywords": [
+        "code",
+        "snippets",
+        "examples"
+      ]
+    },
+    "93": {
+      "title": "Computing Infrastructure",
+      "description": "Prompts about high-performance computing centers and their performance metrics.",
+      "keywords": [
+        "high-performance",
+        "computing",
+        "centers"
+      ]
+    },
+    "94": {
+      "title": "Health & Safety",
+      "description": "Prompts about balancing benefits and risks of sun exposure, waste disposal, VPN usage, training, legal considerations, data security, and body positivity.",
+      "keywords": [
+        "health",
+        "safety",
+        "risks",
+        "benefits",
+        "security"
+      ]
+    },
+    "95": {
+      "title": "CNN Architecture",
+      "description": "Building a multi-task CNN for handwritten digit and style recognition with robustness to skew and rotation.",
+      "keywords": [
+        "cnn",
+        "deep learning",
+        "image recognition",
+        "neural networks",
+        "machine learning"
+      ]
+    },
+    "96": {
+      "title": "Software Development",
+      "description": "Prompts about object-oriented programming, data structures, and algorithm implementation.",
+      "keywords": [
+        "object-oriented",
+        "programming",
+        "data structures"
+      ]
+    },
+    "97": {
+      "title": "Diversity and Inclusion",
+      "description": "Promoting equitable practices in hiring and leadership.",
+      "keywords": [
+        "diversity",
+        "inclusion",
+        "hiring",
+        "leadership",
+        "equity"
+      ]
+    },
+    "98": {
+      "title": "Time Series Forecasting",
+      "description": "A broad field with techniques for predicting future values in time-based data.",
+      "keywords": [
+        "time series",
+        "forecasting",
+        "machine learning"
+      ]
+    },
+    "99": {
+      "title": "Data Analysis",
+      "description": "Steps for analyzing datasets using Python and machine learning.",
+      "keywords": [
+        "data analysis",
+        "machine learning",
+        "python"
+      ]
+    },
+    "100": {
+      "title": "Data Analysis and Algorithms",
+      "description": "Representative responses from an RLHF preference dataset focusing on data analysis and algorithm implementation.",
+      "keywords": [
+        "data analysis",
+        "algorithm implementation",
+        "python code"
+      ]
+    },
+    "101": {
+      "title": "Topic Cluster 101: Vowels/input",
+      "description": "Cluster containing responses associated with vowels, input, count, output.",
+      "keywords": []
+    },
+    "102": {
+      "title": "Project Setup",
+      "description": "Creating a project with tools and configurations",
+      "keywords": [
+        "project",
+        "setup",
+        "tools"
+      ]
+    },
+    "103": {
+      "title": "Workplace Ethics",
+      "description": "Prompts about ethical decision-making in professional settings.",
+      "keywords": [
+        "ethics",
+        "workplace",
+        "decision-making"
+      ]
+    },
+    "104": {
+      "title": "Java Applet",
+      "description": "Java Applet is a deprecated technology for GUI programming.",
+      "keywords": [
+        "java",
+        "applet",
+        "deprecated"
+      ]
+    },
+    "105": {
+      "title": "Fitness Regimen",
+      "description": "Prompts about structured exercise and training for athletic performance.",
+      "keywords": [
+        "fitness",
+        "training",
+        "athleticism"
+      ]
+    },
+    "106": {
+      "title": "International Law",
+      "description": "Prompts about the sources and regulation of international law.",
+      "keywords": [
+        "international law",
+        "sources",
+        "regulation"
+      ]
+    },
+    "107": {
+      "title": "Bacterial Communication",
+      "description": "Research on how bacteria use quorum sensing to reduce noise and improve group coordination.",
+      "keywords": [
+        "quorum sensing",
+        "bacteria",
+        "communication",
+        "noise control",
+        "microbial systems"
+      ]
+    },
+    "108": {
+      "title": "Java Linked List Reverse",
+      "description": "Java implementation for reversing linked list elements using recursion or stack-based methods.",
+      "keywords": [
+        "linked list",
+        "java",
+        "recursion"
+      ]
+    },
+    "109": {
+      "title": "Software Design",
+      "description": "Prompts about class structure, modular design, and user authentication in application development.",
+      "keywords": [
+        "class structure",
+        "modular design",
+        "user authentication"
+      ]
+    },
+    "110": {
+      "title": "Quantum Entanglement Analysis",
+      "description": "Analysis of quantum entanglement and its theoretical implications in physics and quantum informatics.",
+      "keywords": [
+        "quantum entanglement",
+        "epr paradox",
+        "bell's theorem",
+        "quantum mechanics",
+        "physics"
+      ]
+    },
+    "111": {
+      "title": "Renewable Energy",
+      "description": "Comparison of renewable energy sources and fossil fuels",
+      "keywords": [
+        "renewable energy",
+        "fossil fuels",
+        "comparison"
+      ]
+    },
+    "112": {
+      "title": "Cybersecurity Vulnerabilities",
+      "description": "Prompts about security flaws in network infrastructure and their causes.",
+      "keywords": [
+        "cybersecurity",
+        "network vulnerabilities",
+        "security flaws"
+      ]
+    },
+    "113": {
+      "title": "Climate Change",
+      "description": "Analysis of the causes, consequences, and mitigation of global climate change.",
+      "keywords": [
+        "climate change",
+        "global warming",
+        "environmental impact"
+      ]
+    },
+    "114": {
+      "title": "Biological Processes",
+      "description": "Common theme of processes involving cellular metabolism and enzyme function.",
+      "keywords": [
+        "cellular metabolism",
+        "enzyme function",
+        "biochemistry"
+      ]
+    },
+    "115": {
+      "title": "Gene Expression",
+      "description": "Study of how genes change activity to record important experiences",
+      "keywords": [
+        "gene activity",
+        "neural networks",
+        "experience recording"
+      ]
+    },
+    "116": {
+      "title": "Topic Cluster 116: Return/screen_width",
+      "description": "Cluster containing responses associated with return, screen_width, screen_height, convert.",
+      "keywords": []
+    },
+    "117": {
+      "title": "Bacterial Diversity",
+      "description": "Overview of major bacterial groups and their ecological roles.",
+      "keywords": [
+        "bacteria",
+        "ecosystems",
+        "diversity"
+      ]
+    },
+    "118": {
+      "title": "Natural History",
+      "description": "Prompts about natural phenomena and ecological processes.",
+      "keywords": [
+        "natural",
+        "ecology",
+        "processes"
+      ]
+    }
+  }
+}

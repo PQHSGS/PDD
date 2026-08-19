@@ -5,16 +5,26 @@ __pycache__/
 .venv/
 .pytest_cache/
 
-# Large files & checkpoints / datasets / outputs
-checkpoints/
+# Large dataset caches & temp data
 datasets/
-runs/
 data/
 cache/
 scratch/
-**/viewer_cache/
 
-# Large binary file formats
+# Checkpoint heavy binaries & activations (keep lightweight metadata: clusters.json, manifest.json, matrices_state.json)
+**/matrices_mmap
+checkpoints/**/chunks/
+checkpoints/**/examples.json
+checkpoints/**/examples.json.offsets.npy
+checkpoints/**/*.npz
+checkpoints/**/*.npy
+
+# Run heavy binary outputs & viewer caches (keep lightweight artifacts: summary, labels, hypotheses, metrics, u_bar)
+runs/**/viewer_cache/
+runs/**/p4_validation/per_prompt_*.npy
+runs/**/prompt_conditioned_hypotheses.json
+
+# Large binary file formats (un-ignore small validation vectors)
 *.npz
 *.tmp
 *.pt
@@ -23,6 +33,10 @@ scratch/
 *.parquet
 *.h5
 *.safetensors
+*.npy
+!runs/**/p4_validation/u_bar_global.npy
+!runs/**/p4_validation/delta_*.npy
+!runs/**/p4_validation/u_feature.npy
 
 # Secrets & IDE
 .env
