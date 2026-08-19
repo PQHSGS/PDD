@@ -256,11 +256,11 @@ class LLMClusterLabeler(ClusterAutoLabeler):
                 logger.debug(f"VRAM probe failed ({e}); defaulting to CPU.")
 
         logger.info(f"Loading label model {self.model_path} on {device}...")
-        self._tokenizer = AutoTokenizer.from_pretrained(self.model_path)
+        self._tokenizer = AutoTokenizer.from_pretrained(self.model_path, token=True)
         if self._tokenizer.pad_token_id is None:
             self._tokenizer.pad_token_id = self._tokenizer.eos_token_id
         self._model = AutoModelForCausalLM.from_pretrained(
-            self.model_path, torch_dtype=dtype, device_map=device
+            self.model_path, torch_dtype=dtype, device_map=device, token=True
         )
         self._model.eval()
         self._device = device
