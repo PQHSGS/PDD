@@ -49,24 +49,26 @@ class PromptConditionedResult:
             json.dump(data, f, indent=2)
 
     def save_checkpoint(self, filepath: str) -> None:
-        """Persist intermediate matrices, cluster assignments, and hypotheses to npz checkpoint."""
+        """Persist intermediate matrices, cluster assignments, and hypotheses to fast npz checkpoint."""
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
         hypo_json = json.dumps([asdict(h) for h in self.hypotheses])
         p_clusters_json = json.dumps({str(k): v for k, v in self.prompt_clusters.items()})
         r_clusters_json = json.dumps({str(k): v for k, v in self.resp_clusters.items()})
-        np.savez_compressed(
-            filepath,
+        tmp_path = filepath + ".tmp"
+        np.savez(
+            tmp_path,
             c_matrix=self.c_matrix,
             u_matrix=self.u_matrix,
             prompt_clusters_json=np.array(p_clusters_json),
             resp_clusters_json=np.array(r_clusters_json),
             hypotheses_json=np.array(hypo_json),
         )
+        os.replace(tmp_path, filepath)
 
     @classmethod
     def load_checkpoint(cls, filepath: str) -> PromptConditionedResult:
-        """Load intermediate matrices, cluster assignments, and hypotheses from npz checkpoint."""
-        with np.load(filepath, allow_pickle=True) as data:
+        """Load intermediate matrices, cluster assignments, and hypotheses via fast zero-copy memory-mapping."""
+        with np.load(filepath, mmap_mode="r", allow_pickle=True) as data:
             hypo_data = json.loads(str(data["hypotheses_json"]))
             hypotheses = [PromptConditionedHypothesis(**h) for h in hypo_data]
             p_clusters = {int(k): v for k, v in json.loads(str(data["prompt_clusters_json"])).items()}
@@ -74,8 +76,8 @@ class PromptConditionedResult:
             return cls(
                 prompt_clusters=p_clusters,
                 resp_clusters=r_clusters,
-                c_matrix=data["c_matrix"],
-                u_matrix=data["u_matrix"],
+                c_matrix=np.array(data["c_matrix"], copy=False),
+                u_matrix=np.array(data["u_matrix"], copy=False),
                 hypotheses=hypotheses,
             )
 

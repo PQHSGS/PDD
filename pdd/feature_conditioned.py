@@ -56,11 +56,12 @@ class FeatureConditionedResult:
             json.dump(data, f, indent=2)
 
     def save_checkpoint(self, filepath: str) -> None:
-        """Persist intermediate matrices and hypotheses to npz checkpoint."""
+        """Persist intermediate matrices and hypotheses to fast npz checkpoint."""
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
         hypo_json = json.dumps([asdict(h) for h in self.hypotheses])
-        np.savez_compressed(
-            filepath,
+        tmp_path = filepath + ".tmp"
+        np.savez(
+            tmp_path,
             s_matrix=self.s_matrix,
             u_matrix=self.u_matrix,
             v_matrix=self.v_matrix,
@@ -68,19 +69,20 @@ class FeatureConditionedResult:
             silent_mask=self.silent_mask,
             hypotheses_json=np.array(hypo_json),
         )
+        os.replace(tmp_path, filepath)
 
     @classmethod
     def load_checkpoint(cls, filepath: str) -> FeatureConditionedResult:
-        """Load intermediate matrices and hypotheses from npz checkpoint."""
-        with np.load(filepath, allow_pickle=True) as data:
+        """Load intermediate matrices and hypotheses via fast zero-copy memory-mapping."""
+        with np.load(filepath, mmap_mode="r", allow_pickle=True) as data:
             hypo_data = json.loads(str(data["hypotheses_json"]))
             hypotheses = [HypothesisPair(**h) for h in hypo_data]
             return cls(
-                s_matrix=data["s_matrix"],
-                u_matrix=data["u_matrix"],
-                v_matrix=data["v_matrix"],
-                cluster_assignments=data["cluster_assignments"],
-                silent_mask=data["silent_mask"],
+                s_matrix=np.array(data["s_matrix"], copy=False),
+                u_matrix=np.array(data["u_matrix"], copy=False),
+                v_matrix=np.array(data["v_matrix"], copy=False),
+                cluster_assignments=np.array(data["cluster_assignments"], copy=False),
+                silent_mask=np.array(data["silent_mask"], copy=False),
                 hypotheses=hypotheses,
             )
 
