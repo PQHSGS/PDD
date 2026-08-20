@@ -1721,7 +1721,7 @@ def inspect_preference_pair(req: PreferencePairInspectionRequest) -> Dict[str, A
 
     # 1. Batched GPU Forward Pass -> Chosen (C), Rejected (R), and Disparity (u)
     inspector = state.get_inspector()
-    c_p, r_p, u = inspector.extract_pair_features(prompt_text, chosen_text, rejected_text)
+    c_p, r_p, u = inspector.extract_pair_features(prompt_text, chosen_text, rejected_text, tau=state._feature_delta_tau())
 
     # 2. Per-feature-cluster live disparity: u_m = mean over T_m members of u
     u_sig = state._cluster_signals(u, mode="mean")

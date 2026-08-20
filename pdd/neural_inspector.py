@@ -191,7 +191,7 @@ class NeuralInspector:
         return p_max
 
     @torch.inference_mode()
-    def extract_pair_features(self, prompt: str, chosen: str, rejected: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def extract_pair_features(self, prompt: str, chosen: str, rejected: str, tau: float = 0.01) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Batched dual forward pass on GPU extracting Chosen (C) and Rejected (R) disparity in parallel."""
         self.load()
 
@@ -204,8 +204,8 @@ class NeuralInspector:
         c_p = sae_acts[0].max(dim=0).values.float().cpu().numpy()
         r_p = sae_acts[1].max(dim=0).values.float().cpu().numpy()
 
-        # Exact paper threshold disparity: u = 1(C > 0.01) - 1(R > 0.01) (Appendix B.1)
-        u = (c_p > 0.01).astype(np.float32) - (r_p > 0.01).astype(np.float32)
+        # Configurable threshold disparity: u = 1(C > tau) - 1(R > tau) (Appendix B.1)
+        u = (c_p > float(tau)).astype(np.float32) - (r_p > float(tau)).astype(np.float32)
         return c_p, r_p, u
 
     def unload(self) -> None:
