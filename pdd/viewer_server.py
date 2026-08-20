@@ -1118,6 +1118,26 @@ class ViewerState:
                 scores += M[:, slots].sum(axis=1)
         return self._top_examples(scores, examples, top_n)
 
+    def _load_cached_example_scores(self, cache_dir: Path, cluster_ids: List[int], mats) -> bool:
+        """Attempt zero-copy memory-map load of per-example scores if fingerprint matches."""
+        meta = _read_json(cache_dir / "example_scores_meta.json")
+        if not meta or meta.get("matrices") != self._member_cache_meta(mats):
+            return False
+        if float(meta.get("tau", -1.0)) != self._feature_delta_tau() or meta.get("cluster_ids") != cluster_ids:
+            return False
+        if not all((cache_dir / f).exists() for f in ("example_u.npy", "example_s.npy", "example_cluster_ids.npy")):
+            return False
+
+        try:
+            self._example_u = np.load(cache_dir / "example_u.npy", mmap_mode="r")
+            self._example_s = np.load(cache_dir / "example_s.npy", mmap_mode="r")
+            self._example_cluster_ids = np.load(cache_dir / "example_cluster_ids.npy")
+            logger.info(f"Loaded per-example scores from {cache_dir} (mmap).")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to load per-example scores ({e}); rebuilding.")
+            return False
+
     def _ensure_example_scores(self, mats) -> None:
         """Per-example amplify/suppress scores (u, s) for every feature cluster, computed once.
 
@@ -1131,37 +1151,27 @@ class ViewerState:
         with self._scores_lock:
             if self._example_u is not None and self._example_s is not None:
                 return
+
             cluster_ids = sorted(int(k) for k in self.feature_clusters.keys())
             if not cluster_ids:
                 return
+
             cache_dir = self.run_dir / "viewer_cache"
-            meta = _read_json(cache_dir / "example_scores_meta.json")
-            if (
-                all((cache_dir / f).exists() for f in ("example_u.npy", "example_s.npy", "example_cluster_ids.npy"))
-                and meta is not None
-                and meta.get("matrices") == self._member_cache_meta(mats)
-                and float(meta.get("tau", -1.0)) == self._feature_delta_tau()
-                and meta.get("cluster_ids") == cluster_ids
-            ):
-                try:
-                    self._example_u = np.load(cache_dir / "example_u.npy", mmap_mode="r")
-                    self._example_s = np.load(cache_dir / "example_s.npy", mmap_mode="r")
-                    self._example_cluster_ids = np.load(cache_dir / "example_cluster_ids.npy")
-                    logger.info(f"Loaded per-example scores from {cache_dir} (mmap).")
-                    return
-                except Exception as e:
-                    logger.warning(f"Failed to load per-example scores ({e}); recomputing.")
+            if self._load_cached_example_scores(cache_dir, cluster_ids, mats):
+                return
+
             if self._all_member_cols is None:
                 self._all_member_cols = self._expected_member_cols()
-            n_members = int(len(self._all_member_cols))
+
+            n_members = len(self._all_member_cols)
             K = len(cluster_ids)
             A = np.zeros((n_members, K), dtype=np.float32)
             for c_idx, cid in enumerate(cluster_ids):
                 feats = np.asarray(self.feature_clusters[cid], dtype=np.int64)
-                if len(feats) == 0:
-                    continue
-                slots = np.searchsorted(self._all_member_cols, feats)
-                A[slots, c_idx] = 1.0
+                if len(feats) > 0:
+                    slots = np.searchsorted(self._all_member_cols, feats)
+                    A[slots, c_idx] = 1.0
+
             cluster_sizes = np.maximum(A.sum(axis=0), 1.0)
             tau = self._feature_delta_tau()
 
@@ -1183,16 +1193,19 @@ class ViewerState:
             if c_cnt is None or r_cnt is None:
                 logger.warning("Member matrices unavailable; cannot build per-example scores.")
                 return
+
             u = (c_cnt - r_cnt) / cluster_sizes[None, :]
             s = c_cnt + r_cnt
             cache_dir.mkdir(parents=True, exist_ok=True)
             self._save_npy(cache_dir / "example_u.npy", u)
             self._save_npy(cache_dir / "example_s.npy", s)
             self._save_npy(cache_dir / "example_cluster_ids.npy", np.asarray(cluster_ids, dtype=np.int64))
+
             meta_tmp = cache_dir / f".example_scores_meta_{os.getpid()}_{threading.get_ident()}.json.tmp"
             with open(meta_tmp, "w", encoding="utf-8") as f:
                 json.dump({"tau": tau, "cluster_ids": cluster_ids, "matrices": self._member_cache_meta(mats)}, f)
             os.replace(meta_tmp, cache_dir / "example_scores_meta.json")
+
             self._example_u = u
             self._example_s = s
             self._example_cluster_ids = np.asarray(cluster_ids, dtype=np.int64)
