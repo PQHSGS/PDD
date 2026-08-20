@@ -442,24 +442,24 @@ class LLMClusterLabeler(ClusterAutoLabeler):
             return []
         self.load()
 
-        formatted_prompts = []
+        tokenized_prompts = []
         template_kwargs = self._chat_template_kwargs()
         for texts, kind in batch_items:
             msg = self._build_prompt_message(texts, kind=kind)
             messages = [{"role": "user", "content": msg}]
             try:
-                prompt_str = self._tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True, **template_kwargs
+                ids = self._tokenizer.apply_chat_template(
+                    messages, tokenize=True, add_generation_prompt=True, **template_kwargs
                 )
             except Exception as e:
                 logger.debug(f"Chat template kwargs rejected ({e}); falling back to plain template.")
-                prompt_str = self._tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
+                ids = self._tokenizer.apply_chat_template(
+                    messages, tokenize=True, add_generation_prompt=True
                 )
-            formatted_prompts.append(prompt_str)
+            tokenized_prompts.append(ids)
 
-        enc = self._tokenizer(
-            formatted_prompts,
+        enc = self._tokenizer.pad(
+            {"input_ids": tokenized_prompts},
             padding=True,
             return_tensors="pt"
         ).to(self._device)
@@ -476,10 +476,13 @@ class LLMClusterLabeler(ClusterAutoLabeler):
             )
 
         results = []
-        for i in range(len(formatted_prompts)):
+        for i in range(len(tokenized_prompts)):
             gen_ids = outputs[i, prompt_len:]
             text = self._tokenizer.decode(gen_ids, skip_special_tokens=True)
-            results.append(self._extract_json(text))
+            res = self._extract_json(text)
+            if res is None:
+                logger.debug(f"Unparsed LLM output for item {i}: {text!r}")
+            results.append(res)
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
