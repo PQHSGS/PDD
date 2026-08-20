@@ -279,7 +279,18 @@ class LLMClusterLabeler(ClusterAutoLabeler):
         load_kwargs = {"torch_dtype": dtype, "device_map": device, "token": True}
         if quant_config is not None:
             load_kwargs["quantization_config"] = quant_config
-        self._model = AutoModelForCausalLM.from_pretrained(self.model_path, **load_kwargs)
+        # bitsandbytes C extension prints per-layer MatMul8bitLt warnings to stderr;
+        # suppress during model load to avoid log spam.
+        import sys as _sys, os as _os
+        _devnull = _os.open(_os.devnull, _os.O_WRONLY)
+        _old_stderr = _os.dup(2)
+        _os.dup2(_devnull, 2)
+        _os.close(_devnull)
+        try:
+            self._model = AutoModelForCausalLM.from_pretrained(self.model_path, **load_kwargs)
+        finally:
+            _os.dup2(_old_stderr, 2)
+            _os.close(_old_stderr)
         self._model.eval()
         self._device = device
         logger.info(f"Label model ready on {device}.")
