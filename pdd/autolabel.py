@@ -257,16 +257,17 @@ class LLMClusterLabeler(ClusterAutoLabeler):
                 if free_gb >= self.min_vram_gb:
                     device = "cuda"
                     dtype = torch.bfloat16
-                    # INT8 quantization halves VRAM (~4GB vs ~8GB) with negligible quality loss
                     try:
                         from transformers import BitsAndBytesConfig
                         quant_config = BitsAndBytesConfig(
-                            load_in_8bit=True,
-                            llm_int8_threshold=6.0,
+                            load_in_4bit=True,
+                            bnb_4bit_quant_type="nf4",
+                            bnb_4bit_use_double_quant=True,
+                            bnb_4bit_compute_dtype=torch.bfloat16,
                         )
-                        logger.info("Using bitsandbytes INT8 quantization for label model.")
+                        logger.info("Using bitsandbytes NF4 4-bit quantization for label model.")
                     except Exception as e:
-                        logger.debug(f"bitsandbytes INT8 unavailable ({e}); loading in BF16.")
+                        logger.debug(f"bitsandbytes NF4 unavailable ({e}); loading in BF16.")
                 else:
                     logger.warning(
                         f"Label model VRAM congested ({free_gb:.2f} GB free). Running labeler on CPU."
@@ -278,8 +279,7 @@ class LLMClusterLabeler(ClusterAutoLabeler):
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_path, token=True)
         if self._tokenizer.pad_token_id is None:
             self._tokenizer.pad_token_id = self._tokenizer.eos_token_id
-        self._tokenizer.padding_side = "left"
-        load_kwargs = {"torch_dtype": dtype, "device_map": device, "token": True}
+        load_kwargs = {"torch_dtype": dtype, "device_map": device, "token": True, "attn_implementation": "sdpa"}
         if quant_config is not None:
             load_kwargs["quantization_config"] = quant_config
         self._model = AutoModelForCausalLM.from_pretrained(self.model_path, **load_kwargs)
@@ -435,53 +435,43 @@ class LLMClusterLabeler(ClusterAutoLabeler):
             )
 
     def _label_dicts_batch(self, batch_items: List[Tuple[List[str], str]]) -> List[Optional[Dict[str, Any]]]:
-        """Batched inference over multiple clusters [(texts_1, kind_1), (texts_2, kind_2), ...]."""
+        """Inference over multiple clusters [(texts_1, kind_1), (texts_2, kind_2), ...]."""
         import torch
 
         if not batch_items:
             return []
         self.load()
 
-        tokenized_prompts = []
+        results = []
+        pad_token_id = self._tokenizer.pad_token_id if self._tokenizer.pad_token_id is not None else self._tokenizer.eos_token_id
         template_kwargs = self._chat_template_kwargs()
-        for texts, kind in batch_items:
+
+        for idx, (texts, kind) in enumerate(batch_items):
             msg = self._build_prompt_message(texts, kind=kind)
             messages = [{"role": "user", "content": msg}]
             try:
                 ids = self._tokenizer.apply_chat_template(
-                    messages, tokenize=True, add_generation_prompt=True, **template_kwargs
-                )
+                    messages, tokenize=True, add_generation_prompt=True, return_tensors="pt", **template_kwargs
+                ).to(self._device)
             except Exception as e:
                 logger.debug(f"Chat template kwargs rejected ({e}); falling back to plain template.")
                 ids = self._tokenizer.apply_chat_template(
-                    messages, tokenize=True, add_generation_prompt=True
+                    messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"
+                ).to(self._device)
+
+            with torch.no_grad():
+                outputs = self._model.generate(
+                    ids,
+                    max_new_tokens=self.max_new_tokens,
+                    do_sample=False,
+                    pad_token_id=pad_token_id,
                 )
-            tokenized_prompts.append(ids)
 
-        enc = self._tokenizer.pad(
-            {"input_ids": tokenized_prompts},
-            padding=True,
-            return_tensors="pt"
-        ).to(self._device)
-
-        pad_token_id = self._tokenizer.pad_token_id if self._tokenizer.pad_token_id is not None else self._tokenizer.eos_token_id
-        prompt_len = enc.input_ids.shape[1]
-
-        with torch.no_grad():
-            outputs = self._model.generate(
-                **enc,
-                max_new_tokens=self.max_new_tokens,
-                do_sample=False,
-                pad_token_id=pad_token_id,
-            )
-
-        results = []
-        for i in range(len(tokenized_prompts)):
-            gen_ids = outputs[i, prompt_len:]
+            gen_ids = outputs[0, ids.shape[1]:]
             text = self._tokenizer.decode(gen_ids, skip_special_tokens=True)
             res = self._extract_json(text)
             if res is None:
-                logger.debug(f"Unparsed LLM output for item {i}: {text!r}")
+                logger.warning(f"Unparsed LLM output for item {idx} (len={len(gen_ids)}): {text!r}")
             results.append(res)
 
         if torch.cuda.is_available():
