@@ -240,48 +240,34 @@ class LLMClusterLabeler(ClusterAutoLabeler):
         self._device = None
 
     def load(self) -> None:
-        """Load the small instruct model with INT8 quantization on GPU, fallback to CPU."""
+        """Load the instruct model with 4-bit NF4 quantization on GPU, fallback to CPU."""
         import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
         if self._model is not None:
             return
 
-        device = "cpu"
-        dtype = torch.float32
-        quant_config = None
-        if torch.cuda.is_available():
-            try:
-                free_bytes, _ = torch.cuda.mem_get_info()
-                free_gb = free_bytes / (1024 ** 3)
-                if free_gb >= self.min_vram_gb:
-                    device = "cuda"
-                    dtype = torch.bfloat16
-                    try:
-                        from transformers import BitsAndBytesConfig
-                        quant_config = BitsAndBytesConfig(
-                            load_in_4bit=True,
-                            bnb_4bit_quant_type="nf4",
-                            bnb_4bit_use_double_quant=True,
-                            bnb_4bit_compute_dtype=torch.bfloat16,
-                        )
-                        logger.info("Using bitsandbytes NF4 4-bit quantization for label model.")
-                    except Exception as e:
-                        logger.debug(f"bitsandbytes NF4 unavailable ({e}); loading in BF16.")
-                else:
-                    logger.warning(
-                        f"Label model VRAM congested ({free_gb:.2f} GB free). Running labeler on CPU."
-                    )
-            except Exception as e:
-                logger.debug(f"VRAM probe failed ({e}); defaulting to CPU.")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = torch.bfloat16 if device == "cuda" else torch.float32
+
+        load_kwargs: Dict[str, Any] = {
+            "torch_dtype": dtype,
+            "device_map": device,
+            "token": True,
+            "attn_implementation": "sdpa",
+        }
+        if device == "cuda":
+            load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_compute_dtype=torch.bfloat16,
+            )
 
         logger.info(f"Loading label model {self.model_path} on {device}...")
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_path, token=True)
         if self._tokenizer.pad_token_id is None:
             self._tokenizer.pad_token_id = self._tokenizer.eos_token_id
-        load_kwargs = {"torch_dtype": dtype, "device_map": device, "token": True, "attn_implementation": "sdpa"}
-        if quant_config is not None:
-            load_kwargs["quantization_config"] = quant_config
         self._model = AutoModelForCausalLM.from_pretrained(self.model_path, **load_kwargs)
         self._model.eval()
         self._device = device
@@ -294,65 +280,28 @@ class LLMClusterLabeler(ClusterAutoLabeler):
 
     @staticmethod
     def _chat_template_kwargs() -> Dict[str, Any]:
-        """Thinking-control kwargs for the label model's chat template.
-
-        The kwarg name is model-family-specific: Qwen3 templates read
-        ``enable_thinking``; Gemma3 reads ``thinking`` + ``max_thinking_length``.
-        Jinja silently ignores unknown template vars (no exception), so a wrong
-        name is a silent no-op — pass all known names and let each template pick
-        up the one it knows.
-        """
+        """Thinking-control kwargs for the label model's chat template."""
         return {"enable_thinking": False, "thinking": False, "max_thinking_length": 0}
 
     @staticmethod
     def _extract_json(text: str) -> Optional[Dict[str, Any]]:
-        """Extract the first balanced JSON object, tolerating prose/markdown/truncation around it."""
+        """Extract the JSON object from model output, with regex fallback."""
         text = text.strip()
         fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
         if fence:
             text = fence.group(1).strip()
+
         start = text.find("{")
-        while start != -1:
-            depth = 0
-            in_str = False
-            esc = False
-            for i in range(start, len(text)):
-                ch = text[i]
-                if esc:
-                    esc = False
-                    continue
-                if ch == "\\":
-                    esc = True
-                    continue
-                if ch == '"':
-                    in_str = not in_str
-                    continue
-                if in_str:
-                    continue
-                if ch == "{":
-                    depth += 1
-                elif ch == "}":
-                    depth -= 1
-                    if depth == 0:
-                        try:
-                            obj = json.loads(text[start:i + 1])
-                            if isinstance(obj, dict):
-                                return obj
-                        except Exception:
-                            break
+        end = text.rfind("}")
+        if start != -1 and end > start:
+            try:
+                obj = json.loads(text[start:end + 1])
+                if isinstance(obj, dict):
+                    return obj
+            except Exception:
+                pass
 
-            # Try auto-repair if output was slightly truncated
-            sub = text[start:].strip()
-            for suffix in ("}", '"}', '"]}', '"]}}', '"}'):
-                try:
-                    obj = json.loads(sub + suffix)
-                    if isinstance(obj, dict) and ("title" in obj or "description" in obj):
-                        return obj
-                except Exception:
-                    pass
-            start = text.find("{", start + 1)
-
-        # Regex fallback for structured fields if JSON syntax was incomplete
+        # Regex fallback for structured fields
         t_match = re.search(r'"title"\s*:\s*"([^"]+)"', text)
         d_match = re.search(r'"description"\s*:\s*"([^"]+)"', text)
         if t_match or d_match:
@@ -479,19 +428,8 @@ class LLMClusterLabeler(ClusterAutoLabeler):
 
         return results
 
-    def _label_dict(self, texts: List[str], kind: str = "prompt") -> Optional[Dict[str, Any]]:
-        """Ask the LLM to label a cluster of ``texts``, returning the raw parsed JSON dict."""
-        if not texts:
-            return None
-        res = self._label_dicts_batch([(texts, kind)])
-        return res[0] if res else None
-
     def _clean_label(self, parsed: Dict[str, Any], fallback: ClusterLabel) -> Tuple[str, str, List[str]]:
-        """Normalize a parsed LLM label (title/description/keywords) against a keyword fallback.
-
-        Shared by data-cluster (B_k) and feature-cluster (T_m) labeling so the title/desc
-        prefix stripping and keyword normalization stay in one place.
-        """
+        """Normalize a parsed LLM label (title/description/keywords) against a keyword fallback."""
         title = self._clean_title(str(parsed.get("title", "")), fallback.title)
         desc = self._clean_desc(str(parsed.get("description", "")), fallback.description)
         kws = parsed.get("keywords", [])
@@ -581,8 +519,8 @@ class AutoLabelingPipeline:
             model_path=self.cfg.label_model,
             max_prompt_chars=self.cfg.max_prompt_chars,
             max_examples=self.cfg.max_examples,
-            max_new_tokens=getattr(self.cfg, "max_new_tokens", 50),
-            batch_size=getattr(self.cfg, "batch_size", 8),
+            max_new_tokens=self.cfg.max_new_tokens,
+            batch_size=self.cfg.batch_size,
         )
 
     def _label_data_clusters(
@@ -599,7 +537,7 @@ class AutoLabelingPipeline:
 
         out_path = cluster_labels_path(self.run_dir)
         labels: List[Dict[str, Any]] = []
-        batch_size = getattr(self.cfg, "batch_size", 8)
+        batch_size = self.cfg.batch_size
 
         pbar = tqdm(total=len(unique_clusters), desc="Pass 1: labeling data clusters", unit="cluster")
         for i in range(0, len(unique_clusters), batch_size):
@@ -624,7 +562,7 @@ class AutoLabelingPipeline:
                 labels.append(asdict(lbl))
 
             pbar.update(len(batch_ids))
-            if (len(labels) // batch_size) % 2 == 0:
+            if (len(labels) // batch_size) % 5 == 0:
                 _save_json(out_path, {"total_clusters": len(labels), "labels": labels})
 
         pbar.close()
@@ -642,7 +580,7 @@ class AutoLabelingPipeline:
         d_sae = matrices.C_max.shape[1]
         out_path = feature_cluster_labels_path(self.run_dir)
         labels: Dict[str, Dict[str, Any]] = {}
-        batch_size = getattr(self.cfg, "batch_size", 8)
+        batch_size = self.cfg.batch_size
 
         active_clusters = sorted(clusters.keys())
         cluster_prepared = []
@@ -654,7 +592,7 @@ class AutoLabelingPipeline:
             scores = np.asarray(firing.sum(axis=1)).ravel()
 
             # Stratified sampling: pick examples across activation deciles for diversity
-            max_ex = getattr(self.cfg, "max_examples", 10)
+            max_ex = self.cfg.max_examples
             n_samples = min(max_ex, max(4, len(feats) // 2))
             firing_mask = scores > 0
             firing_indices = np.where(firing_mask)[0]
