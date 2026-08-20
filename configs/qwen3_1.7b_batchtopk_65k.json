@@ -31,18 +31,19 @@
   },
   "feature_clusters": {
     "top_pct": 0.2,
-    "min_community_size": 5,
+    "min_community_size": 4,
     "min_firing_freq": 0.001,
     "block_size": 2048,
-    "resolution_parameter": 10
+    "resolution_parameter": 25
   },
   "feature_conditioned": {
-    "tau": 0.03,
+    "tau": 0.01,
     "silent_pct": 5.0,
     "n_data_clusters": 1024,
     "min_feat_cluster_size": 10,
     "min_data_cluster_size": 25,
-    "split_half_eps": 1e-06
+    "split_half_eps": 1e-06,
+    "weighted_disparity": true
   },
   "prompt_conditioned": {
     "min_prompt_count": 200,

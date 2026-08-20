@@ -155,9 +155,16 @@ class FeatureConditionedPipeline:
         tau = self.cfg.tau
         u_matrix = np.zeros((N, K_r), dtype=np.float32)
         chunk = 8192
-        for r0 in tqdm(range(0, N, chunk), desc="Streaming per-cluster activation counts (u)"):
-            r1 = min(r0 + chunk, N)
-            u_matrix[r0:r1] = (c_csr[r0:r1] > tau) @ A - (r_csr[r0:r1] > tau) @ A
+        if self.cfg.weighted_disparity:
+            logger.info("Using WEIGHTED u: (C - R) @ A / cluster_sizes (continuous activation difference).")
+            for r0 in tqdm(range(0, N, chunk), desc="Computing weighted u (continuous)"):
+                r1 = min(r0 + chunk, N)
+                u_matrix[r0:r1] = (c_csr[r0:r1] - r_csr[r0:r1]) @ A
+        else:
+            logger.info(f"Using BINARY u: (C > {tau}) - (R > {tau}) @ A / cluster_sizes.")
+            for r0 in tqdm(range(0, N, chunk), desc="Streaming per-cluster activation counts (u)"):
+                r1 = min(r0 + chunk, N)
+                u_matrix[r0:r1] = (c_csr[r0:r1] > tau) @ A - (r_csr[r0:r1] > tau) @ A
         u_matrix /= np.asarray(cluster_sizes, dtype=np.float32)[None, :]
         del c_csr, r_csr, A, s_C, s_R
         gc.collect()

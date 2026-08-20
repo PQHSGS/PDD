@@ -30,16 +30,107 @@ document.addEventListener("DOMContentLoaded", () => {
     }[c]));
   }
 
+  // Render math in text: detect LaTeX patterns and render with KaTeX.
+  // Returns HTML with inline/block math rendered, non-math text escaped.
+  function renderMath(text) {
+    if (!text) return "";
+    if (typeof katex === "undefined") return esc(text);
+    // Split on $$...$$ (block) and $...$ (inline) delimiters
+    const parts = text.split(/(\$\$[\s\S]*?\$\$|\$[^$]+?\$)/g);
+    return parts.map(part => {
+      if (part.startsWith("$$") && part.endsWith("$$")) {
+        const latex = part.slice(2, -2).trim();
+        try { return katex.renderToString(latex, { displayMode: true, throwOnError: false }); }
+        catch { return esc(part); }
+      }
+      if (part.startsWith("$") && part.endsWith("$") && part.length > 2) {
+        const latex = part.slice(1, -1).trim();
+        try { return katex.renderToString(latex, { displayMode: false, throwOnError: false }); }
+        catch { return esc(part); }
+      }
+      return esc(part);
+    }).join("");
+  }
+
+  // --- HIGH-CAPACITY SLIDING EXAMPLE CAROUSELS ---
+  let carouselCounter = 0;
+  function renderExampleCarousel(title, items, cardRenderer, carouselId) {
+    if (!items || !items.length) {
+      return '<div style="color:var(--text-muted); font-size:0.85rem; padding:6px 0;">No examples available.</div>';
+    }
+    const cId = carouselId || `carousel_${++carouselCounter}`;
+    const cardsHtml = items.map((item, idx) => cardRenderer(item, idx)).join("");
+    return `
+      <div class="example-carousel-wrap" id="${cId}">
+        <div class="example-carousel-header">
+          <span class="example-carousel-title">${title}</span>
+          <div class="example-carousel-controls">
+            <span class="carousel-count-indicator">${items.length} examples</span>
+            <button type="button" class="carousel-nav-btn" data-carousel-nav="prev" data-target="${cId}" title="Previous examples">‹</button>
+            <button type="button" class="carousel-nav-btn" data-carousel-nav="next" data-target="${cId}" title="Next examples">›</button>
+          </div>
+        </div>
+        <div class="example-carousel-track" id="${cId}_track">
+          ${cardsHtml}
+        </div>
+      </div>
+    `;
+  }
+
+  function carouselFiringCard(e) {
+    return `
+      <div class="example-carousel-card">
+        <div class="card-meta">
+          <span>#${esc(e.index)}</span>
+          <span>Score ${Number(e.score || 0).toFixed(2)}</span>
+        </div>
+        <div class="card-prompt" style="color:var(--text-muted);"><strong>Prompt:</strong> ${renderMath(e.prompt)}</div>
+        <div class="card-chosen" style="color:var(--color-chosen);"><strong>Chosen (+):</strong> ${renderMath(e.chosen)}</div>
+        <div class="card-rejected" style="color:var(--color-rejected);"><strong>Rejected (-):</strong> ${renderMath(e.rejected)}</div>
+      </div>`;
+  }
+
+  function carouselPromptCard(p, idx, label) {
+    return `
+      <div class="example-carousel-card">
+        <div class="card-meta">
+          <span>${esc(label)} #${idx + 1}</span>
+        </div>
+        <div class="card-prompt" style="color:var(--text-main); font-size:0.85rem;">${renderMath(p)}</div>
+      </div>`;
+  }
+
+  function carouselPcCard(e) {
+    return `
+      <div class="example-carousel-card">
+        <div class="card-meta">
+          <span>#${esc(e.index)}</span>
+          <span>${esc(e.note || "")}</span>
+        </div>
+        <div class="card-prompt" style="color:var(--text-muted);"><strong>Prompt:</strong> ${renderMath(e.prompt)}</div>
+        <div class="card-chosen" style="color:var(--color-chosen);"><strong>Chosen (+):</strong> ${renderMath(e.chosen)}</div>
+        <div class="card-rejected" style="color:var(--color-rejected);"><strong>Rejected (-):</strong> ${renderMath(e.rejected)}</div>
+      </div>`;
+  }
+
   // --- PER-FEATURE NEURONPEDIA DROPDOWN (inside any T_m interpretation) ---
   function renderFeatureRows(topFeats) {
     if (!topFeats || !topFeats.length) {
       return '<span style="color:var(--text-muted); font-size:0.85rem;">No member features listed</span>';
     }
-    return topFeats.map(f => `
+    return topFeats.map(f => {
+      const labelDesc = f.label || f.description || "";
+      const toks = f.top_tokens || [];
+      const tokBadges = toks.length
+        ? `<span class="feature-np-toks">${toks.slice(0, 3).map(t => `<span class="feature-tok pos" style="font-size:0.68rem; padding:1px 5px;">${esc(t)}</span>`).join("")}</span>`
+        : "";
+      return `
       <div class="feature-row">
         <div class="feature-row-head" data-fidx="${esc(f.feature_index)}" title="Click to view Neuronpedia details & firing statistics for SAE ${esc(f.feature_index)}">
           <button class="feature-caret-btn" data-fidx="${esc(f.feature_index)}">▸</button>
           <span class="feature-badge">SAE ${esc(f.feature_index)}</span>
+          ${labelDesc ? `<span class="feature-np-inline" title="${esc(labelDesc)}"><span class="feature-np-inline-title">${esc(labelDesc)}</span></span>` : ""}
+          ${tokBadges}
           ${f.neuronpedia_url
             ? `<a class="feature-np-link" href="${esc(f.neuronpedia_url)}" target="_blank" rel="noopener noreferrer" title="Open Neuronpedia dashboard in new tab">↗ Neuronpedia</a>`
             : ""}
@@ -47,7 +138,8 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
         <div class="feature-detail-body" data-fidx="${esc(f.feature_index)}"></div>
       </div>
-    `).join("");
+    `;
+    }).join("");
   }
 
   async function loadFeatureDetail(fidx, bodyEl) {
@@ -55,7 +147,7 @@ document.addEventListener("DOMContentLoaded", () => {
     bodyEl.dataset.loaded = "1";
     bodyEl.innerHTML = '<div class="feature-loading">Loading SAE feature interpretation...</div>';
     try {
-      const res = await fetch(`/api/feature_detail?f=${encodeURIComponent(fidx)}&top_n=3`);
+      const res = await fetch(`/api/feature_detail?f=${encodeURIComponent(fidx)}&top_n=8`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const d = await res.json();
       bodyEl.innerHTML = renderFeatureDetailBody(d);
@@ -65,27 +157,17 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function firingExampleCard(e) {
-    return `
-      <div class="detail-example-card firing">
-        <div class="detail-example-meta">Example #${esc(e.index)} · Firing Score ${Number(e.score).toFixed(2)}</div>
-        <div style="color:var(--text-muted); margin-bottom:4px;"><strong>Prompt:</strong> ${esc(e.prompt)}</div>
-        <div style="color:var(--color-chosen); margin-bottom:4px;"><strong>Chosen:</strong> ${esc(e.chosen)}</div>
-        <div style="color:var(--color-rejected);"><strong>Rejected:</strong> ${esc(e.rejected)}</div>
-      </div>`;
-  }
-
   function featureNpBlock(np) {
     if (!np) return "";
     let html = "";
     if (np.description) {
-      html += '<div class="feature-token-label">Explanation</div>';
-      html += `<div class="feature-np-desc">${esc(np.description)}</div>`;
+      html += '<div class="feature-token-label">Neuronpedia Explanation</div>';
+      html += `<div class="feature-np-desc" style="font-weight:600; color:var(--text-main); margin-bottom:6px;">${esc(np.description)}</div>`;
       if (np.explanation_model) {
-        html += `<div class="feature-np-model">generated by ${esc(np.explanation_model)}</div>`;
+        html += `<div class="feature-np-model" style="font-size:0.75rem; color:var(--text-muted); margin-bottom:8px;">generated by ${esc(np.explanation_model)}</div>`;
       }
-    } else if (np.name) {
-      html += `<div class="feature-np-desc">Neuronpedia: ${esc(np.name)}</div>`;
+    } else if (np.name || np.label) {
+      html += `<div class="feature-np-desc">Neuronpedia: <strong>${esc(np.label || np.name)}</strong></div>`;
     }
     html += '<div class="feature-token-grid">';
     if (np.max_act_approx != null) {
@@ -115,20 +197,46 @@ document.addEventListener("DOMContentLoaded", () => {
     const firing = d.firing || {};
     const exs = d.examples || [];
 
-    let html = featureNpBlock(np);
-    html += `<div class="feature-stats">
+    let html = "";
+    if (np) {
+      html += featureNpBlock(np);
+    } else if (d.local_interpretation || d.parent_cluster) {
+      const loc = d.local_interpretation || {};
+      const parent = d.parent_cluster || {};
+      const kws = loc.keywords || parent.keywords || [];
+      html += `
+        <div style="background:var(--border-subtle); border:1px solid var(--border-color); border-radius:6px; padding:10px 12px; margin-bottom:10px;">
+          <div class="feature-token-label">SAE Feature Interpretation</div>
+          <div style="font-weight:700; font-size:0.95rem; color:var(--text-main); margin-bottom:4px;">
+            ${esc(loc.label || `SAE Feature #${d.feature_index}`)}
+          </div>
+          <div style="font-size:0.85rem; color:var(--text-muted); margin-bottom:8px;">
+            ${esc(loc.description || `Constituent feature of Community T_${parent.m}`)}
+          </div>
+          <div style="display:flex; align-items:center; gap:6px; font-size:0.8rem; margin-bottom:6px;">
+            <span class="cluster-badge badge-t" style="font-size:0.75rem; padding:1px 6px;">T_${esc(parent.m)}</span>
+            <strong>${esc(parent.title || "")}</strong>
+          </div>
+          ${kws.length ? `
+            <div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:6px;">
+              ${kws.map(k => `<span class="keyword-tag" style="font-size:0.72rem; padding:1px 5px;">${esc(k)}</span>`).join("")}
+            </div>` : ""}
+        </div>
+      `;
+    }
+
+    html += `<div class="feature-stats" style="margin:10px 0;">
       Fires in <strong>${Number(firing.n_examples || 0).toLocaleString()}</strong> of ${Number(firing.n_total || 0).toLocaleString()} examples
       (max <strong>${Number(firing.max || 0).toFixed(2)}</strong>, mean <strong>${Number(firing.mean || 0).toFixed(2)}</strong>)
     </div>`;
 
     if (d.neuronpedia_url) {
-      html += `<div style="margin:8px 0 4px;"><a class="feature-np-link" href="${esc(d.neuronpedia_url)}" target="_blank" rel="noopener noreferrer">↗ Open full Neuronpedia dashboard</a></div>`;
+      html += `<div style="margin:8px 0 10px;"><a class="feature-np-link" href="${esc(d.neuronpedia_url)}" target="_blank" rel="noopener noreferrer">↗ Open full Neuronpedia dashboard</a></div>`;
     }
 
     if (exs.length) {
-      html += '<div class="feature-token-label" style="margin-top:8px;">Top Firing Examples In This Run</div><div class="detail-examples-list">' +
-        exs.map(firingExampleCard).join("") + '</div>';
-    } else if (!np) {
+      html += renderExampleCarousel("Top Firing Examples In This Run", exs, carouselFiringCard, `feat_${d.feature_index || 'det'}_carousel`);
+    } else if (!np && !d.local_interpretation) {
       html += '<div class="feature-error">No Neuronpedia data and no firing examples cached for this feature.</div>';
     }
     return html;
@@ -237,7 +345,7 @@ document.addEventListener("DOMContentLoaded", () => {
     `;
 
     try {
-      const res = await fetch(`/api/cluster_detail?type=${encodeURIComponent(ctype)}&id=${encodeURIComponent(cid)}&top_n=8`);
+      const res = await fetch(`/api/cluster_detail?type=${encodeURIComponent(ctype)}&id=${encodeURIComponent(cid)}&top_n=12`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       clusterDetailCache.set(cacheKey, data);
@@ -261,14 +369,16 @@ document.addEventListener("DOMContentLoaded", () => {
       const val = data.validation;
       let valHtml = "";
       if (val) {
-        const pred = Number(val.predicted_delta || 0);
-        const obs = Number(val.observed_delta || 0);
+        const predSum = Number(val.predicted_sum !== undefined ? val.predicted_sum : val.predicted_delta || 0);
+        const obsSum = Number(val.observed_sum !== undefined ? val.observed_sum : val.observed_delta || 0);
+        const predMean = Number(val.predicted_mean !== undefined ? val.predicted_mean : (predSum / Math.max(1, val.n_features || 1)));
+        const obsMean = Number(val.observed_mean !== undefined ? val.observed_mean : (obsSum / Math.max(1, val.n_features || 1)));
         valHtml = `
           <div class="detail-section" style="margin-top:16px;">
             <div class="detail-section-title">📊 Post-DPO Shift Validation (Predicted vs Empirical)</div>
-            <div style="display:flex; gap:12px; flex-wrap:wrap; background:var(--bg-card); padding:10px 14px; border:1px solid var(--border-color); border-radius:6px; margin-top:6px;">
-              <div><span style="color:var(--text-muted); font-size:0.75rem;">Predicted Disparity (u):</span> <strong style="color:${pred >= 0 ? '#4caf7d' : '#e06c75'}; font-family:var(--font-mono);">${pred >= 0 ? '+' : ''}${pred.toFixed(4)}</strong></div>
-              <div><span style="color:var(--text-muted); font-size:0.75rem;">Observed Post-DPO Shift (Δ):</span> <strong style="color:${obs >= 0 ? '#4caf7d' : '#e06c75'}; font-family:var(--font-mono);">${obs >= 0 ? '+' : ''}${obs.toFixed(4)}</strong></div>
+            <div style="display:flex; gap:14px; flex-wrap:wrap; background:var(--bg-card); padding:10px 14px; border:1px solid var(--border-color); border-radius:6px; margin-top:6px;">
+              <div><span style="color:var(--text-muted); font-size:0.75rem;">Net Disparity Sum (∑u):</span> <strong style="color:${predSum >= 0 ? '#4caf7d' : '#e06c75'}; font-family:var(--font-mono); font-size:0.95rem;">${predSum >= 0 ? '+' : ''}${predSum.toFixed(4)}</strong> <span style="font-size:0.72rem; color:var(--text-muted);">(mean: ${(predMean >= 0 ? '+' : '') + predMean.toFixed(4)})</span></div>
+              <div><span style="color:var(--text-muted); font-size:0.75rem;">Observed Post-DPO Shift (∑Δ):</span> <strong style="color:${obsSum >= 0 ? '#4caf7d' : '#e06c75'}; font-family:var(--font-mono); font-size:0.95rem;">${obsSum >= 0 ? '+' : ''}${obsSum.toFixed(4)}</strong> <span style="font-size:0.72rem; color:var(--text-muted);">(mean: ${(obsMean >= 0 ? '+' : '') + obsMean.toFixed(4)})</span></div>
               <div><span style="color:var(--text-muted); font-size:0.75rem;">Validated Features:</span> <strong>${val.n_features || data.n_features}</strong></div>
             </div>
           </div>
@@ -284,10 +394,7 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
 
         <div class="detail-section">
-          <div class="detail-section-title">📄 Real Dataset Response Examples Firing ${esc(badgeText)}</div>
-          <div class="detail-examples-list">
-            ${exs.length ? exs.map(firingExampleCard).join("") : `<div style="color:var(--text-muted); font-size:0.85rem;">No real examples cached for this feature cluster.</div>`}
-          </div>
+          ${renderExampleCarousel(`📄 Top Real Dataset Response Examples Firing ${esc(badgeText)}`, exs, carouselFiringCard, `t_${cid}_carousel`)}
         </div>
       `;
     } else if (family === "B") {
@@ -295,28 +402,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const samplePrompts = data.sample_prompts || [];
       bodyHtml += `
         <div class="detail-section" style="margin-top:16px;">
-          <div class="detail-section-title">🎯 Centroid Real Prompts (Most Representative)</div>
-          <div class="detail-examples-list">
-            ${centroidPrompts.length ? centroidPrompts.map((p, i) => `
-              <div class="detail-example-card">
-                <div class="detail-example-meta">Centroid Sample #${i + 1}</div>
-                <div style="color:var(--text-main); font-size:0.85rem;">${esc(p)}</div>
-              </div>
-            `).join("") : `<div style="color:var(--text-muted); font-size:0.85rem;">Centroid prompt samples not generated.</div>`}
-          </div>
+          ${renderExampleCarousel("🎯 Centroid Real Prompts (Most Representative)", centroidPrompts, (p, i) => carouselPromptCard(p, i, "Centroid Sample"), `b_centroid_${cid}`)}
         </div>
 
         ${samplePrompts.length ? `
         <div class="detail-section">
-          <div class="detail-section-title">🎲 Random Real Prompts in Cluster B_${esc(cid)}</div>
-          <div class="detail-examples-list">
-            ${samplePrompts.map((p, i) => `
-              <div class="detail-example-card">
-                <div class="detail-example-meta">Random Sample #${i + 1}</div>
-                <div style="color:var(--text-muted); font-size:0.85rem;">${esc(p)}</div>
-              </div>
-            `).join("")}
-          </div>
+          ${renderExampleCarousel(`🎲 Random Real Prompts in Cluster B_${esc(cid)}`, samplePrompts, (p, i) => carouselPromptCard(p, i, "Random Sample"), `b_random_${cid}`)}
         </div>` : ""}
       `;
     } else {
@@ -331,17 +422,7 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
 
         <div class="detail-section">
-          <div class="detail-section-title">📄 Real Dataset Examples Expressing ${esc(badgeText)}</div>
-          <div class="detail-examples-list">
-            ${exs.length ? exs.map(e => `
-              <div class="detail-example-card firing">
-                <div class="detail-example-meta">Example #${esc(e.index)} · ${esc(e.note || "")}</div>
-                <div style="color:var(--text-muted); margin-bottom:4px;"><strong>Prompt:</strong> ${esc(e.prompt)}</div>
-                <div style="color:var(--color-chosen); margin-bottom:4px;"><strong>Chosen:</strong> ${esc(e.chosen)}</div>
-                <div style="color:var(--color-rejected);"><strong>Rejected:</strong> ${esc(e.rejected)}</div>
-              </div>
-            `).join("") : `<div style="color:var(--text-muted); font-size:0.85rem;">No examples cached for this cluster.</div>`}
-          </div>
+          ${renderExampleCarousel(`📄 Real Dataset Examples Expressing ${esc(badgeText)}`, exs, carouselPcCard, `${family.toLowerCase()}_${cid}_carousel`)}
         </div>
       `;
     }
@@ -688,7 +769,7 @@ document.addEventListener("DOMContentLoaded", () => {
     `;
 
     try {
-      const res = await fetch(`/api/cluster_detail?type=${encodeURIComponent(targetType)}&id=${encodeURIComponent(targetId)}&top_n=6`);
+      const res = await fetch(`/api/cluster_detail?type=${encodeURIComponent(targetType)}&id=${encodeURIComponent(targetId)}&top_n=12`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       clusterDetailCache.set(cacheKey, data);
@@ -1068,7 +1149,7 @@ async function selectCluster(item) {
   `;
 
   try {
-    const res = await fetch(`/api/cluster_detail?type=${encodeURIComponent(item.type)}&id=${encodeURIComponent(item.id)}&top_n=6`);
+    const res = await fetch(`/api/cluster_detail?type=${encodeURIComponent(item.type)}&id=${encodeURIComponent(item.id)}&top_n=12`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     clusterDetailCache.set(cacheKey, data);
@@ -1490,25 +1571,8 @@ if (clustersMasterList) {
         <!-- Real Examples for A_k and R_m -->
         <div class="detail-section" style="margin-top:16px;">
           <div class="detail-section-title">📚 Real Dataset Evidence (Dolci Training Pairs)</div>
-          ${pExs.length > 0 ? `
-            <div style="font-size:0.85rem; font-weight:700; margin-bottom:6px; color:var(--text-main);">Examples of Prompt Condition A_${esc(s.k)}:</div>
-            ${pExs.map(ex => `
-              <div class="example-item" style="margin-bottom:8px;">
-                <div class="example-item-prompt" style="font-size:0.82rem;"><strong>Prompt:</strong> ${esc(ex.prompt)}</div>
-              </div>
-            `).join("")}
-          ` : ''}
-
-          ${rExs.length > 0 ? `
-            <div style="font-size:0.85rem; font-weight:700; margin-top:12px; margin-bottom:6px; color:var(--text-main);">Examples Driving Response Disparity R_${esc(s.m)}:</div>
-            ${rExs.map(ex => `
-              <div class="example-item" style="margin-bottom:8px;">
-                <div class="example-item-prompt" style="font-size:0.82rem;"><strong>Prompt:</strong> ${esc(ex.prompt)}</div>
-                <div class="example-item-chosen" style="font-size:0.82rem; margin-top:4px;"><strong>Chosen (+):</strong> ${esc(ex.chosen)}</div>
-                <div class="example-item-rejected" style="font-size:0.82rem; margin-top:4px;"><strong>Rejected (-):</strong> ${esc(ex.rejected)}</div>
-              </div>
-            `).join("")}
-          ` : ''}
+          ${pExs.length > 0 ? renderExampleCarousel(`Examples of Prompt Condition A_${esc(s.k)}`, pExs, (ex, i) => carouselPromptCard(ex.prompt, i, "Prompt"), `insp_ak_${s.k}`) : ""}
+          ${rExs.length > 0 ? renderExampleCarousel(`Examples Driving Response Disparity R_${esc(s.m)}`, rExs, carouselPcCard, `insp_rm_${s.m}`) : ""}
         </div>
       `;
     }
@@ -1520,12 +1584,19 @@ if (clustersMasterList) {
       const firing = featData.firing || {};
       const featExs = featData.examples || [];
 
-      let html = `
+      const html = `
         <div class="detail-header">
           <div class="detail-badge-title-row">
-            <span class="feature-badge" style="font-size:0.95rem; padding:3px 8px;">SAE Feature #${esc(s.featureIndex)}</span>
-            <h2 class="detail-title">Live Act = ${Number(s.activation).toFixed(4)}</h2>
-            ${s.tagHtml || ""}
+            <span class="cluster-badge badge-t">SAE Feature #${esc(s.featureIndex)}</span>
+            <h2 class="detail-title">${esc(s.title || (np ? np.description : `SAE Feature #${s.featureIndex}`))}</h2>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; margin-top:6px; flex-wrap:wrap;">
+            <span class="keyword-tag" style="font-family:var(--font-mono); font-weight:600;">Live Act = ${Number(s.firing || 0).toFixed(2)}</span>
+            ${s.clusterM != null ? `
+              <span class="cluster-badge badge-t" style="font-size:0.78rem; padding:2px 8px; cursor:pointer;" data-cluster="${esc(s.clusterM)}" title="Inspect Parent Cluster T_${esc(s.clusterM)}">
+                Part of T_${esc(s.clusterM)}: ${esc(s.clusterTitle || (clusterData ? clusterData.title : ''))}
+              </span>
+            ` : ""}
           </div>
           ${s.neuronpediaUrl ? `
             <div style="margin-top:8px;">
@@ -1546,10 +1617,7 @@ if (clustersMasterList) {
         <!-- 2. Real Dataset Examples Firing this SAE Feature -->
         ${featExs.length ? `
           <div class="detail-section">
-            <div class="detail-section-title">📄 Top Dataset Examples Activating SAE Feature #${esc(s.featureIndex)}</div>
-            <div class="detail-examples-list">
-              ${featExs.map(firingExampleCard).join("")}
-            </div>
+            ${renderExampleCarousel(`Top Dataset Examples Activating SAE Feature #${esc(s.featureIndex)}`, featExs, carouselFiringCard, `insp_feat_${s.featureIndex}`)}
           </div>
         ` : ""}
 
@@ -1570,9 +1638,8 @@ if (clustersMasterList) {
               ${renderFeatureRows((clusterData.top_features || []).slice(0, 6))}
             </div>
 
-            <div class="detail-section-title" style="font-size:0.82rem; color:var(--text-muted);">📄 Dataset Response Examples Firing Cluster T_${esc(s.clusterM)}</div>
-            <div class="detail-examples-list">
-              ${(clusterData.examples || []).slice(0, 3).map(firingExampleCard).join("")}
+            <div class="detail-section">
+              ${renderExampleCarousel(`Dataset Response Examples Firing Cluster T_${esc(s.clusterM)}`, clusterData.examples || [], carouselFiringCard, `insp_tm_${s.clusterM}`)}
             </div>
           </div>
         ` : ""}
@@ -1914,9 +1981,9 @@ if (clustersMasterList) {
           ${s.context_k >= 0 ? `<span class="cluster-badge badge-b" style="font-size:0.7rem;">B_${s.context_k}</span>` : ""}
         </div>
         ${featBadges}
-        <div class="example-item-prompt" style="font-size:0.82rem;"><strong>Prompt:</strong> ${esc(s.prompt)}</div>
-        <div class="example-item-chosen" style="font-size:0.82rem; margin-top:4px; color:#4caf7d;"><strong>Chosen (+):</strong> ${esc(s.chosen)}</div>
-        <div class="example-item-rejected" style="font-size:0.82rem; margin-top:4px; color:#e06c75;"><strong>Rejected (-):</strong> ${esc(s.rejected)}</div>
+        <div class="example-item-prompt" style="font-size:0.82rem;"><strong>Prompt:</strong> ${renderMath(s.prompt)}</div>
+        <div class="example-item-chosen" style="font-size:0.82rem; margin-top:4px; color:#4caf7d;"><strong>Chosen (+):</strong> ${renderMath(s.chosen)}</div>
+        <div class="example-item-rejected" style="font-size:0.82rem; margin-top:4px; color:#e06c75;"><strong>Rejected (-):</strong> ${renderMath(s.rejected)}</div>
       </div>`;
   }
 
@@ -1992,9 +2059,9 @@ if (clustersMasterList) {
           ${s.context_k >= 0 ? `<span class="cluster-badge badge-b" style="font-size:0.7rem;">B_${s.context_k}</span>` : ""}
         </div>
         ${featBadges}
-        <div class="example-item-prompt" style="font-size:0.82rem;"><strong>Prompt:</strong> ${esc(s.prompt)}</div>
-        <div class="example-item-chosen" style="font-size:0.82rem; margin-top:4px; color:#4caf7d;"><strong>Chosen (+):</strong> ${esc(s.chosen)}</div>
-        <div class="example-item-rejected" style="font-size:0.82rem; margin-top:4px; color:#e06c75;"><strong>Rejected (-):</strong> ${esc(s.rejected)}</div>
+        <div class="example-item-prompt" style="font-size:0.82rem;"><strong>Prompt:</strong> ${renderMath(s.prompt)}</div>
+        <div class="example-item-chosen" style="font-size:0.82rem; margin-top:4px; color:#4caf7d;"><strong>Chosen (+):</strong> ${renderMath(s.chosen)}</div>
+        <div class="example-item-rejected" style="font-size:0.82rem; margin-top:4px; color:#e06c75;"><strong>Rejected (-):</strong> ${renderMath(s.rejected)}</div>
       </div>`;
   }
 
@@ -2021,7 +2088,17 @@ if (clustersMasterList) {
   const openB1Btn = document.getElementById("open-b1-panel");
   const openB2Btn = document.getElementById("open-b2-panel");
   if (openB1Btn) openB1Btn.addEventListener("click", () => openHyposPanel("b1"));
-  if (openB2Btn) openB2Btn.addEventListener("click", () => openHyposPanel("b2"));
+  // Carousel Navigation Event Listener
+  document.addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".carousel-nav-btn");
+    if (!btn) return;
+    const targetId = btn.dataset.target;
+    const dir = btn.dataset.carouselNav;
+    const track = document.getElementById(`${targetId}_track`);
+    if (!track) return;
+    const scrollAmount = track.clientWidth * 0.75;
+    track.scrollBy({ left: dir === "next" ? scrollAmount : -scrollAmount, behavior: "smooth" });
+  });
 
   // Initialize
   loadRuns();

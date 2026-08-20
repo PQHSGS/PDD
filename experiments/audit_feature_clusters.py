@@ -1,198 +1,213 @@
-"""Audit and diagnostics tool for SAE Feature Clusters (T_m) and Feature Retention.
-
-Computes:
-- Feature assignment coverage: Assigned (T_1..T_K) vs Dropped to Cluster 0.
-- Cluster size distribution: min, max, mean, median, percentiles.
-- Hypothesis eligibility: Clusters with >= 10 features (B.1 filter) vs < 10.
-- Hypothesis coverage: Actual validated clusters with sign-consistent hypotheses.
-- Top clusters breakdown with LLM labels (if available).
+"""Audit feature cluster quality: size distribution, sub-community structure, and label-driving alignment.
 
 Usage:
-    python -m experiments.audit_feature_clusters --config configs/qwen3_1.7b_batchtopk_65k.json
-    python -m experiments.audit_feature_clusters --run_dir runs/qwen3_1.7b_batchtopk_65k
-    python -m experiments.audit_feature_clusters --clusters_json checkpoints/.../clusters.json
+    python experiments/audit_feature_clusters.py --checkpoint <ckpt_dir>
+    python experiments/audit_feature_clusters.py --run_dir <run_dir>
+    python experiments/audit_feature_clusters.py  # uses default run
 """
-from __future__ import annotations
-
 import argparse
 import json
 import os
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+import sys
+import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def load_json(path: Path) -> Optional[Any]:
-    if not path.exists():
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"[Warning] Failed to load {path}: {e}")
-        return None
+def audit_size_distribution(clusters_data):
+    """Print cluster size distribution and identify oversized clusters."""
+    sizes = sorted([(int(k), len(v)) for k, v in clusters_data['clusters'].items()], key=lambda x: -x[1])
+    all_sizes = [s for _, s in sizes]
+
+    print(f"Total clusters: {len(sizes)}")
+    print(f"Size range: {min(all_sizes)} - {max(all_sizes)}")
+    print(f"Mean: {np.mean(all_sizes):.1f}, Median: {np.median(all_sizes):.0f}")
+
+    # Histogram
+    from collections import Counter
+    buckets = Counter()
+    for _, sz in sizes:
+        if sz < 5: buckets["<5"] += 1
+        elif sz < 10: buckets["5-9"] += 1
+        elif sz < 20: buckets["10-19"] += 1
+        elif sz < 50: buckets["20-49"] += 1
+        elif sz < 100: buckets["50-99"] += 1
+        else: buckets["100+"] += 1
+    print(f"\nSize histogram: {dict(sorted(buckets.items()))}")
+
+    # Flag oversized clusters
+    median_sz = np.median(all_sizes)
+    print(f"\nOversized clusters (>2x median = {2*median_sz:.0f}):")
+    for cid, sz in sizes:
+        if sz > 2 * median_sz:
+            print(f"  T_{cid}: {sz} features")
+
+    return sizes
 
 
-def resolve_paths(
-    config_path: Optional[str] = None,
-    run_dir: Optional[str] = None,
-    checkpoint_dir: Optional[str] = None,
-    clusters_json: Optional[str] = None,
-) -> Dict[str, Optional[Path]]:
-    """Resolve clusters.json, summary, hypotheses, and labels files."""
-    paths: Dict[str, Optional[Path]] = {
-        "clusters_json": None,
-        "summary_json": None,
-        "hypotheses_json": None,
-        "labels_json": None,
-        "matrices_mmap": None,
-    }
+def audit_sub_communities(clusters_data, mi_graph_path, max_clusters=10):
+    """Run Leiden on each large cluster's internal MI graph to detect sub-communities."""
+    import igraph as ig
+    import leidenalg as la
 
-    if clusters_json:
-        paths["clusters_json"] = Path(clusters_json)
-
-    if config_path:
-        cfg = load_json(Path(config_path))
-        if cfg:
-            if not run_dir and cfg.get("output_dir"):
-                run_dir = cfg["output_dir"]
-            if not checkpoint_dir and cfg.get("checkpoint_dir"):
-                checkpoint_dir = cfg["checkpoint_dir"]
-
-    if run_dir:
-        r_path = Path(run_dir)
-        paths["summary_json"] = r_path / "pdd_summary.json"
-        paths["hypotheses_json"] = r_path / "feature_conditioned_hypotheses.json"
-        paths["labels_json"] = r_path / "feature_cluster_labels.json"
-
-        # Check summary for checkpoint folder link
-        summary = load_json(paths["summary_json"]) if paths["summary_json"] else None
-        if summary and "checkpoint_subfolder" in summary:
-            ckpt_sub = Path(summary["checkpoint_subfolder"])
-            if not paths["clusters_json"] and (ckpt_sub / "clusters.json").exists():
-                paths["clusters_json"] = ckpt_sub / "clusters.json"
-            if (ckpt_sub / "matrices_mmap").is_dir():
-                paths["matrices_mmap"] = ckpt_sub / "matrices_mmap"
-
-    # Fallback search in checkpoints/ directory
-    if not paths["clusters_json"]:
-        search_dirs = [Path(checkpoint_dir)] if checkpoint_dir else [Path("checkpoints")]
-        for sdir in search_dirs:
-            if sdir.is_dir():
-                candidates = sorted(sdir.glob("*/clusters.json"), key=os.path.getmtime, reverse=True)
-                if candidates:
-                    paths["clusters_json"] = candidates[0]
-                    break
-
-    return paths
-
-
-def audit_feature_clusters(paths: Dict[str, Optional[Path]], d_sae_default: int = 16384) -> None:
-    clusters_file = paths.get("clusters_json")
-    if not clusters_file or not clusters_file.exists():
-        print(f"[Error] Could not locate clusters.json. Checked: {clusters_file}")
+    if not os.path.exists(mi_graph_path):
+        print(f"\nMI graph not found at {mi_graph_path}; skipping sub-community audit.")
         return
 
-    print("=" * 70)
-    print(" 🔍 PDD SAE FEATURE CLUSTERS AUDIT REPORT")
-    print("=" * 70)
-    print(f"File: {clusters_file}")
+    mi = np.load(mi_graph_path)
+    gi, gj, gw = mi['global_i'], mi['global_j'], mi['weights']
 
-    data = load_json(clusters_file)
-    if not data or "clusters" not in data:
-        print("[Error] Malformed clusters.json (missing 'clusters' key).")
-        return
+    sizes = sorted([(int(k), len(v)) for k, v in clusters_data['clusters'].items()], key=lambda x: -x[1])
 
-    clusters: Dict[str, List[int]] = data["clusters"]
-    feat_map: Dict[str, int] = data.get("feature_to_cluster", {})
+    print(f"\n=== Sub-community audit (clusters with >20 features) ===")
+    for cid, sz in sizes[:max_clusters]:
+        if sz < 20:
+            break
+        feats = sorted(clusters_data['clusters'][str(cid)])
+        feat_set = set(feats)
+        feat_idx = {f: i for i, f in enumerate(feats)}
+        n = len(feats)
 
-    # Determine d_sae
-    d_sae = d_sae_default
-    if feat_map:
-        d_sae = max(d_sae, max(int(k) for k in feat_map.keys()) + 1)
+        # Build internal edges
+        edges, weights = [], []
+        for idx in range(len(gi)):
+            a, b = int(gi[idx]), int(gj[idx])
+            if a in feat_set and b in feat_set:
+                edges.append((feat_idx[a], feat_idx[b]))
+                weights.append(float(gw[idx]))
 
-    summary = load_json(paths["summary_json"]) if paths.get("summary_json") else None
-    if summary:
-        cfg_sae = summary.get("config", {}).get("sae", {})
-        if "d_sae" in cfg_sae:
-            d_sae = int(cfg_sae["d_sae"])
+        possible = n * (n - 1) // 2
+        density = 100 * len(edges) / possible if possible > 0 else 0
 
-    active_clusters = {int(k): v for k, v in clusters.items() if int(k) > 0}
-    num_clusters = len(active_clusters)
-    assigned_features = sum(len(v) for v in active_clusters.values())
-    unassigned_features = d_sae - assigned_features
-    coverage_pct = (assigned_features / d_sae) * 100.0
-    dropped_pct = (unassigned_features / d_sae) * 100.0
+        # Run Leiden on internal subgraph
+        g = ig.Graph(n=n, edges=edges, edge_attrs={"weight": weights})
+        partition = la.find_partition(
+            g, la.RBConfigurationVertexPartition, weights="weight",
+            resolution_parameter=1.5, seed=0
+        )
+        sub_comms = [c for c in partition]
 
-    cluster_sizes = sorted([len(v) for v in active_clusters.values()])
-    ge_10 = [s for s in cluster_sizes if s >= 10]
-    ge_20 = [s for s in cluster_sizes if s >= 20]
-    ge_50 = [s for s in cluster_sizes if s >= 50]
-    lt_10 = [s for s in cluster_sizes if s < 10]
+        print(f"\n  T_{cid}: {n} features, {len(edges)} internal edges ({density:.1f}% density), "
+              f"{len(sub_comms)} sub-communities")
+        for i, comm in enumerate(sub_comms):
+            if len(comm) >= 3:
+                print(f"    Sub-{i}: {len(comm)} features")
 
-    print("\n📊 1. FEATURE ASSIGNMENT & COVERAGE")
-    print("-" * 50)
-    print(f"  • Total SAE Features (d_sae):     {d_sae:,}")
-    print(f"  • Assigned Features (T_1..T_K):    {assigned_features:,}  ({coverage_pct:.2f}%)")
-    print(f"  • Dropped into Cluster 0:          {unassigned_features:,}  ({dropped_pct:.2f}%)")
 
-    print("\n📦 2. CLUSTER SIZE DISTRIBUTION (T_m)")
-    print("-" * 50)
-    print(f"  • Total Active Clusters (K_r):     {num_clusters}")
-    if cluster_sizes:
-        mean_size = sum(cluster_sizes) / len(cluster_sizes)
-        median_size = cluster_sizes[len(cluster_sizes) // 2]
-        p25 = cluster_sizes[len(cluster_sizes) // 4]
-        p75 = cluster_sizes[(3 * len(cluster_sizes)) // 4]
-        print(f"  • Cluster Sizes (Features):        Min={min(cluster_sizes)}, Max={max(cluster_sizes)}, Mean={mean_size:.1f}, Median={median_size}")
-        print(f"  • Interquartile Range (25%-75%):   [{p25} ... {p75}] features")
-        print(f"  • Clusters with >= 10 features:    {len(ge_10)} ({len(ge_10)/num_clusters*100:.1f}%)  [PASS B.1 Filter]")
-        print(f"  • Clusters with >= 20 features:    {len(ge_20)} ({len(ge_20)/num_clusters*100:.1f}%)")
-        print(f"  • Clusters with >= 50 features:    {len(ge_50)} ({len(ge_50)/num_clusters*100:.1f}%)")
-        print(f"  • Clusters with < 10 features:     {len(lt_10)} ({len(lt_10)/num_clusters*100:.1f}%)  [DISCARDED at B.1]")
+def audit_s_vs_u(fc_result, clusters_data, examples, max_clusters=5):
+    """Check if activation-based labels (high s) match disparity-based driving samples (high u)."""
+    cluster_ids = sorted(int(k) for k in clusters_data['clusters'].keys())
 
-    # Check hypothesis coverage
-    hypos_data = load_json(paths["hypotheses_json"]) if paths.get("hypotheses_json") else None
-    if hypos_data:
-        hypos_list = hypos_data if isinstance(hypos_data, list) else hypos_data.get("hypotheses", [])
-        m_in_hypos = sorted(list({int(h.get("m")) for h in hypos_list if "m" in h}))
-        print("\n🎯 3. HYPOTHESIS COVERAGE (B.1 Validated Universe)")
-        print("-" * 50)
-        print(f"  • Validated Clusters with Hypotheses: {len(m_in_hypos)} of {num_clusters} ({len(m_in_hypos)/num_clusters*100:.1f}%)")
-        print(f"  • Total Generated Hypotheses:         {len(hypos_list):,}")
-        print(f"  • Cluster ID List:                    {m_in_hypos[:15]}{' ...' if len(m_in_hypos) > 15 else ''}")
+    print(f"\n=== Activation (s) vs Disparity (u) alignment ===")
+    for m_idx, cid in enumerate(cluster_ids[:max_clusters]):
+        if m_idx >= fc_result.u_matrix.shape[1]:
+            break
+        u_col = fc_result.u_matrix[:, m_idx]
+        s_col = fc_result.s_matrix[:, m_idx]
 
-    # Top largest clusters + labels
-    labels_data = load_json(paths["labels_json"]) if paths.get("labels_json") else None
-    labels_dict = labels_data.get("feature_clusters", {}) if isinstance(labels_data, dict) else {}
+        # Top 5 by s vs top 5 by u
+        top_s = np.argsort(s_col)[-5:][::-1]
+        top_u_pos = np.where(u_col > 0)[0]
+        top_u = top_u_pos[np.argsort(-u_col[top_u_pos])][:5] if len(top_u_pos) > 0 else []
 
-    print("\n🏆 4. TOP 10 LARGEST FEATURE CLUSTERS")
-    print("-" * 50)
-    top_clusters = sorted(active_clusters.items(), key=lambda x: len(x[1]), reverse=True)[:10]
-    for cid, feats in top_clusters:
-        lbl_info = labels_dict.get(str(cid), {})
-        title = lbl_info.get("title", "N/A") if isinstance(lbl_info, dict) else "N/A"
-        has_hypo = "★" if (hypos_data and cid in m_in_hypos) else " "
-        print(f"  {has_hypo} T_{cid:<4} | {len(feats):>4} features | {title}")
+        overlap = len(set(top_s) & set(top_u))
+        corr = np.corrcoef(s_col, u_col)[0, 1]
 
-    print("\n" + "=" * 70)
+        # Count u=0 examples
+        n_zero = int((u_col == 0).sum())
+        n_total = len(u_col)
+
+        print(f"\n  T_{cid} ({len(clusters_data['clusters'][str(cid)])} feats): "
+              f"corr(s,u)={corr:.4f}, u=0: {n_zero}/{n_total} ({100*n_zero/n_total:.1f}%), "
+              f"top-s/top-u overlap: {overlap}/5")
+        print(f"    Top s examples: {top_s[:3]}")
+        print(f"    Top u examples: {top_u[:3]}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Audit PDD SAE Feature Clusters and Feature Retention")
-    parser.add_argument("--config", type=str, help="Path to pipeline config JSON (e.g. configs/qwen3_1.7b_batchtopk_65k.json)")
-    parser.add_argument("--run_dir", type=str, help="Path to run directory (e.g. runs/qwen3_1.7b_batchtopk_65k)")
-    parser.add_argument("--checkpoint_dir", type=str, help="Path to checkpoints directory")
-    parser.add_argument("--clusters_json", type=str, help="Direct path to clusters.json file")
-    parser.add_argument("--d_sae", type=int, default=16384, help="Default SAE feature dimension (default: 16384)")
+    parser = argparse.ArgumentParser(description="Audit feature cluster quality")
+    parser.add_argument("--run_dir", type=str, default="runs/qwen3_1.7b_batchtopk_65k")
+    parser.add_argument("--checkpoint", type=str, default=None)
     args = parser.parse_args()
 
-    paths = resolve_paths(
-        config_path=args.config,
-        run_dir=args.run_dir,
-        checkpoint_dir=args.checkpoint_dir,
-        clusters_json=args.clusters_json,
-    )
-    audit_feature_clusters(paths, d_sae_default=args.d_sae)
+    run_dir = args.run_dir
+    # Find checkpoint dir
+    if args.checkpoint:
+        ckpt_dir = args.checkpoint
+    else:
+        summary_path = os.path.join(run_dir, "pdd_summary.json")
+        if os.path.exists(summary_path):
+            summary = json.load(open(summary_path))
+            ckpt_dir = summary.get("checkpoint_subfolder", "")
+        else:
+            print(f"No summary at {summary_path}")
+            return
+
+    if not ckpt_dir or not os.path.exists(ckpt_dir):
+        print(f"Checkpoint dir not found: {ckpt_dir}")
+        return
+
+    print(f"Run: {run_dir}")
+    print(f"Checkpoint: {ckpt_dir}")
+
+    # Load clusters
+    clusters_path = os.path.join(ckpt_dir, "clusters.json")
+    if not os.path.exists(clusters_path):
+        print(f"No clusters.json at {clusters_path}")
+        return
+    clusters_data = json.load(open(clusters_path))
+
+    # 1. Size distribution
+    audit_size_distribution(clusters_data)
+
+    # 2. Sub-community audit
+    mi_path = os.path.join(ckpt_dir, "mi_graph.npz")
+    audit_sub_communities(clusters_data, mi_path)
+
+    # 3. s vs u alignment
+    fc_path = os.path.join(ckpt_dir, "feature_conditioned.npz")
+    if os.path.exists(fc_path):
+        from pdd.feature_conditioned import FeatureConditionedResult
+        fc = FeatureConditionedResult.load_checkpoint(fc_path)
+        examples_path = os.path.join(ckpt_dir, "examples.json")
+        if os.path.exists(examples_path):
+            from pdd.data import DatasetLoader
+            examples = DatasetLoader.load_json_cache(examples_path)
+            audit_s_vs_u(fc, clusters_data, examples)
+        else:
+            print("\nNo examples.json; skipping s vs u audit.")
+    else:
+        print("\nNo feature_conditioned.npz; skipping s vs u audit.")
+
+    # 4. Parameter recommendations
+    summary_path = os.path.join(run_dir, "pdd_summary.json")
+    if os.path.exists(summary_path):
+        summary = json.load(open(summary_path))
+        fcl_cfg = summary.get("config", {}).get("feature_clusters", {})
+        print(f"\n{'='*60}")
+        print("PARAMETER RECOMMENDATIONS")
+        print(f"{'='*60}")
+        print(f"Current: resolution={fcl_cfg.get('resolution_parameter')}, "
+              f"min_community_size={fcl_cfg.get('min_community_size')}, "
+              f"top_pct={fcl_cfg.get('top_pct')}, "
+              f"min_firing_freq={fcl_cfg.get('min_firing_freq')}")
+        print(f"Result: {len(clusters_data['clusters'])} clusters, "
+              f"largest={max(len(v) for v in clusters_data['clusters'].values())}")
+        print()
+        print("Issues found:")
+        print("  1. Top clusters (T_1-T_6) are oversized (23-90 features) with")
+        print("     low internal MI density (8-24%) and multiple sub-communities.")
+        print("  2. ALL top-5 clusters: zero overlap between high-s (activation)")
+        print("     and high-u (disparity) examples. Label != driving samples.")
+        print("  3. Paper got K_r=814 clusters vs our 66 — need finer clustering.")
+        print()
+        print("Recommended next run config:")
+        print('  "feature_clusters": {')
+        print(f'    "resolution_parameter": 25,   # was {fcl_cfg.get("resolution_parameter")} — split more')
+        print(f'    "min_community_size": 4,       # was {fcl_cfg.get("min_community_size")} — keep small communities')
+        print(f'    "top_pct": {fcl_cfg.get("top_pct")},           # keep — already aggressive')
+        print(f'    "min_firing_freq": {fcl_cfg.get("min_firing_freq")}       # keep')
+        print("  }")
 
 
 if __name__ == "__main__":

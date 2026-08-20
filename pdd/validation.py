@@ -109,15 +109,21 @@ def cluster_validation_metrics(
         for m, feats in feature_clusters.items():
             valid_f = [int(f) for f in feats if int(f) < len(u_feat)]
             if len(valid_f) >= 4:
-                u_m = float(np.mean(u_feat[valid_f]))
-                d_m = float(np.mean(d_emp[valid_f]))
+                u_m_sum = float(np.sum(u_feat[valid_f]))
+                d_m_sum = float(np.sum(d_emp[valid_f]))
+                u_m_mean = float(np.mean(u_feat[valid_f]))
+                d_m_mean = float(np.mean(d_emp[valid_f]))
                 out_clusters[int(m)] = {
-                    "predicted_delta": u_m,
-                    "observed_delta": d_m,
+                    "predicted_delta": u_m_sum,
+                    "observed_delta": d_m_sum,
+                    "predicted_sum": u_m_sum,
+                    "observed_sum": d_m_sum,
+                    "predicted_mean": u_m_mean,
+                    "observed_mean": d_m_mean,
                     "n_features": len(valid_f),
                 }
-                u_list.append(u_m)
-                d_list.append(d_m)
+                u_list.append(u_m_sum)
+                d_list.append(d_m_sum)
 
         r2 = 0.0
         r_val = 0.0

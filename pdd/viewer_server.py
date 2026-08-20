@@ -247,6 +247,9 @@ class ViewerState:
         self._np_verifying: bool = False
         """Status flag indicating whether background Neuronpedia slug verification is running."""
 
+        self._np_cards: Dict[int, Dict[str, Any]] = {}
+        """In-memory RAM cache mapping individual SAE feature index f to its Neuronpedia card."""
+
         # ----------------------------------------------------------------------
         # 8. Checkpoint Artifact & Validation Matrices Caches
         # ----------------------------------------------------------------------
@@ -748,25 +751,38 @@ class ViewerState:
         feats = self.feature_clusters.get(m_int, [])
         if not feats:
             return []
+        label_obj = self._load_feature_cluster_labels().get(m_int, {})
+        c_title = label_obj.get("title", f"Feature Cluster T_{m_int}")
+        c_keywords = label_obj.get("keywords", [])
+
+        def _make_entry(f_idx: int, firing_val: float = 0.0) -> Dict[str, Any]:
+            np_data = self._get_neuronpedia_feature(f_idx, allow_network=False)
+            label = (np_data.get("label") or np_data.get("description") or f"{c_title} Latent") if np_data else f"{c_title} Latent"
+            desc = (np_data.get("description") or f"Member of {c_title} (T_{m_int})") if np_data else f"Member of {c_title} (T_{m_int})"
+            toks = (np_data.get("top_tokens") or c_keywords[:4]) if np_data else c_keywords[:4]
+            return {
+                "feature_index": f_idx,
+                "firing": float(firing_val),
+                "neuronpedia_url": self._neuronpedia_url(f_idx),
+                "description": desc,
+                "label": label,
+                "top_tokens": toks,
+                "cluster_m": m_int,
+            }
+
         tot = self._feature_firings()
         if tot is None or len(tot) == 0:
             logger.warning(f"Feature firing totals unavailable; returning T_{m} members unranked.")
-            return [{
-                "feature_index": int(f), "firing": 0.0,
-                "neuronpedia_url": self._neuronpedia_url(int(f)),
-            } for f in feats[:top_n]]
+            return [_make_entry(int(f), 0.0) for f in feats[:top_n]]
+
         valid_feats = [f for f in feats if 0 <= f < len(tot)]
         if not valid_feats:
             return []
         firings = tot[valid_feats]
         order = np.argsort(firings)[-top_n:][::-1]
-        return [{
-            "feature_index": int(valid_feats[j]),
-            "firing": float(firings[j]),
-            "neuronpedia_url": self._neuronpedia_url(int(valid_feats[j])),
-        } for j in order]
+        return [_make_entry(int(valid_feats[j]), firings[j]) for j in order]
 
-    def _cluster_top_examples(self, m: int, top_n: int = 5) -> List[Dict[str, Any]]:
+    def _cluster_top_examples(self, m: int, top_n: int = 12) -> List[Dict[str, Any]]:
         """Return top dataset examples firing feature cluster T_m across all its member features."""
         mats = self._load_feature_matrices()
         examples = self._load_examples()
@@ -789,7 +805,7 @@ class ViewerState:
                 return self._top_examples(scores, examples, top_n)
         return []
 
-    def _feature_cluster_info(self, m: int, top_n_examples: int = 5) -> Dict[str, Any]:
+    def _feature_cluster_info(self, m: int, top_n_examples: int = 12) -> Dict[str, Any]:
         """Whole-cluster interpretation for T_m: LLM label, top features, and representative examples."""
         m_int = int(m)
         cache_key = f"T_{m_int}_{top_n_examples}"
@@ -811,7 +827,7 @@ class ViewerState:
         self._prewarm_neuronpedia_features([tf["feature_index"] for tf in res["top_features"]])
         return res
 
-    def _data_cluster_info(self, k: int, top_n_examples: int = 5) -> Dict[str, Any]:
+    def _data_cluster_info(self, k: int, top_n_examples: int = 10) -> Dict[str, Any]:
         """Interpretation for data cluster B_k: title, description, and sampled prompt exemplars."""
         k_int = int(k)
         cache_key = f"B_{k_int}_{top_n_examples}"
@@ -894,6 +910,23 @@ class ViewerState:
                 np_data = self._get_neuronpedia_feature(f_int)
                 if np_data:
                     out["neuronpedia"] = np_data
+
+            parent_m = next((m for m, feats in self.feature_clusters.items() if f_int in feats), None)
+            if parent_m is not None:
+                lab = self._load_feature_cluster_labels().get(parent_m, {})
+                c_title = lab.get("title", f"Feature Cluster T_{parent_m}")
+                c_kw = lab.get("keywords", [])
+                out["parent_cluster"] = {
+                    "m": parent_m,
+                    "title": c_title,
+                    "keywords": c_kw,
+                }
+                if "neuronpedia" not in out:
+                    out["local_interpretation"] = {
+                        "label": f"{c_title} Latent #{f_int}",
+                        "description": f"Constituent SAE latent of Feature Community T_{parent_m} ({c_title}).",
+                        "keywords": c_kw,
+                    }
             return out
 
         return self._cached_info(cache_key, build)
@@ -977,14 +1010,26 @@ class ViewerState:
     # ==========================================================================
 
     @staticmethod
-    def _neuronpedia_sae_set(sae_cfg: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    def _neuronpedia_sae_set(sae_cfg: Dict[str, Any], model_cfg: Optional[Dict[str, Any]] = None) -> Optional[Tuple[str, str]]:
         """Map run SAE configuration to Neuronpedia (model_slug, sae_slug)."""
         repo = str(sae_cfg.get("repo", "")).lower()
-        layer = sae_cfg.get("layer", 12)
-        if "gemma-scope" in repo or "gemma-2-2b" in repo or "canonical" in repo:
+        sae_id = str(sae_cfg.get("sae_id", "")).lower()
+        model_path = str((model_cfg or {}).get("path", "")).lower()
+        layer = sae_cfg.get("layer", 14)
+        k = sae_cfg.get("k", 80)
+
+        # 1. Qwen3-1.7B (e.g. 14-resid-batchtopk-65k__l0-80)
+        if "qwen3" in repo or "qwen3" in model_path or "qwen_qwen3" in sae_id or "adamkarvonen/qwen3" in repo:
+            model_id = "qwen3-1.7b"
+            sae_set = f"{layer}-resid-batchtopk-65k__l0-{k}"
+            return model_id, sae_set
+
+        # 2. Gemma-2-2B / Gemma-Scope
+        if "gemma-scope" in repo or "gemma-2-2b" in repo or "canonical" in repo or "gemma" in model_path:
             model_id = "gemma-2-2b"
             sae_set = f"{layer}-gemmascope-mlp-16k" if "mlp" in repo else f"{layer}-gemmascope-res-16k"
             return model_id, sae_set
+
         return None
 
     @staticmethod
@@ -1006,40 +1051,54 @@ class ViewerState:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def _get_neuronpedia_feature(self, feature_index: int) -> Optional[Dict[str, Any]]:
-        """Fetch feature metadata from Neuronpedia with local disk caching."""
+    def _get_neuronpedia_feature(self, feature_index: int, allow_network: bool = True) -> Optional[Dict[str, Any]]:
+        """Fetch feature metadata from Neuronpedia with RAM and local disk caching."""
+        f_idx = int(feature_index)
+        # 1. RAM fast lookup (<0.01ms)
+        if f_idx in self._np_cards:
+            return self._np_cards[f_idx]
+
         np_set = self._neuronpedia_set()
         if not np_set:
             return None
-        cache_file = self._neuronpedia_cache_dir() / f"feat_{feature_index}.json"
+
+        # 2. Local disk cache lookup
+        cache_file = self._neuronpedia_cache_dir() / f"feat_{f_idx}.json"
         if cache_file.exists():
             try:
                 data = _read_json(cache_file)
-                if data:
+                if data and (data.get("description") or data.get("label")):
+                    self._np_cards[f_idx] = data
                     return data
             except Exception as e:
                 logger.warning(f"Corrupt Neuronpedia cache file {cache_file.name}; refetching: {e}")
 
-        data = self._neuronpedia_feature(np_set[0], np_set[1], feature_index)
+        # 3. Synchronous network fetch (only on-demand when allow_network=True)
+        if not allow_network:
+            return None
+
+        data = self._neuronpedia_feature(np_set[0], np_set[1], f_idx)
         if data is not None:
+            self._np_cards[f_idx] = data
             try:
                 _save_json(cache_file, data)
             except Exception as e:
-                logger.debug(f"Failed to persist Neuronpedia cache for feature {feature_index}: {e}")
+                logger.debug(f"Failed to persist Neuronpedia cache for feature {f_idx}: {e}")
         return data
 
     def _prewarm_neuronpedia_features(self, feature_indices: List[int]) -> None:
-        """Asynchronously pre-warm Neuronpedia cache in the background for active features."""
+        """Asynchronously pre-warm Neuronpedia cache in parallel in the background for active features."""
         np_set = self._neuronpedia_set()
         if not np_set or not feature_indices:
             return
 
         def _worker() -> None:
-            for f_idx in feature_indices[:16]:
-                try:
-                    self._get_neuronpedia_feature(int(f_idx))
-                except Exception as e:
-                    logger.warning(f"Neuronpedia pre-warm failed for feature {f_idx}: {e}")
+            from concurrent.futures import ThreadPoolExecutor
+            uncached = [int(f) for f in feature_indices[:16] if int(f) not in self._np_cards]
+            if not uncached:
+                return
+            with ThreadPoolExecutor(max_workers=min(len(uncached), 8)) as executor:
+                list(executor.map(lambda f: self._get_neuronpedia_feature(f, allow_network=True), uncached))
 
         threading.Thread(target=_worker, daemon=True, name="PDD-NeuronpediaPrewarmer").start()
 
@@ -1054,13 +1113,28 @@ class ViewerState:
                 if resp.status == 200:
                     data = json.loads(resp.read().decode("utf-8"))
                     exs = data.get("activations", [])[:3]
+                    explanations = data.get("explanations", [])
+                    desc = (explanations[0].get("description") if explanations else "") or data.get("description", "")
+                    label = (explanations[0].get("description") if explanations else "") or data.get("label", "") or desc
+                    model_name = explanations[0].get("explanationModelName", "") if explanations else ""
+
+                    pos_tokens = data.get("pos_str", [])
+                    if not pos_tokens and data.get("top_tokens"):
+                        pos_tokens = [t.get("token") for t in data.get("top_tokens", []) if t.get("token")]
+                    neg_tokens = data.get("neg_str", [])
+
                     return {
                         "model": model_id,
                         "sae": sae_set,
                         "feature_index": feature_index,
-                        "description": data.get("description", ""),
-                        "label": data.get("label", ""),
-                        "top_tokens": [t.get("token") for t in data.get("top_tokens", [])[:6] if t.get("token")],
+                        "description": desc,
+                        "label": label,
+                        "explanation_model": model_name,
+                        "pos_tokens": [{"token": str(tok)} for tok in pos_tokens[:8]],
+                        "top_tokens": [str(tok) for tok in pos_tokens[:6]],
+                        "neg_tokens": [{"token": str(tok)} for tok in neg_tokens[:6]],
+                        "max_act_approx": data.get("maxActApprox"),
+                        "correlated_features": data.get("correlated_features_indices", [])[:10],
                         "examples_count": len(data.get("activations", [])),
                         "top_examples": [
                             {"maxValue": ex.get("maxValue"), "tokens": ex.get("tokens", [])[:30]} for ex in exs
@@ -1075,7 +1149,8 @@ class ViewerState:
         if self._np_set is not None:
             return self._np_set
         sae_cfg = self.summary.get("config", {}).get("sae", {})
-        pair = self._neuronpedia_sae_set(sae_cfg)
+        model_cfg = self.summary.get("config", {}).get("model", {})
+        pair = self._neuronpedia_sae_set(sae_cfg, model_cfg)
         if not pair:
             return None
         with self._np_verify_lock:
@@ -1089,7 +1164,8 @@ class ViewerState:
     def _verify_neuronpedia_slug(self) -> None:
         """Background worker verifying Neuronpedia slug resolution."""
         sae_cfg = self.summary.get("config", {}).get("sae", {})
-        pair = self._neuronpedia_sae_set(sae_cfg)
+        model_cfg = self.summary.get("config", {}).get("model", {})
+        pair = self._neuronpedia_sae_set(sae_cfg, model_cfg)
         if pair and self._neuronpedia_verified(pair[0], pair[1]):
             self._np_set = pair
             logger.info(f"Neuronpedia verified for {pair[0]}/{pair[1]}.")
@@ -1323,8 +1399,8 @@ def inspect_preference_pair(req: PreferencePairInspectionRequest) -> Dict[str, A
     inspector = state.get_inspector()
     c_p, r_p, u = inspector.extract_pair_features(prompt_text, chosen_text, rejected_text, tau=state._feature_delta_tau())
 
-    # 2. Per-feature-cluster live disparity: u_m = mean over T_m members of u
-    u_sig = inspection.cluster_signals(u, state.feature_clusters, mode="mean")
+    # 2. Per-feature-cluster live disparity: u_m = sum over T_m members of u
+    u_sig = inspection.cluster_signals(u, state.feature_clusters, mode="sum")
     pair_act = c_p + r_p
 
     # 3. Score Data Clusters B_k by live-evidence-weighted hypotheses

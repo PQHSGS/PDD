@@ -1,7 +1,7 @@
 {
   "name": "qwen3_1.7b_batchtopk_65k",
   "seed": 0,
-  "timestamp": "2026-08-19 23:48:32",
+  "timestamp": "2026-08-20 21:07:57",
   "config": {
     "name": "qwen3_1.7b_batchtopk_65k",
     "seed": 0,
@@ -37,18 +37,19 @@
     },
     "feature_clusters": {
       "top_pct": 0.2,
-      "min_community_size": 5,
+      "min_community_size": 4,
       "min_firing_freq": 0.001,
       "block_size": 2048,
-      "resolution_parameter": 10
+      "resolution_parameter": 25
     },
     "feature_conditioned": {
-      "tau": 0.03,
+      "tau": 0.01,
       "silent_pct": 5.0,
       "n_data_clusters": 1024,
       "min_feat_cluster_size": 10,
       "min_data_cluster_size": 25,
-      "split_half_eps": 1e-06
+      "split_half_eps": 1e-06,
+      "weighted_disparity": true
     },
     "prompt_conditioned": {
       "min_prompt_count": 200,
@@ -85,10 +86,5 @@
       "max_length": 512,
       "num_features": 50
     }
-  },
-  "extraction_state": {
-    "N": 259783,
-    "d_sae": 16384,
-    "ex_hash": "b69a0f55c812166a"
   }
 }

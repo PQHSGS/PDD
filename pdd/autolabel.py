@@ -375,7 +375,8 @@ class LLMClusterLabeler(ClusterAutoLabeler):
         if kind == "response":
             instruction = (
                 "You are analyzing a Sparse Autoencoder (SAE) feature cluster extracted from model activations. "
-                "Below are representative prompt-response pairs from an RLHF dataset where this specific feature cluster fires strongly:\n\n"
+                "Below are representative prompt-response pairs from an RLHF dataset where this specific feature cluster fires. "
+                "Each example shows the cluster's activation strength (0.0 = no firing, higher = stronger firing).\n\n"
                 f"{examples}\n\n"
                 "Task: Identify the specific concept, coding pattern, mathematical/reasoning technique, tone, or domain topic shared across these firing responses.\n\n"
                 "Rules:\n"
@@ -549,10 +550,31 @@ class AutoLabelingPipeline:
             firing = matrices.C_max[:, feats] + matrices.R_max[:, feats]
             scores = np.asarray(firing.sum(axis=1)).ravel()
 
-            # Dynamic sample scaling: 10 to 20 representative firing examples based on cluster size
+            # Stratified sampling: pick examples across activation deciles for diversity
+            # (Neuronpedia autointerp finding: top-only sampling has high specificity but low sensitivity)
             n_samples = min(20, max(10, len(feats) // 2))
-            idxs = [int(i) for i in np.argsort(scores)[-n_samples:][::-1] if scores[int(i)] > 0 and int(i) < len(examples)]
+            firing_mask = scores > 0
+            firing_indices = np.where(firing_mask)[0]
+            if len(firing_indices) == 0:
+                continue
+            firing_scores = scores[firing_indices]
+            n_per_decile = max(1, n_samples // 10)
+            selected = []
+            for decile in range(10):
+                lo = np.percentile(firing_scores, decile * 10)
+                hi = np.percentile(firing_scores, (decile + 1) * 10) if decile < 9 else np.inf
+                in_range = np.where((firing_scores >= lo) & (firing_scores < hi))[0]
+                if len(in_range) > 0:
+                    pick = in_range[np.argsort(-firing_scores[in_range])[:n_per_decile]]
+                    selected.extend(firing_indices[pick].tolist())
+            # Deduplicate, cap at n_samples, sort by score descending
+            selected = list(dict.fromkeys(selected))[:n_samples]
+            selected.sort(key=lambda i: -scores[i])
+            idxs = [int(i) for i in selected if int(i) < len(examples)]
+
+            # Show activation strength so LLM sees firing intensity
             texts = [
+                f"[Activation: {scores[i]:.3f}]\n"
                 f"Prompt: {(examples[i].prompt or '').strip()[:180]}\n"
                 f"Chosen (Promoted): {(examples[i].chosen or '').strip()[:200]}\n"
                 f"Rejected (Suppressed): {(examples[i].rejected or '').strip()[:200]}"

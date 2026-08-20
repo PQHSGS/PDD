@@ -74,6 +74,7 @@ class FeatureConditionedConfig:
     min_feat_cluster_size: int = 10
     min_data_cluster_size: int = 25
     split_half_eps: float = 1e-6
+    weighted_disparity: bool = False
 
     def validate(self) -> None:
         if self.tau < 0:
