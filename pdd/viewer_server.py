@@ -51,13 +51,26 @@ def _read_json(path: Path) -> Optional[Any]:
         return None
 
 
+def _json_default(obj: Any) -> Any:
+    """JSON serializer fallback for NumPy scalar and array types."""
+    if isinstance(obj, (np.integer, np.int64, np.int32)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float32, np.float64)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (set, frozenset)):
+        return list(obj)
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
 def _save_json(path: Path, data: Any, indent: Optional[int] = None) -> None:
     """Atomically write a JSON file using a thread-safe process/thread-unique temporary file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.parent / f".{path.stem}_{os.getpid()}_{threading.get_ident()}.tmp.json"
     try:
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=indent)
+            json.dump(data, f, indent=indent, default=_json_default)
         os.replace(tmp, path)
     except Exception:
         try:
@@ -294,14 +307,13 @@ class ViewerState:
         )
 
     def prewarm(self) -> None:
-        """Prewarm dense member cache and feature deltas at server startup for zero-latency lookups."""
+        """Prewarm dense member cache and per-example score tables at server startup for zero-latency lookups."""
         mats = self._load_feature_matrices()
         if mats is None:
             logger.info("No feature matrices for this run; skipping member-cache prewarm.")
             return
         self._load_member_cache(mats)
-        if self._feat_delta is None:
-            self._feature_delta()
+        self._ensure_example_scores(mats)
 
     @property
     def _fc_cfg(self) -> Dict[str, Any]:
@@ -446,9 +458,9 @@ class ViewerState:
             if not ex_file.exists():
                 return None
             try:
-                from .dataset import DatasetLoader
+                from .data import DatasetLoader
                 logger.info(f"Loading cached examples from {ex_file}...")
-                self._examples = DatasetLoader.load_cached_examples(str(ex_file))
+                self._examples = DatasetLoader.load_json_cache(str(ex_file))
                 logger.info(f"Loaded {len(self._examples)} examples into viewer memory.")
                 return self._examples
             except Exception as e:
@@ -590,70 +602,43 @@ class ViewerState:
         cols = self._all_member_cols
         if M is None or cols is None or len(cols) == 0:
             return None
-        if hasattr(M, "toarray"):
-            dense = np.asarray(M[:, cols].toarray(), dtype=np.float32)
+        if hasattr(M, "tocsr"):
+            import scipy.sparse as sp
+            d_sae = M.shape[1]
+            n_cols = len(cols)
+            # Fast BLAS column slice via sparse indicator matrix
+            E = sp.csr_matrix((np.ones(n_cols, dtype=np.float32), (cols, np.arange(n_cols))), shape=(d_sae, n_cols))
+            dense = (M @ E).toarray().astype(np.float32)
         else:
             dense = np.asarray(M[:, cols], dtype=np.float32)
         self._member_matrices[attr] = dense
         return dense
 
-    @staticmethod
-    def _col_firing_rate(mat, threshold: float) -> np.ndarray:
-        """Compute column firing counts across rows exceeding threshold."""
-        if hasattr(mat, "tocsr"):
-            mat_csr = mat.tocsr()
-            mask = mat_csr.data > threshold
-            if not np.any(mask):
-                return np.zeros(mat.shape[1], dtype=np.float64)
-            data_bin = mask.astype(np.float64)
-            bin_csr = mat_csr.__class__((data_bin, mat_csr.indices, mat_csr.indptr), shape=mat.shape)
-            return np.asarray(bin_csr.sum(axis=0)).ravel()
-        return np.asarray((mat > threshold).sum(axis=0)).ravel().astype(np.float64)
-
-    def _feature_delta_tau(self) -> float:
-        """The B.1 tau threshold used to extract per-feature deltas (from config JSON)."""
-        return float(self._fc_cfg.get("tau", 0.01))
-
-    def _feature_delta(self) -> Optional[np.ndarray]:
-        """Compute and cache per-feature preference disparity vector: 1(C>tau) - 1(R>tau)."""
-        if self._feat_delta is not None:
-            return self._feat_delta
-        mats = self._load_feature_matrices()
-        if mats is None or mats.C_max is None or mats.R_max is None:
-            return None
-        tau = self._feature_delta_tau()
-        c_rate = self._col_firing_rate(mats.C_max, tau)
-        r_rate = self._col_firing_rate(mats.R_max, tau)
-        self._feat_delta = (c_rate - r_rate) / float(mats.C_max.shape[0])
-        self._persist_feature_delta()
-        return self._feat_delta
-
     def _feature_firings(self) -> Optional[np.ndarray]:
-        """Compute and cache total firing counts across chosen and rejected responses."""
+        """Compute and cache total firing counts across chosen and rejected responses for member features."""
         if self._feature_totals is not None:
             return self._feature_totals
         mats = self._load_feature_matrices()
-        if mats is None:
+        if mats is None or self._all_member_cols is None:
             return None
-        tot = np.zeros(mats.C_max.shape[1], dtype=np.float32)
-        for attr in ("C_max", "R_max"):
-            M = getattr(mats, attr)
-            if M is not None:
-                if hasattr(M, "sum"):
-                    tot += np.asarray(M.sum(axis=0)).ravel().astype(np.float32)
-                else:
-                    tot += np.asarray(M).sum(axis=0).astype(np.float32)
+        d_sae = mats.C_max.shape[1]
+        tot = np.zeros(d_sae, dtype=np.float32)
+        M_c = self._member_matrices.get("C_max")
+        M_r = self._member_matrices.get("R_max")
+        if M_c is not None and M_r is not None:
+            tot[self._all_member_cols] = M_c.sum(axis=0) + M_r.sum(axis=0)
         self._feature_totals = tot
         return self._feature_totals
 
     def _member_cache_meta(self, mats) -> Dict[str, Any]:
         """Generate fingerprint metadata to validate cache integrity against source matrices."""
-        c_shape = list(mats.C_max.shape) if mats and mats.C_max is not None else []
+        c_shape = [int(x) for x in mats.C_max.shape] if mats and mats.C_max is not None else []
+        n_members = len(self._all_member_cols) if self._all_member_cols is not None else len(self._expected_member_cols())
         return {
             "c_shape": c_shape,
-            "min_cluster_size": self.min_partition_cluster_size,
-            "n_clusters": len(self.feature_clusters),
-            "n_members": int(len(self._all_member_cols)) if self._all_member_cols is not None else 0,
+            "min_cluster_size": int(self.min_partition_cluster_size),
+            "n_clusters": int(len(self.feature_clusters)),
+            "n_members": int(n_members),
         }
 
     def _member_cache_valid(self, mats, meta: Optional[Dict[str, Any]]) -> bool:
@@ -686,23 +671,14 @@ class ViewerState:
                 pass
             raise
 
-    def _persist_feature_delta(self) -> None:
-        """Atomically save computed feature deltas to `viewer_cache/feature_delta.npy`."""
-        cache_dir = self.run_dir / "viewer_cache"
-        if cache_dir.is_dir() and self._feat_delta is not None:
-            self._save_npy(cache_dir / "feature_delta.npy", self._feat_delta)
-            _save_json(cache_dir / "feature_delta_meta.json", {"tau": self._feature_delta_tau()})
-
     def _persist_member_cache(self, mats) -> None:
-        """Atomically persist member matrices and positions under `<run>/viewer_cache/`."""
+        """Atomically persist member matrices under `<run>/viewer_cache/`."""
         cache_dir = self.run_dir / "viewer_cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
         payload = {
             "member_cols.npy": self._all_member_cols,
-            "positions_C_max.npy": self._member_positions_cache["C_max"],
-            "positions_R_max.npy": self._member_positions_cache["R_max"],
-            "member_matrix_C_max.npy": self._member_matrices["C_max"],
-            "member_matrix_R_max.npy": self._member_matrices["R_max"],
+            "member_matrix_C_max.npy": self._member_matrices.get("C_max"),
+            "member_matrix_R_max.npy": self._member_matrices.get("R_max"),
             "feature_totals.npy": self._feature_totals,
         }
         for name, arr in payload.items():
@@ -719,27 +695,20 @@ class ViewerState:
                 return
             cache_dir = self.run_dir / "viewer_cache"
             cache_files = [
-                "member_cols.npy", "positions_C_max.npy", "positions_R_max.npy",
-                "member_matrix_C_max.npy", "member_matrix_R_max.npy", "feature_totals.npy",
+                "member_cols.npy",
+                "member_matrix_C_max.npy",
+                "member_matrix_R_max.npy",
+                "feature_totals.npy",
             ]
             meta = _read_json(cache_dir / "meta.json")
             if all((cache_dir / f).exists() for f in cache_files) and self._member_cache_valid(mats, meta):
                 try:
                     self._all_member_cols = np.load(cache_dir / "member_cols.npy")
-                    self._member_positions_cache = {
-                        "C_max": np.load(cache_dir / "positions_C_max.npy"),
-                        "R_max": np.load(cache_dir / "positions_R_max.npy"),
-                    }
                     self._member_matrices = {
                         "C_max": np.load(cache_dir / "member_matrix_C_max.npy", mmap_mode="r"),
                         "R_max": np.load(cache_dir / "member_matrix_R_max.npy", mmap_mode="r"),
                     }
                     self._feature_totals = np.load(cache_dir / "feature_totals.npy")
-                    fd_path = cache_dir / "feature_delta.npy"
-                    if fd_path.exists():
-                        fd_meta = _read_json(cache_dir / "feature_delta_meta.json") or {}
-                        if float(fd_meta.get("tau", 0.01)) == self._feature_delta_tau():
-                            self._feat_delta = np.load(fd_path)
                     logger.info(f"Loaded member cache from {cache_dir} (mmap).")
                     return
                 except Exception as e:
@@ -747,16 +716,11 @@ class ViewerState:
             
             # Rebuild member cache
             self._all_member_cols = self._expected_member_cols()
-            self._member_positions_cache = {
-                "C_max": self._member_positions(mats, "C_max"),
-                "R_max": self._member_positions(mats, "R_max"),
-            }
             self._member_matrices = {
                 "C_max": self._member_matrix(mats, "C_max"),
                 "R_max": self._member_matrix(mats, "R_max"),
             }
             self._feature_firings()
-            self._feature_delta()
             self._persist_member_cache(mats)
 
     def _load_cached_example_scores(self, cache_dir: Path, cluster_ids: List[int], mats) -> bool:
@@ -778,6 +742,10 @@ class ViewerState:
         except Exception as e:
             logger.warning(f"Failed to load per-example scores ({e}); rebuilding.")
             return False
+
+    def _feature_delta_tau(self) -> float:
+        """The B.1 tau threshold used to extract per-feature deltas (from config JSON)."""
+        return float(self._fc_cfg.get("tau", 0.01))
 
     def _ensure_example_scores(self, mats) -> None:
         """Ensure per-example disparity and firing score tables (u, s) are built and memory-mapped."""
