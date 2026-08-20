@@ -849,7 +849,7 @@ class ViewerState:
         } for j in order]
 
     def _cluster_top_examples(self, m: int, top_n: int = 5) -> List[Dict[str, Any]]:
-        """Return top dataset examples firing feature cluster T_m using dense RAM matrices."""
+        """Return top dataset examples firing feature cluster T_m across all its member features."""
         mats = self._load_feature_matrices()
         examples = self._load_examples()
         m_int = int(m)
@@ -857,23 +857,19 @@ class ViewerState:
         if mats is None or examples is None or not feats:
             return []
 
-        top_mems = self._top_cluster_features(m_int, top_n=5)
-        top_f = np.array([f["feature_index"] for f in top_mems], dtype=np.int64)
-        if len(top_f) == 0:
-            return []
-
-        self._ensure_example_scores(mats)
-        scores = np.zeros(len(examples), dtype=np.float32)
         if self._all_member_cols is not None:
-            slots = np.searchsorted(self._all_member_cols, top_f)
-            valid_mask = (slots < len(self._all_member_cols)) & (self._all_member_cols[slots] == top_f)
+            feats_arr = np.asarray(feats, dtype=np.int64)
+            slots = np.searchsorted(self._all_member_cols, feats_arr)
+            valid_mask = (slots < len(self._all_member_cols)) & (self._all_member_cols[slots] == feats_arr)
             slots = slots[valid_mask]
             if len(slots) > 0:
+                scores = np.zeros(len(examples), dtype=np.float32)
                 for attr in ("C_max", "R_max"):
                     M = self._member_matrix(mats, attr)
                     if M is not None:
                         scores += M[:, slots].sum(axis=1)
-        return self._top_examples(scores, examples, top_n)
+                return self._top_examples(scores, examples, top_n)
+        return []
 
     def _feature_cluster_info(self, m: int, top_n_examples: int = 5) -> Dict[str, Any]:
         """Whole-cluster interpretation for T_m: LLM label, top features, and representative examples."""
