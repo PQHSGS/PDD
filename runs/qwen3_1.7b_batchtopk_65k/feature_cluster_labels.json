@@ -1,1195 +1,710 @@
 {
   "feature_clusters": {
     "1": {
-      "title": "Algorithm Implementation",
-      "description": "Representative code examples for various algorithms and data structures",
+      "title": "Convolutional Neural Networks",
+      "description": "The responses consistently involve the design and implementation of Convolutional Neural Networks for image classification tasks.",
       "keywords": [
-        "algorithms",
-        "data structures",
-        "code implementation",
-        "programming",
-        "python"
+        "cnn",
+        "tensorflow",
+        "image classification",
+        "neural networks",
+        "digit recognition"
       ]
     },
     "2": {
-      "title": "Model Training",
-      "description": "Training machine learning models using various algorithms and techniques.",
+      "title": "String Manipulation & Regular Expressions",
+      "description": "The responses demonstrate a strong preference for solutions involving string processing, particularly using regular expressions for pattern matching and extraction.",
       "keywords": [
-        "model training",
-        "machine learning",
-        "algorithms"
+        "strings",
+        "regex",
+        "pattern matching",
+        "text processing",
+        "validation"
       ]
     },
     "3": {
       "title": "HTML Form Development",
-      "description": "Prompts about creating and validating HTML forms with features like validation, styling, and interactivity.",
+      "description": "The responses consistently demonstrate the creation and implementation of interactive HTML forms with various features like validation, AJAX submission, and user input fields.",
       "keywords": [
-        "html forms",
+        "html",
+        "forms",
         "validation",
-        "interactive design"
+        "javascript",
+        "input"
       ]
     },
     "4": {
-      "title": "Topic Cluster 4: \\cdot/\\approx",
-      "description": "Cluster containing responses associated with \\cdot, \\approx, **step, \\rightarrow.",
-      "keywords": []
+      "title": "Step-by-Step Problem Solving",
+      "description": "The responses consistently demonstrate a structured, methodical approach to presenting and solving mathematical or analytical problems, often involving explicit steps and explanations.",
+      "keywords": [
+        "mathematics",
+        "problem solving",
+        "stepwise",
+        "reasoning"
+      ]
     },
     "5": {
-      "title": "Data Representation",
-      "description": "Common theme of column mappings and data structures in preference datasets.",
+      "title": "Table Mapping & Correspondence",
+      "description": "The responses consistently demonstrate an ability to identify and map corresponding elements between two structured tables or lists.",
       "keywords": [
-        "column mappings",
-        "data representation",
-        "information structure"
+        "table mapping",
+        "column correspondence",
+        "data alignment",
+        "relation extraction"
       ]
     },
     "6": {
-      "title": "Mental Wellness",
-      "description": "Prompts about mindfulness meditation and its scientific benefits for mental health.",
+      "title": "Automated Code Generation",
+      "description": "The responses consistently provide complete, ready-to-use code snippets demonstrating specific technical solutions.",
       "keywords": [
-        "mindfulness",
-        "mental wellness",
-        "health"
+        "code generation",
+        "python",
+        "javascript",
+        "web development",
+        "deployment"
       ]
     },
     "7": {
-      "title": "Renewable Energy",
-      "description": "Prompts about the role of renewable energy in reducing carbon emissions and promoting sustainable development.",
+      "title": "Summarization & Keyword Extraction",
+      "description": "The responses consistently demonstrate the ability to condense text and extract relevant keywords, often with a focus on providing concise summaries and lists.",
       "keywords": [
-        "renewable",
-        "energy",
-        "sustainability"
+        "summarization",
+        "keyword extraction",
+        "text reduction",
+        "information retrieval"
       ]
     },
     "8": {
-      "title": "SVG Effects",
-      "description": "Creating visual effects like blur, glow, and parallax using SVG filters and CSS",
+      "title": "Harmful Request Mitigation",
+      "description": "The responses consistently demonstrate a strong tendency to refuse or deflect prompts involving potentially dangerous, unethical, or illegal activities.",
       "keywords": [
-        "svg",
-        "effects",
-        "filters",
-        "css",
-        "visual"
+        "risk assessment",
+        "safety protocols",
+        "content filtering",
+        "ethical guidelines"
       ]
     },
     "9": {
-      "title": "Model Training",
-      "description": "Training machine learning models using various algorithms and techniques.",
+      "title": "SVG Visual Effects",
+      "description": "The responses consistently address techniques for modifying and enhancing the appearance of SVG graphics.",
       "keywords": [
-        "model training",
-        "machine learning",
-        "algorithms"
+        "svg",
+        "filters",
+        "effects",
+        "animation",
+        "styling"
       ]
     },
     "10": {
-      "title": "Algorithmic Problem Solving",
-      "description": "Solving computational problems through efficient algorithms and data structures.",
+      "title": "Technical Product Naming",
+      "description": "The responses consistently focus on identifying and describing specific software products, platforms, or technologies.",
       "keywords": [
-        "algorithms",
-        "computational problems",
-        "data structures"
+        "windows",
+        "python",
+        "java",
+        "sql server",
+        "microsoft"
       ]
     },
     "11": {
-      "title": "Python Programming",
-      "description": "Guidelines for writing clean, scalable Python code.",
+      "title": "Practical Code Implementation",
+      "description": "The responses consistently demonstrate providing concrete, working code examples and tutorials rather than abstract explanations or high-level guides.",
       "keywords": [
+        "code example",
+        "tutorial",
+        "implementation",
         "python",
-        "code",
-        "programming"
+        "javascript"
       ]
     },
     "12": {
-      "title": "Prime Number Detection",
-      "description": "Python code for identifying prime numbers in a list or matrix.",
+      "title": "Optimal Substructure Problems",
+      "description": "The prompts consistently require identifying optimal solutions within a larger problem structure, often involving minimizing or maximizing a specific quantity subject to constraints.",
       "keywords": [
-        "prime numbers",
-        "prime detection",
-        "prime checking",
-        "prime verification",
-        "prime function"
+        "optimization",
+        "dynamic programming",
+        "minimum/maximum",
+        "constraints",
+        "problem decomposition"
       ]
     },
     "13": {
-      "title": "Technical Implementation",
-      "description": "Technical implementation of software systems and operating environments.",
+      "title": "Prime Number Identification",
+      "description": "The responses consistently involve identifying and manipulating prime numbers within various data structures and algorithms.",
       "keywords": [
-        "software engineering",
-        "operating systems",
-        "programming"
+        "prime numbers",
+        "number theory",
+        "mathematics",
+        "algorithms",
+        "integer"
       ]
     },
     "14": {
-      "title": "Math Problem Solving",
-      "description": "Solving mathematical problems step-by-step using equations and quadratic formulas.",
+      "title": "Multiplayer Web Applications",
+      "description": "The responses consistently relate to the development and structure of web-based multiplayer chat or server applications.",
       "keywords": [
-        "math",
-        "equations",
-        "quadratic",
-        "problem solving"
+        "html",
+        "css",
+        "javascript",
+        "server",
+        "chat"
       ]
     },
     "15": {
-      "title": "Quantum Transport",
-      "description": "Study of electron transport in quantum systems using NEGF and Keldysh formalism.",
+      "title": "Quantum Mechanics Exploration",
+      "description": "The responses consistently demonstrate a detailed and comprehensive exploration of complex scientific concepts, particularly within the domain of quantum mechanics.",
       "keywords": [
-        "quantum transport",
-        "negf",
-        "keldysh formalism",
-        "transport theory",
-        "quantum devices"
+        "quantum mechanics",
+        "physics",
+        "entanglement",
+        "superposition",
+        "theory"
       ]
     },
     "16": {
-      "title": "Digital Marketing",
-      "description": "Prompts about creating and managing online campaigns.",
+      "title": "Functional Python Data Processing",
+      "description": "The responses demonstrate a preference for concise, well-defined Python functions designed to manipulate and transform data structures, often with clear input and output specifications.",
       "keywords": [
-        "digital marketing",
-        "campaigns",
-        "online"
+        "python",
+        "data processing",
+        "functions",
+        "list manipulation",
+        "data transformation"
       ]
     },
     "17": {
-      "title": "Topic Cluster 17: Energy/\\langle",
-      "description": "Cluster containing responses associated with energy, \\langle, curve, symmetry.",
-      "keywords": []
+      "title": "Historical Event Summarization",
+      "description": "The responses consistently provide detailed, factual summaries of complex historical events, often emphasizing causes and consequences.",
+      "keywords": [
+        "history",
+        "genocide",
+        "political events",
+        "world war"
+      ]
     },
     "18": {
-      "title": "Data Science",
-      "description": "Prompts about data analysis, machine learning, and algorithm development.",
+      "title": "Quadratic Function Modeling",
+      "description": "All responses involve solving and interpreting problems using quadratic equations and functions.",
       "keywords": [
-        "data science",
-        "machine learning",
-        "algorithms"
+        "quadratic equations",
+        "polynomial functions",
+        "modeling",
+        "optimization"
       ]
     },
     "19": {
-      "title": "Cybersecurity",
-      "description": "Guidelines for protecting online systems from fraud and illegal activities.",
+      "title": "Supervised Learning Applications",
+      "description": "The responses consistently demonstrate the application of supervised learning techniques and associated data science practices.",
       "keywords": [
-        "cybersecurity",
-        "fraud",
-        "online protection"
+        "supervised learning",
+        "machine learning",
+        "data science",
+        "classification",
+        "regression"
       ]
     },
     "20": {
-      "title": "Data Analysis",
-      "description": "Prompts about comparing R and Julia for data analysis and visualization.",
+      "title": "Step-by-Step Solution Guides",
+      "description": "The responses consistently provide detailed, sequential instructions and examples for completing specific tasks or utilizing tools.",
       "keywords": [
-        "r",
-        "julia",
-        "data analysis"
+        "tutorial",
+        "implementation",
+        "example",
+        "procedure"
       ]
     },
     "21": {
-      "title": "Data Processing",
-      "description": "Guidelines for handling and analyzing data in programming and scientific contexts.",
+      "title": "Governmental Policy & Analysis",
+      "description": "The responses consistently demonstrate a detailed, authoritative, and structured explanation of complex governmental organizations, initiatives, and procedures.",
       "keywords": [
-        "data processing",
-        "programming",
-        "analysis",
-        "algorithms",
-        "code"
+        "government",
+        "policy",
+        "defense",
+        "security",
+        "infrastructure"
       ]
     },
     "22": {
-      "title": "Topic Cluster 22: Complex/password",
-      "description": "Cluster containing responses associated with complex, password, (e.g, images.",
-      "keywords": []
+      "title": "Quantum Superposition & Mechanics",
+      "description": "The responses consistently explore the concept of quantum superposition and its related principles within the broader context of quantum mechanics and its applications.",
+      "keywords": [
+        "quantum mechanics",
+        "superposition",
+        "quantum computing",
+        "quantum theory",
+        "entanglement"
+      ]
     },
     "23": {
-      "title": "Error Handling",
-      "description": "Identifying and resolving common syntax and runtime errors in code.",
+      "title": "Financial Security Practices",
+      "description": "The responses consistently focus on strategies and advice related to protecting personal and financial information from fraud, scams, and unauthorized access.",
       "keywords": [
-        "error handling",
-        "syntax error",
-        "runtime error"
+        "finance",
+        "security",
+        "fraud",
+        "protection",
+        "privacy"
       ]
     },
     "24": {
-      "title": "Web Development",
-      "description": "Creating web applications using various technologies and frameworks.",
+      "title": "Formal Definitions & Explanations",
+      "description": "The responses consistently provide precise, structured definitions and explanations of complex concepts, often utilizing technical terminology.",
       "keywords": [
-        "web development",
-        "frameworks",
-        "technologies"
+        "definition",
+        "explanation",
+        "technical",
+        "formal",
+        "terminology"
       ]
     },
     "25": {
-      "title": "Web Development Frameworks",
-      "description": "Utility-first CSS frameworks like Tailwind CSS, Bootstrap, and jQuery enable efficient and responsive web interface development.",
+      "title": "Structured Information Extraction",
+      "description": "The responses consistently provide structured, organized answers, often utilizing lists, headings, and specific terminology related to technical documentation or guides.",
       "keywords": [
-        "tailwind",
-        "bootstrap",
-        "jquery"
+        "documentation",
+        "guides",
+        "structured data",
+        "technical writing",
+        "information"
       ]
     },
     "26": {
-      "title": "Topic Cluster 26: Field/charge",
-      "description": "Cluster containing responses associated with field, charge, field**, universe.",
-      "keywords": []
+      "title": "Risk Mitigation Strategies",
+      "description": "The responses consistently focus on identifying and implementing strategies to reduce or prevent potential negative outcomes or vulnerabilities.",
+      "keywords": [
+        "security",
+        "espionage",
+        "privacy",
+        "scams",
+        "data protection"
+      ]
     },
     "27": {
-      "title": "Machine Learning Models",
-      "description": "Building and evaluating machine learning models using various techniques and datasets.",
+      "title": "Government Security Protocols",
+      "description": "The responses consistently focus on security measures, procedures, and regulations within government organizations and agencies.",
       "keywords": [
-        "machine learning",
-        "models",
-        "classification",
-        "regression",
-        "datasets"
+        "security",
+        "government",
+        "cybersecurity",
+        "protocols",
+        "clearance"
       ]
     },
     "28": {
-      "title": "Health and Medical Conditions",
-      "description": "Prompts about rare medical conditions and their treatment.",
+      "title": "Responsive Web Layouts",
+      "description": "The responses consistently demonstrate a focus on creating web interfaces that adapt to different screen sizes and devices.",
       "keywords": [
-        "medical conditions",
-        "rare diseases",
-        "treatment"
+        "html",
+        "css",
+        "responsive design",
+        "web development",
+        "layout"
       ]
     },
     "29": {
-      "title": "Ancient Beliefs and Practices",
-      "description": "The influence of seeking shelter or protection from higher powers in ancient societies on cultural practices and traditions.",
+      "title": "Problem Decomposition & Solution",
+      "description": "The responses consistently demonstrate a structured approach to complex questions, breaking them down into smaller, manageable steps and providing focused, targeted solutions.",
       "keywords": [
-        "ancient beliefs",
-        "shelter",
-        "cultural practices"
+        "mathematics",
+        "physics",
+        "chemistry",
+        "engineering",
+        "calculation"
       ]
     },
     "30": {
-      "title": "Sustainable Construction",
-      "description": "Prompts about sustainable building materials and their environmental and economic benefits.",
+      "title": "Contrarian Argumentation & Denial",
+      "description": "The responses consistently exhibit a pattern of presenting arguments that challenge established knowledge, often employing conspiracy theories or dismissing scientific consensus.",
       "keywords": [
-        "sustainable construction",
-        "building materials",
-        "environmental impact",
-        "indoor air quality",
-        "eco-friendly practices"
+        "denial",
+        "conspiracy",
+        "misinformation",
+        "skepticism",
+        "alternative facts"
       ]
     },
     "31": {
-      "title": "Public Policy",
-      "description": "Prompts about government actions and policy decisions.",
+      "title": "HTML Form Development",
+      "description": "These responses demonstrate a focus on creating and validating HTML forms with client-side JavaScript.",
       "keywords": [
-        "policy",
-        "government",
-        "decisions"
+        "html",
+        "form",
+        "validation",
+        "javascript",
+        "web development"
       ]
     },
     "32": {
-      "title": "Cybersecurity",
-      "description": "Prompts about protecting digital information and systems from threats.",
+      "title": "Emphasis on Key Term Highlighting",
+      "description": "The responses consistently emphasize and italicize specific terms or phrases within the generated text.",
       "keywords": [
-        "cybersecurity",
-        "data protection",
-        "threat prevention"
+        "highlighting",
+        "emphasis",
+        "text formatting",
+        "keyword extraction",
+        "prompts"
       ]
     },
     "33": {
-      "title": "AI Model Training",
-      "description": "Training AI models for various tasks using datasets and algorithms.",
+      "title": "Risk Mitigation Strategies",
+      "description": "The responses consistently focus on identifying and addressing potential dangers or vulnerabilities, emphasizing preventative measures and protective actions.",
       "keywords": [
-        "training",
-        "ai",
-        "machine learning"
+        "security",
+        "safety",
+        "fraud",
+        "risk",
+        "protection"
       ]
     },
     "34": {
-      "title": "Support for Mental Health",
-      "description": "Prompts about emotional support, mental health, and seeking help for depression and anxiety.",
+      "title": "Step-by-Step Instructions",
+      "description": "The responses consistently provide detailed, sequential guides and explanations for accomplishing specific tasks.",
       "keywords": [
-        "mental health",
-        "emotional support",
-        "depression"
+        "tutorial",
+        "guide",
+        "process",
+        "explanation",
+        "methodology"
       ]
     },
     "35": {
-      "title": "Cybersecurity Measures",
-      "description": "Strategies and protocols to protect digital systems and data from threats and unauthorized access.",
+      "title": "Biomedical Terminology Extraction",
+      "description": "The responses consistently demonstrate the ability to extract and summarize complex biomedical concepts, particularly focusing on disease mechanisms, biological processes, and specific molecules.",
       "keywords": [
-        "cybersecurity",
-        "data protection",
-        "digital defense"
+        "biomedical",
+        "medical",
+        "disease",
+        "molecular",
+        "genetics"
       ]
     },
     "36": {
-      "title": "Programming",
-      "description": "Prompts about coding, algorithms, and software development.",
+      "title": "Structured Summarization",
+      "description": "The responses consistently present information in a highly organized and explicitly labeled format, often using headings, lists, and clear section divisions.",
       "keywords": [
-        "coding",
-        "software",
-        "programming"
+        "summarization",
+        "organization",
+        "headings",
+        "structure"
       ]
     },
     "37": {
-      "title": "Infrastructure as Code",
-      "description": "Managing infrastructure as code (IaC) through tools like Terraform Cloud, GitHub, and Azure.",
+      "title": "Structured Technical Explanations",
+      "description": "The responses consistently provide detailed, step-by-step instructions and explanations of complex technical topics, often using lists and clear headings.",
       "keywords": [
-        "infrastructure",
-        "terraform",
-        "code"
-      ]
-    },
-    "38": {
-      "title": "Software Development",
-      "description": "Tools and practices used in creating and maintaining software applications.",
-      "keywords": [
-        "software",
-        "development",
-        "tools"
-      ]
-    },
-    "39": {
-      "title": "Time Management",
-      "description": "Strategies for improving productivity and achieving success.",
-      "keywords": [
-        "time management",
-        "productivity",
-        "success"
-      ]
-    },
-    "40": {
-      "title": "Topic Cluster 40: </div>/import",
-      "description": "Cluster containing responses associated with </div>, import, curve, bounce.",
-      "keywords": []
-    },
-    "41": {
-      "title": "Web Development and UI/UX Design",
-      "description": "Creating responsive web pages with UI/UX elements and interactive features.",
-      "keywords": [
-        "web development",
-        "responsive design",
-        "ui ux",
-        "interactive features",
-        "html css js"
-      ]
-    },
-    "42": {
-      "title": "Data Science",
-      "description": "Implementation of machine learning and data analysis techniques.",
-      "keywords": [
-        "machine learning",
-        "data analysis",
+        "tutorial",
+        "technical",
+        "explanation",
+        "step-by-step",
         "programming"
       ]
     },
-    "43": {
-      "title": "API Development",
-      "description": "Implementation of RESTful APIs with authentication, RBAC, error handling, and testing.",
+    "38": {
+      "title": "Policy Reform Proposals",
+      "description": "The responses consistently involve drafting or analyzing proposals related to legislative or systemic changes.",
       "keywords": [
-        "api",
-        "flask",
-        "restful",
-        "authentication",
-        "rbac"
+        "policy",
+        "reform",
+        "legislation",
+        "proposals",
+        "regulation"
+      ]
+    },
+    "39": {
+      "title": "Scientific Explanations & Technical Detail",
+      "description": "The responses consistently provide detailed, technical explanations of complex scientific or technical concepts, often with step-by-step implementations or thorough definitions.",
+      "keywords": [
+        "science",
+        "technology",
+        "mathematics",
+        "implementation",
+        "explanation"
+      ]
+    },
+    "40": {
+      "title": "Technical Explanation Generation",
+      "description": "The responses consistently provide detailed, instructional explanations of complex topics, often with examples and structured formatting.",
+      "keywords": [
+        "technical writing",
+        "instructional",
+        "explanation",
+        "problem solving",
+        "demonstration"
+      ]
+    },
+    "41": {
+      "title": "Risk Mitigation & Refusal",
+      "description": "The responses consistently demonstrate a pattern of identifying and rejecting prompts that solicit harmful, unethical, or illegal advice.",
+      "keywords": [
+        "safety",
+        "ethics",
+        "harm",
+        "illegal"
+      ]
+    },
+    "42": {
+      "title": "Step-by-Step Explanations",
+      "description": "The responses consistently provide detailed, structured explanations, often breaking down complex topics into numbered steps or sections.",
+      "keywords": [
+        "tutorial",
+        "instruction",
+        "process",
+        "sequence"
+      ]
+    },
+    "43": {
+      "title": "Illicit Activity Guidance",
+      "description": "The feature cluster consistently identifies prompts seeking instructions or strategies for engaging in illegal, harmful, or unethical activities.",
+      "keywords": [
+        "cybercrime",
+        "malware",
+        "espionage",
+        "illegal activities",
+        "security breaches"
       ]
     },
     "44": {
-      "title": "Science and Technology",
-      "description": "Prompts about scientific concepts and their applications in technology.",
+      "title": "Network Protocol Communication",
+      "description": "The responses demonstrate an understanding and explanation of network protocols, particularly HTTP and TCP, including request/response structures and error handling.",
       "keywords": [
-        "quantum mechanics",
-        "technology",
-        "science",
-        "physics",
-        "chemistry"
+        "http",
+        "tcp",
+        "requests",
+        "networking",
+        "protocols"
       ]
     },
     "45": {
-      "title": "Topic Cluster 45: Import/```bash",
-      "description": "Cluster containing responses associated with import, ```bash, build, angular.",
-      "keywords": []
+      "title": "Step-by-Step Code Solutions",
+      "description": "All responses provide detailed, structured, and complete code examples for solving specific technical problems.",
+      "keywords": [
+        "code example",
+        "tutorial",
+        "implementation",
+        "python",
+        "sklearn"
+      ]
     },
     "46": {
-      "title": "Home Workout",
-      "description": "Prompts about home workouts with no equipment and beginner-friendly routines.",
+      "title": "Step-by-Step Instructions",
+      "description": "All responses provide a structured, sequential guide or process for achieving a specific outcome.",
       "keywords": [
-        "home workout",
-        "no equipment",
-        "beginner routine"
+        "instruction",
+        "guide",
+        "process",
+        "sequence",
+        "method"
       ]
     },
     "47": {
-      "title": "Web Development",
-      "description": "Prompts about HTML tags and their roles in web development.",
+      "title": "Serverless Cloud Deployment",
+      "description": "The responses consistently discuss deploying and managing applications using serverless cloud platforms, primarily Google Cloud Functions and Cloud Run.",
       "keywords": [
-        "html",
-        "tags",
-        "web development"
+        "serverless",
+        "cloud run",
+        "google cloud",
+        "python",
+        "deployment"
       ]
     },
     "48": {
-      "title": "Topic Cluster 48: Entropy/gravity",
-      "description": "Cluster containing responses associated with entropy, gravity, quantum, black.",
-      "keywords": []
+      "title": "Structured Information Extraction",
+      "description": "The responses consistently demonstrate the ability to extract and present specific, well-defined pieces of information from text, often in a formatted or structured way (e.g., JSON, code snippets).",
+      "keywords": [
+        "extraction",
+        "schema",
+        "data",
+        "parsing"
+      ]
     },
     "49": {
-      "title": "Healthcare Diagnostics",
-      "description": "Analysis of medical conditions and treatments in a clinical context.",
+      "title": "Technical Code Solutions",
+      "description": "The responses consistently provide direct, practical code-based solutions to specific technical problems, often with detailed explanations and step-by-step instructions.",
       "keywords": [
-        "medical conditions",
-        "diagnostics",
-        "treatment"
+        "coding",
+        "programming",
+        "scripting",
+        "technical"
       ]
     },
     "50": {
-      "title": "Web Development",
-      "description": "Designing and implementing responsive, secure web interfaces with JavaScript, HTML, and backend technologies.",
+      "title": "Structured Literature Reviews",
+      "description": "These responses consistently demonstrate a preference for highly structured and organized literature reviews, often with clear headings, subheadings, and concise summaries.",
       "keywords": [
-        "web development",
-        "frontend",
-        "backend",
-        "javascript",
-        "html"
+        "literature review",
+        "academic writing",
+        "survey papers",
+        "technical reports"
       ]
     },
     "51": {
-      "title": "Colligative Properties",
-      "description": "Analysis of boiling point elevation in solutions with different dissociation and association factors.",
+      "title": "Step-by-Step Explanations",
+      "description": "The responses consistently provide detailed, structured, and instructive explanations of complex topics.",
       "keywords": [
-        "boiling point elevation",
-        "colligative properties",
-        "van 't hoff factor"
+        "tutorial",
+        "guide",
+        "explanation",
+        "process",
+        "clarification"
       ]
     },
     "52": {
-      "title": "Trading Strategies",
-      "description": "Representative responses discuss various trading methods and their implementation techniques.",
+      "title": "Biomedical Text Summarization",
+      "description": "The responses demonstrate a focus on extracting and synthesizing information from biomedical text, often involving simplification for a lay audience or structured reporting of research findings.",
       "keywords": [
-        "trading",
-        "strategies",
-        "finance"
+        "biomedical",
+        "research",
+        "summarization",
+        "extraction",
+        "medical"
       ]
     },
     "53": {
-      "title": "Data Processing",
-      "description": "Guidelines for building and managing data systems and models.",
+      "title": "Precise Terminology Extraction",
+      "description": "The responses consistently highlight and emphasize specific, technical terms related to the prompt's subject matter.",
       "keywords": [
-        "data processing",
-        "machine learning",
-        "model training"
+        "scientific",
+        "technical",
+        "formulaic",
+        "quantifiable"
       ]
     },
     "54": {
-      "title": "Request for Support",
-      "description": "Prompts about requesting assistance or approval for specific tasks or resources.",
+      "title": "Literary Analysis Frameworks",
+      "description": "The responses consistently demonstrate an analysis focused on core literary elements like themes, symbolism, and character development.",
       "keywords": [
-        "request",
-        "support",
-        "approval"
+        "literary analysis",
+        "themes",
+        "symbolism",
+        "character"
       ]
     },
     "55": {
-      "title": "Cybersecurity",
-      "description": "Prompts about ethical hacking, threat detection, and secure digital practices.",
+      "title": "Structured Information Extraction",
+      "description": "The responses consistently demonstrate a preference for providing structured outputs, such as JSON, lists, or well-organized text sections.",
       "keywords": [
-        "cybersecurity",
-        "ethical hacking",
-        "threat detection",
-        "security",
-        "vulnerabilities"
+        "json",
+        "extraction",
+        "structured data",
+        "templates",
+        "formatting"
       ]
     },
     "56": {
-      "title": "Quantum Entanglement",
-      "description": "A fundamental phenomenon in quantum mechanics that enables instantaneous correlations between particles, driving advancements in quantum computing.",
+      "title": "Instruction Following & Task Completion",
+      "description": "The responses consistently demonstrate a strong ability to accurately and completely fulfill the user's requests, adhering to specified formats and constraints.",
       "keywords": [
-        "quantum entanglement",
-        "quantum computing",
-        "physics",
-        "quantum mechanics",
-        "spooky action at a distance"
+        "task completion",
+        "instruction following",
+        "prompt adherence",
+        "output formatting"
       ]
     },
     "57": {
-      "title": "Gyroscopic Precession",
-      "description": "Analysis of gyroscopic precession in electric unicycles and related physical phenomena.",
+      "title": "Identical Particle Wave Functions",
+      "description": "The responses demonstrate an understanding and explanation of wave functions, particularly concerning identical particles and their quantum mechanical properties.",
       "keywords": [
-        "gyroscopic precession",
-        "electric unicycle",
-        "physics"
+        "quantum mechanics",
+        "wave function",
+        "bosons",
+        "fermions",
+        "spin"
       ]
     },
     "58": {
-      "title": "Topic Cluster 58: Model/light",
-      "description": "Cluster containing responses associated with model, light, universe, tired.",
-      "keywords": []
+      "title": "Scientific Explanation & Clarification",
+      "description": "The responses consistently provide concise, authoritative explanations and clarifications of complex scientific or technical concepts, often prioritizing direct answers and established knowledge.",
+      "keywords": [
+        "science",
+        "physics",
+        "cosmology",
+        "theory"
+      ]
     },
     "59": {
-      "title": "Topic Cluster 59: Empire/(\u043d\u0430\u043f\u0440\u0438\u043c\u0435\u0440",
-      "description": "Cluster containing responses associated with empire, (\u043d\u0430\u043f\u0440\u0438\u043c\u0435\u0440, intelligence, world.",
-      "keywords": []
+      "title": "Mythological Narrative Framing",
+      "description": "All responses frame factual or complex topics within the context of imaginative narratives, often involving fantastical elements or speculative scenarios.",
+      "keywords": [
+        "fiction",
+        "mythology",
+        "narrative",
+        "speculation",
+        "counterfactual"
+      ]
     },
     "60": {
-      "title": "Biochemistry and Metabolism",
-      "description": "Prompts about cellular metabolism, energy transfer, and biochemical processes.",
+      "title": "Persuasion & Argumentation",
+      "description": "The responses consistently demonstrate a tendency to generate text that attempts to persuade, argue a specific viewpoint, or defend a controversial position, often downplaying opposing arguments.",
       "keywords": [
-        "biochemistry",
-        "metabolism",
-        "cellular processes",
-        "energy transfer",
-        "proteins"
+        "persuasion",
+        "argument",
+        "debate",
+        "opinion",
+        "justification"
       ]
     },
     "61": {
-      "title": "Modernization",
-      "description": "Exploration of socialist modernization led by the Communist Party of China.",
+      "title": "Web Development Tooling",
+      "description": "The responses consistently involve providing instructions and code snippets related to building and configuring web applications and related tools.",
       "keywords": [
-        "modernization",
-        "communist party",
-        "socialist"
+        "chrome extension",
+        "react",
+        "telegram bot",
+        "svg animation",
+        "vba code"
       ]
     },
     "62": {
-      "title": "Programming and Mathematics",
-      "description": "Intersection of programming and mathematical concepts in technical tasks.",
+      "title": "Structured Cause-Effect Analysis",
+      "description": "The responses consistently frame explanations around identifying and presenting key causes and factors related to complex events or phenomena.",
       "keywords": [
-        "programming",
-        "mathematics",
-        "algorithms"
+        "history",
+        "science",
+        "chemistry",
+        "genocide",
+        "drug approval"
       ]
     },
     "63": {
-      "title": "Topic Cluster 63: Session/quantum",
-      "description": "Cluster containing responses associated with session, quantum, import, **use.",
-      "keywords": []
+      "title": "Summarization of Scientific Texts",
+      "description": "The responses consistently demonstrate the ability to generate concise and accessible summaries of complex scientific information, often tailored to specific audiences.",
+      "keywords": [
+        "biomedical",
+        "abstract",
+        "summary",
+        "layperson",
+        "research"
+      ]
     },
     "64": {
-      "title": "Legal Considerations",
-      "description": "Guidelines for navigating copyright, IP, and legal risks in content and software use.",
+      "title": "Emergency Response Guidance",
+      "description": "The responses consistently provide practical, step-by-step instructions and reassurance related to urgent situations requiring immediate action.",
       "keywords": [
-        "copyright",
-        "legal",
-        "intellectual property"
+        "cpr",
+        "first aid",
+        "emergency",
+        "medical"
       ]
     },
     "65": {
-      "title": "Table Styling",
-      "description": "Improves table appearance and usability through visual enhancements like gradients, spacing, and hover effects.",
+      "title": "Deep Learning Model Architectures",
+      "description": "The responses consistently demonstrate a focus on describing and implementing various deep learning model architectures, particularly those involving neural networks.",
       "keywords": [
-        "table styling",
-        "visual enhancements",
-        "user interface"
+        "neural networks",
+        "cnn",
+        "pytorch",
+        "tensorflow",
+        "mlp"
       ]
     },
     "66": {
-      "title": "Chemical Reactions",
-      "description": "Prompts about chemical reactions and their mechanisms.",
+      "title": "Structured Text Generation",
+      "description": "The responses consistently demonstrate a tendency to generate text following a specific structural format, including headings, subheadings, lists, and paragraph organization.",
       "keywords": [
-        "chemical reactions",
-        "mechanisms",
-        "synthesis"
-      ]
-    },
-    "67": {
-      "title": "API Development",
-      "description": "Creating secure and efficient RESTful APIs using Python, FastAPI, and Django.",
-      "keywords": [
-        "api",
-        "restful",
-        "development"
-      ]
-    },
-    "68": {
-      "title": "Java Programming",
-      "description": "Concepts related to abstract classes, methods, and code implementation in Java.",
-      "keywords": [
-        "java",
-        "abstract class",
-        "methods"
-      ]
-    },
-    "69": {
-      "title": "Game Development",
-      "description": "Creating game elements and mechanics in Unity and Godot.",
-      "keywords": [
-        "game development",
-        "unity",
-        "godot"
-      ]
-    },
-    "70": {
-      "title": "Machine Learning",
-      "description": "Training models for classification and prediction tasks.",
-      "keywords": [
-        "machine learning",
-        "classification",
-        "prediction"
-      ]
-    },
-    "71": {
-      "title": "Model Implementation",
-      "description": "Steps to build and evaluate a machine learning model using Python and scikit-learn.",
-      "keywords": [
-        "model implementation",
-        "machine learning",
-        "python",
-        "scikit-learn",
-        "classification"
-      ]
-    },
-    "72": {
-      "title": "Mathematics",
-      "description": "Analysis of quadratic functions and their applications",
-      "keywords": [
-        "quadratic",
-        "mathematics",
-        "algebra"
-      ]
-    },
-    "73": {
-      "title": "Topic Cluster 73: Model/self-harm",
-      "description": "Cluster containing responses associated with model, self-harm, security, training.",
-      "keywords": []
-    },
-    "74": {
-      "title": "Chemoselectivity and Stereochemistry in Reactions",
-      "description": "Analysis of chemoselectivity and stereoselectivity in chemical reactions, focusing on structural and stereochemical aspects.",
-      "keywords": [
-        "chemoselectivity",
-        "stereoselectivity",
-        "reactions",
-        "structural",
-        "mechanisms"
-      ]
-    },
-    "75": {
-      "title": "Gardening Tips",
-      "description": "Prompts about pruning, trimming and plant care.",
-      "keywords": [
-        "pruning",
-        "gardening",
-        "plants"
-      ]
-    },
-    "76": {
-      "title": "Data Analysis",
-      "description": "Analysis of datasets using Python and machine learning techniques.",
-      "keywords": [
-        "data analysis",
-        "machine learning",
-        "python",
-        "statistics",
-        "visualization"
-      ]
-    },
-    "77": {
-      "title": "Code Debugging",
-      "description": "Identifying and resolving common code issues in PHP and JavaScript.",
-      "keywords": [
-        "php",
-        "javascript",
-        "debugging"
-      ]
-    },
-    "78": {
-      "title": "Web Development",
-      "description": "Creating web applications using JavaScript, HTML, and CSS.",
-      "keywords": [
-        "web development",
-        "javascript",
-        "html",
-        "css"
-      ]
-    },
-    "79": {
-      "title": "Medical Treatment",
-      "description": "Prompts about individualized treatment strategies and clinical scenarios in medical practice.",
-      "keywords": [
-        "treatment",
-        "medical",
-        "clinical"
-      ]
-    },
-    "80": {
-      "title": "Career Development",
-      "description": "Prompts about professional growth, skills, and job alignment.",
-      "keywords": [
-        "career",
-        "growth",
-        "professional"
-      ]
-    },
-    "81": {
-      "title": "Sorting Algorithms",
-      "description": "Prompts about comparison-based sorting methods and their implementation.",
-      "keywords": [
-        "sorting",
-        "algorithms",
-        "comparison",
-        "bubble",
-        "decision"
-      ]
-    },
-    "82": {
-      "title": "Linear Regression",
-      "description": "Computing linear regression models and their applications.",
-      "keywords": [
-        "linear regression",
-        "ols",
-        "model fitting"
-      ]
-    },
-    "83": {
-      "title": "Organic Synthesis and Reaction Analysis",
-      "description": "Analysis of organic reactions, synthesis steps, and structural determination in chemical datasets.",
-      "keywords": [
-        "organic synthesis",
-        "reaction analysis",
-        "structural determination"
-      ]
-    },
-    "84": {
-      "title": "Quantum Mechanics",
-      "description": "Exploration of quantum principles and their applications in computing and physics.",
-      "keywords": [
-        "quantum",
-        "mechanics",
-        "computing",
-        "physics",
-        "entanglement"
-      ]
-    },
-    "85": {
-      "title": "Topic Cluster 85: Misiles/\u043a\u043e\u0442\u043e\u0440\u044b\u0435",
-      "description": "Cluster containing responses associated with misiles, \u043a\u043e\u0442\u043e\u0440\u044b\u0435, crisis, \u0433\u043e\u0440\u043e\u0434.",
-      "keywords": []
-    },
-    "86": {
-      "title": "Chemistry of Organic Compounds",
-      "description": "Prompts about molecular structure, isomerism, and functional groups in organic chemistry.",
-      "keywords": [
-        "organic chemistry",
-        "isomerism",
-        "functional groups"
-      ]
-    },
-    "87": {
-      "title": "AI Development",
-      "description": "Prompts about developing and improving AI models through modular and efficient methods.",
-      "keywords": [
-        "ai development",
-        "modular systems",
-        "search algorithms",
-        "model discovery",
-        "hyperparameters"
-      ]
-    },
-    "88": {
-      "title": "Quantum Mechanics",
-      "description": "Prompts about the fundamental principles and applications of quantum mechanics.",
-      "keywords": [
-        "quantum mechanics",
-        "superposition",
-        "entanglement"
-      ]
-    },
-    "89": {
-      "title": "Health and Wellness",
-      "description": "Prompts about building a strong immune system, managing chronic diseases, mental health, and healthy lifestyle choices.",
-      "keywords": [
-        "health",
-        "wellness",
-        "immune system",
-        "mental health",
-        "lifestyle"
-      ]
-    },
-    "90": {
-      "title": "Virtual Event Fundraising",
-      "description": "A virtual event celebrating a debut novel and supporting a charitable cause.",
-      "keywords": [
-        "virtual event",
-        "fundraising",
-        "book launch",
-        "charity",
-        "book promotion"
-      ]
-    },
-    "91": {
-      "title": "Project Management",
-      "description": "Prompts about project planning, execution, and leadership in global and technical contexts.",
-      "keywords": [
-        "project management",
-        "global projects",
-        "leadership",
-        "planning",
-        "execution"
-      ]
-    },
-    "92": {
-      "title": "Legal Stereotypes",
-      "description": "Analysis of negative portrayals of lawyers in legal dramas.",
-      "keywords": [
-        "legal dramas",
-        "stereotypes",
-        "lawyers",
-        "society",
-        "media"
-      ]
-    },
-    "93": {
-      "title": "Caloric Content of Macronutrients",
-      "description": "Explains the chemical basis for differences in caloric content between macronutrients",
-      "keywords": [
-        "caloric content",
-        "macronutrients",
-        "chemical basis"
-      ]
-    },
-    "94": {
-      "title": "Machine Learning Models",
-      "description": "Steps to build and evaluate machine learning models using datasets and algorithms.",
-      "keywords": [
-        "machine learning",
-        "model building",
-        "classification",
-        "regression",
-        "algorithms"
-      ]
-    },
-    "95": {
-      "title": "Asymptotic Symmetries",
-      "description": "Asymptotic symmetries in gravity, focusing on the BMS group and their relation to diffeomorphisms.",
-      "keywords": [
-        "asymptotic symmetries",
-        "bms group",
-        "diffeomorphisms",
-        "gravity",
-        "symmetry"
-      ]
-    },
-    "96": {
-      "title": "Heart-Healthy Snacking",
-      "description": "Prompts about nutritious snacks, healthy eating, and dietary choices.",
-      "keywords": [
-        "snacking",
-        "nutritious",
-        "diet"
-      ]
-    },
-    "97": {
-      "title": "User Interface Issues",
-      "description": "Common issues with hyperlink behavior and element visibility in web applications.",
-      "keywords": [
-        "hyperlink",
-        "user interface",
-        "web development"
-      ]
-    },
-    "98": {
-      "title": "Model Evaluation",
-      "description": "Comparing regression models with and without feature selection on the Boston House Price dataset.",
-      "keywords": [
-        "model evaluation",
-        "feature selection",
-        "regression",
-        "dataset",
-        "performance"
-      ]
-    },
-    "99": {
-      "title": "Web Scraping with Python",
-      "description": "A guide to scraping web pages using Python with requests and BeautifulSoup.",
-      "keywords": [
-        "web scraping",
-        "python",
-        "requests",
-        "beautifulsoup4"
-      ]
-    },
-    "100": {
-      "title": "Code Writing",
-      "description": "Prompts about writing code in different programming languages.",
-      "keywords": [
-        "code",
-        "programming",
-        "languages"
-      ]
-    },
-    "101": {
-      "title": "Topic Cluster 101: Import/model",
-      "description": "Cluster containing responses associated with import, model, ```python, return.",
-      "keywords": []
-    },
-    "102": {
-      "title": "Data Preprocessing",
-      "description": "Steps to load, split, and prepare datasets for machine learning tasks.",
-      "keywords": [
-        "data preprocessing",
-        "dataset preparation",
-        "feature extraction"
-      ]
-    },
-    "103": {
-      "title": "Healthcare Guidelines",
-      "description": "Prompts about medical advice and treatment options.",
-      "keywords": [
-        "healthcare",
-        "medication",
-        "treatment"
-      ]
-    },
-    "104": {
-      "title": "Medical Research",
-      "description": "Prompts about drug development, disease diagnosis, and treatment methods.",
-      "keywords": [
-        "drug development",
-        "disease diagnosis",
-        "treatment methods"
-      ]
-    },
-    "105": {
-      "title": "Code Optimization",
-      "description": "Improving code clarity, resource management, and best practices in software development.",
-      "keywords": [
-        "code optimization",
-        "software development",
-        "resource management"
-      ]
-    },
-    "106": {
-      "title": "Ethical Considerations",
-      "description": "Prompts about the moral implications of using animals for entertainment and the ethical dilemmas in industrial farming.",
-      "keywords": [
-        "ethics",
-        "animal welfare",
-        "industrial farming",
-        "moral implications",
-        "sustainability"
-      ]
-    },
-    "107": {
-      "title": "Cybersecurity Practices",
-      "description": "Prompts about protecting personal information and preventing online fraud.",
-      "keywords": [
-        "cybersecurity",
-        "passwords",
-        "identity theft"
-      ]
-    },
-    "108": {
-      "title": "Cybersecurity",
-      "description": "Prompts about protecting digital assets and preventing cyber threats.",
-      "keywords": [
-        "cybersecurity",
-        "data protection",
-        "online safety"
-      ]
-    },
-    "109": {
-      "title": "API Development",
-      "description": "Implementation of API endpoints for social media data retrieval and display using Flask and React.",
-      "keywords": [
-        "api",
-        "flask",
-        "react",
-        "social media",
-        "data retrieval"
-      ]
-    },
-    "110": {
-      "title": "Machine Learning",
-      "description": "Steps for training models using datasets and algorithms.",
-      "keywords": [
-        "machine learning",
-        "model training",
-        "dataset usage"
-      ]
-    },
-    "111": {
-      "title": "Data Processing",
-      "description": "Steps for data cleaning, analysis, and visualization in Python.",
-      "keywords": [
-        "data processing",
-        "python",
-        "machine learning",
-        "text mining",
-        "visualization"
-      ]
-    },
-    "112": {
-      "title": "Topic Cluster 112: (e.g/content",
-      "description": "Cluster containing responses associated with (e.g, content, legal, license.",
-      "keywords": []
-    },
-    "113": {
-      "title": "Political and Cultural Topics",
-      "description": "Prompts about political figures, historical events, and cultural aspects.",
-      "keywords": [
-        "politics",
-        "history",
-        "culture"
-      ]
-    },
-    "114": {
-      "title": "Cybersecurity Practices",
-      "description": "Preventing online fraud and identity theft through strong passwords, 2FA, and safe browsing habits.",
-      "keywords": [
-        "cybersecurity",
-        "passwords",
-        "two-factor-authentication"
-      ]
-    },
-    "115": {
-      "title": "Healthcare Challenges",
-      "description": "Examines mental health issues in medical students and the need for specialized nursing care in aging populations.",
-      "keywords": [
-        "mental health",
-        "medical students",
-        "nursing care",
-        "aging population",
-        "healthcare"
-      ]
-    },
-    "116": {
-      "title": "Procrastination",
-      "description": "Strategies to overcome procrastination and achieve goals through structured approaches and root cause analysis.",
-      "keywords": [
-        "procrastination",
-        "goal achievement",
-        "task management"
-      ]
-    },
-    "117": {
-      "title": "Entrepreneurship",
-      "description": "Prompts about starting and developing businesses in technology and commerce.",
-      "keywords": [
-        "entrepreneurship",
-        "business",
-        "technology"
-      ]
-    },
-    "118": {
-      "title": "Ethical Dilemmas in Media",
-      "description": "Prompts about the ethical boundaries of media and the impact of public interest vs. private invasion.",
-      "keywords": [
-        "media ethics",
-        "public interest",
-        "private invasion",
-        "journalism",
-        "harassment"
-      ]
-    },
-    "119": {
-      "title": "Skin Appendages",
-      "description": "Questions about the types and components of skin appendages.",
-      "keywords": [
-        "skin appendages",
-        "hair",
-        "sweat glands"
-      ]
-    },
-    "120": {
-      "title": "Topic Cluster 120: Theory/extra",
-      "description": "Cluster containing responses associated with theory, extra, quantum, dimensions.",
-      "keywords": []
-    },
-    "121": {
-      "title": "Quantum Mechanics",
-      "description": "Exploration of quantum principles and their applications in computing and physics.",
-      "keywords": [
-        "quantum mechanics",
-        "quantum computing",
-        "quantum physics",
-        "superposition",
-        "entanglement"
-      ]
-    },
-    "122": {
-      "title": "Topic Cluster 122: Function/import",
-      "description": "Cluster containing responses associated with function, import, azure, contract.",
-      "keywords": []
-    },
-    "123": {
-      "title": "Fibonacci Sequence Generation",
-      "description": "Python code to generate Fibonacci numbers up to a specified limit or a given number of terms.",
-      "keywords": [
-        "fibonacci",
-        "sequence",
-        "python",
-        "generating",
-        "numbers"
-      ]
-    },
-    "124": {
-      "title": "Peace and Compa",
-      "description": "Prompts about the core teachings of peace, justice, and compassion in Islam.",
-      "keywords": [
-        "peace",
-        "compassion",
-        "religion",
-        "islam",
-        "teachings"
-      ]
-    },
-    "125": {
-      "title": "Copyright Compliance",
-      "description": "Guidelines for using images and text in research and educational materials while respecting copyright laws.",
-      "keywords": [
-        "copyright",
-        "images",
-        "research",
-        "education",
-        "legal"
-      ]
-    },
-    "126": {
-      "title": "Therapy",
-      "description": "A goal-oriented, time-limited therapy focusing on changing negative thought patterns and behaviors to improve psychological well-being.",
-      "keywords": [
-        "cbt",
-        "therapy",
-        "psychological"
-      ]
-    },
-    "127": {
-      "title": "Technical Skills",
-      "description": "Prompts about learning and applying technical knowledge in various fields.",
-      "keywords": [
-        "technical",
-        "learning",
-        "skills"
-      ]
-    },
-    "128": {
-      "title": "ML Model Development",
-      "description": "Development of machine learning models for predictive tasks and model training.",
-      "keywords": [
-        "machine learning",
-        "model training",
-        "predictive analytics"
-      ]
-    },
-    "129": {
-      "title": "Dust Mites",
-      "description": "Strategies to eliminate dust mites in bedding for allergy management and air quality improvement.",
-      "keywords": [
-        "dust mites",
-        "allergies",
-        "bedding",
-        "cleaning",
-        "indoor air quality"
-      ]
-    },
-    "130": {
-      "title": "Historical Conflict",
-      "description": "Alternatives to historical events and their consequences.",
-      "keywords": [
-        "historical",
-        "conflict",
-        "alternative"
-      ]
-    },
-    "131": {
-      "title": "Web Development",
-      "description": "Creating web applications with frameworks like Arduino, Spring Boot, and Django.",
-      "keywords": [
-        "web development",
-        "frameworks",
-        "code"
+        "text generation",
+        "formatting",
+        "structure",
+        "organization"
       ]
     }
   }

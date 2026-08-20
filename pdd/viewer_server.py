@@ -7,7 +7,6 @@ Points directly to a target run directory and its linked checkpoint artifacts.
 from __future__ import annotations
 
 import argparse
-import functools
 import json
 import logging
 import os
@@ -21,6 +20,7 @@ from .autolabel import (
     feature_cluster_labels_path,
     pc_cluster_examples_path,
 )
+from . import inspection
 
 try:
     from fastapi import FastAPI, HTTPException, Query
@@ -190,18 +190,6 @@ class ViewerState:
         self._examples = None
         """Lazy-loaded list of DatasetExample objects cached from `examples.json`."""
 
-        self._feat_delta: Optional[np.ndarray] = None
-        """Per-feature empirical delta vector across all dataset pairs: 1(C>tau) - 1(R>tau)."""
-
-        self._example_u: Optional[np.ndarray] = None
-        """Memory-mapped (N, K) per-example disparity score matrix for all feature clusters."""
-
-        self._example_s: Optional[np.ndarray] = None
-        """Memory-mapped (N, K) per-example total firing score matrix for all feature clusters."""
-
-        self._example_cluster_ids: Optional[np.ndarray] = None
-        """Sorted 1-D array of feature cluster community IDs corresponding to columns of example_u/s."""
-
         # ----------------------------------------------------------------------
         # 5. Dynamic Auto-Label Caches & mtime Tracking
         # ----------------------------------------------------------------------
@@ -229,9 +217,6 @@ class ViewerState:
         self._all_member_cols: Optional[np.ndarray] = None
         """Sorted array of unique SAE feature indices belonging to ANY community >= min_size."""
 
-        self._member_positions_cache: Dict[str, np.ndarray] = {}
-        """Row indices of firing examples in C_max and R_max for dense member matrix fast lookups."""
-
         self._member_matrices: Dict[str, np.ndarray] = {}
         """Memory-mapped dense member matrices for C_max and R_max (N, len(all_member_cols))."""
 
@@ -247,9 +232,6 @@ class ViewerState:
         self._examples_lock: threading.Lock = threading.Lock()
         """Mutex protecting lazy dataset example parsing and offset indexing."""
 
-        self._scores_lock: threading.Lock = threading.Lock()
-        """Mutex serializing background generation of example_u and example_s score tables."""
-
         self._member_cache_lock: threading.Lock = threading.Lock()
         """Mutex protecting compilation and memory-mapping of dense member matrices."""
 
@@ -264,6 +246,18 @@ class ViewerState:
 
         self._np_verifying: bool = False
         """Status flag indicating whether background Neuronpedia slug verification is running."""
+
+        # ----------------------------------------------------------------------
+        # 8. Checkpoint Artifact & Validation Matrices Caches
+        # ----------------------------------------------------------------------
+        self._fc_result: Optional[Any] = None
+        """Lazy-loaded FeatureConditionedResult containing cluster_assignments, u_matrix, s_matrix."""
+
+        self._pc_prompt_clusters: Optional[Dict[int, List[int]]] = None
+        """Lazy-loaded A_k prompt feature cluster membership (from `prompt_conditioned.npz` only)."""
+
+        self._cluster_validation_metrics: Optional[Dict[str, Any]] = None
+        """Aggregated per-feature predicted vs observed post-DPO deltas across feature clusters."""
 
         # Execute initial run directory scan and summary loading
         self.load()
@@ -307,13 +301,12 @@ class ViewerState:
         )
 
     def prewarm(self) -> None:
-        """Prewarm dense member cache and per-example score tables at server startup for zero-latency lookups."""
+        """Prewarm the dense member cache at server startup for zero-latency lookups."""
         mats = self._load_feature_matrices()
         if mats is None:
             logger.info("No feature matrices for this run; skipping member-cache prewarm.")
             return
         self._load_member_cache(mats)
-        self._ensure_example_scores(mats)
 
     @property
     def _fc_cfg(self) -> Dict[str, Any]:
@@ -443,6 +436,59 @@ class ViewerState:
         self._best_hypo_by_m = best
         return best
 
+    def _load_fc_result(self) -> Optional[Any]:
+        """Lazy-load FeatureConditionedResult containing cluster_assignments, u_matrix, and s_matrix."""
+        if self._fc_result is not None:
+            return self._fc_result
+        if not self.checkpoint_dir:
+            return None
+        fc_file = self.checkpoint_dir / "feature_conditioned.npz"
+        if not fc_file.exists():
+            return None
+        try:
+            from .feature_conditioned import FeatureConditionedResult
+            self._fc_result = FeatureConditionedResult.load_checkpoint(str(fc_file))
+            return self._fc_result
+        except Exception as e:
+            logger.warning(f"Failed to load feature_conditioned.npz: {e}")
+            return None
+
+    def _load_pc_prompt_clusters(self) -> Optional[Dict[int, List[int]]]:
+        """Lazy-load ONLY the small `prompt_clusters_json` key from the (multi-GB) prompt_conditioned.npz.
+
+        Reading a single key via ``np.load(mmap_mode="r")`` avoids memory-mapping the huge
+        c_matrix/u_matrix arrays and parsing the ~1M hypothesis objects the full
+        `PromptConditionedResult.load_checkpoint` would touch.
+        """
+        if self._pc_prompt_clusters is not None:
+            return self._pc_prompt_clusters
+        if not self.checkpoint_dir:
+            return None
+        pc_file = self.checkpoint_dir / "prompt_conditioned.npz"
+        if not pc_file.exists():
+            return None
+        try:
+            with np.load(pc_file, mmap_mode="r", allow_pickle=True) as data:
+                if "prompt_clusters_json" not in data:
+                    logger.warning("prompt_conditioned.npz has no prompt_clusters_json key.")
+                    return None
+                clusters = {int(k): v for k, v in json.loads(str(data["prompt_clusters_json"])).items()}
+            self._pc_prompt_clusters = clusters
+            return clusters
+        except Exception as e:
+            logger.warning(f"Failed to load prompt_clusters from prompt_conditioned.npz: {e}")
+            return None
+
+    def _get_cluster_validation_metrics(self) -> Dict[str, Any]:
+        """Aggregate per-feature predicted vs observed post-DPO deltas into per-cluster metrics."""
+        if self._cluster_validation_metrics is not None:
+            return self._cluster_validation_metrics
+        from .validation import cluster_validation_metrics
+        self._cluster_validation_metrics = cluster_validation_metrics(
+            self.feature_clusters, self.run_dir / "p4_validation"
+        )
+        return self._cluster_validation_metrics
+
     # ==========================================================================
     # SECTION 3: Dataset Examples & Token Interpretation Subsystem
     # ==========================================================================
@@ -482,26 +528,7 @@ class ViewerState:
 
     def _top_examples(self, scores: np.ndarray, examples: Sequence[Any], top_n: int = 5) -> List[Dict[str, Any]]:
         """Return the top-n scoring dataset examples sorted by activation score in descending order."""
-        if examples is None or len(examples) == 0:
-            return []
-        scores_arr = np.asarray(scores).ravel()
-        limit = min(len(scores_arr), len(examples))
-        if limit == 0:
-            return []
-        sub_scores = scores_arr[:limit]
-        order = np.argsort(sub_scores)[-top_n:][::-1]
-        out = []
-        for idx in order:
-            i = int(idx)
-            val = float(sub_scores[i])
-            if val <= 0:
-                continue
-            out.append({
-                "index": i,
-                "score": val,
-                **self._example_view(examples[i]),
-            })
-        return out
+        return inspection.top_examples(scores, examples, self._example_view, top_n)
 
     def _load_pc_cluster_examples(self) -> Optional[Dict[str, Any]]:
         """Load pre-extracted representative tokens and examples for prompt clusters A_k / R_m."""
@@ -567,31 +594,6 @@ class ViewerState:
             if len(feats) >= min_sz:
                 members.update(int(f) for f in feats)
         return np.array(sorted(members), dtype=np.int64)
-
-    def _member_positions(self, mats, attr: str) -> np.ndarray:
-        """Precompute binary column firing positions for member features across matrix rows."""
-        M = getattr(mats, attr)
-        cols = self._all_member_cols
-        if M is None or cols is None or len(cols) == 0:
-            return np.zeros((0, 2), dtype=np.int64)
-        tau = self._feature_delta_tau()
-        if hasattr(M, "tocsc"):
-            M_csc = M.tocsc()
-            row_list, col_list = [], []
-            for slot, f in enumerate(cols):
-                col = M_csc.getcol(int(f))
-                active_rows = col.indices[col.data > tau]
-                if len(active_rows) > 0:
-                    row_list.append(active_rows)
-                    col_list.append(np.full(len(active_rows), slot, dtype=np.int32))
-            if row_list:
-                rows = np.concatenate(row_list)
-                slots = np.concatenate(col_list)
-                return np.stack([rows, slots], axis=1).astype(np.int64)
-            return np.zeros((0, 2), dtype=np.int64)
-        M_sub = np.asarray(M[:, cols])
-        rows, slots = np.where(M_sub > tau)
-        return np.stack([rows, slots], axis=1).astype(np.int64)
 
     def _member_matrix(self, mats, attr: str) -> Optional[np.ndarray]:
         """Return dense memory-mapped member matrix (N, len(all_member_cols)) for C_max or R_max."""
@@ -723,120 +725,9 @@ class ViewerState:
             self._feature_firings()
             self._persist_member_cache(mats)
 
-    def _load_cached_example_scores(self, cache_dir: Path, cluster_ids: List[int], mats) -> bool:
-        """Attempt zero-copy memory-map load of per-example scores (u, s) if fingerprint matches."""
-        meta = _read_json(cache_dir / "example_scores_meta.json")
-        if not meta or meta.get("matrices") != self._member_cache_meta(mats):
-            return False
-        if float(meta.get("tau", -1.0)) != self._feature_delta_tau() or meta.get("cluster_ids") != cluster_ids:
-            return False
-        if not all((cache_dir / f).exists() for f in ("example_u.npy", "example_s.npy", "example_cluster_ids.npy")):
-            return False
-
-        try:
-            self._example_u = np.load(cache_dir / "example_u.npy", mmap_mode="r")
-            self._example_s = np.load(cache_dir / "example_s.npy", mmap_mode="r")
-            self._example_cluster_ids = np.load(cache_dir / "example_cluster_ids.npy")
-            logger.info(f"Loaded per-example scores from {cache_dir} (mmap).")
-            return True
-        except Exception as e:
-            logger.warning(f"Failed to load per-example scores ({e}); rebuilding.")
-            return False
-
     def _feature_delta_tau(self) -> float:
         """The B.1 tau threshold used to extract per-feature deltas (from config JSON)."""
         return float(self._fc_cfg.get("tau", 0.01))
-
-    def _ensure_example_scores(self, mats) -> None:
-        """Ensure per-example disparity and firing score tables (u, s) are built and memory-mapped."""
-        with self._scores_lock:
-            if self._example_u is not None and self._example_s is not None:
-                return
-
-            cluster_ids = sorted(int(k) for k in self.feature_clusters.keys())
-            if not cluster_ids:
-                return
-
-            cache_dir = self.run_dir / "viewer_cache"
-            tau = self._feature_delta_tau()
-            if self._load_cached_example_scores(cache_dir, cluster_ids, mats):
-                return
-
-            if self.checkpoint_dir:
-                fc_file = self.checkpoint_dir / "feature_conditioned.npz"
-                if fc_file.exists():
-                    try:
-                        from .feature_conditioned import FeatureConditionedResult
-                        res = FeatureConditionedResult.load_checkpoint(str(fc_file))
-                        if res.u_matrix.shape[1] == len(cluster_ids):
-                            self._example_u = res.u_matrix
-                            self._example_s = res.s_matrix
-                            self._example_cluster_ids = np.asarray(cluster_ids, dtype=np.int64)
-                            cache_dir.mkdir(parents=True, exist_ok=True)
-                            self._save_npy(cache_dir / "example_u.npy", self._example_u)
-                            self._save_npy(cache_dir / "example_s.npy", self._example_s)
-                            self._save_npy(cache_dir / "example_cluster_ids.npy", self._example_cluster_ids)
-                            _save_json(
-                                cache_dir / "example_scores_meta.json",
-                                {"tau": tau, "cluster_ids": cluster_ids, "matrices": self._member_cache_meta(mats)},
-                            )
-                            logger.info(f"Loaded exact B.1 per-example scores u/s ({self._example_u.shape}) from checkpoint.")
-                            return
-                    except Exception as e:
-                        logger.warning(f"Could not load feature_conditioned.npz for example scores: {e}")
-
-            if self._all_member_cols is None:
-                self._all_member_cols = self._expected_member_cols()
-
-            n_members = len(self._all_member_cols)
-            K = len(cluster_ids)
-            A = np.zeros((n_members, K), dtype=np.float32)
-            for c_idx, cid in enumerate(cluster_ids):
-                feats = np.asarray(self.feature_clusters[cid], dtype=np.int64)
-                if len(feats) > 0:
-                    slots = np.searchsorted(self._all_member_cols, feats)
-                    A[slots, c_idx] = 1.0
-
-            cluster_sizes = np.maximum(A.sum(axis=0), 1.0)
-
-            def fire_counts(M: Optional[np.ndarray]) -> Optional[np.ndarray]:
-                if M is None:
-                    return None
-                N = int(M.shape[0])
-                out = np.zeros((N, K), dtype=np.float32)
-                rows_per_block = 20_000
-                for start in range(0, N, rows_per_block):
-                    end = min(start + rows_per_block, N)
-                    out[start:end] = (M[start:end] > tau).astype(np.float32) @ A
-                return out
-
-            M_c = self._member_matrix(mats, "C_freq")
-            if M_c is None:
-                M_c = self._member_matrix(mats, "C_max")
-            M_r = self._member_matrix(mats, "R_freq")
-            if M_r is None:
-                M_r = self._member_matrix(mats, "R_max")
-            c_cnt = fire_counts(M_c)
-            r_cnt = fire_counts(M_r)
-            if c_cnt is None or r_cnt is None:
-                logger.warning("Member matrices unavailable; cannot build per-example scores.")
-                return
-
-            u = (c_cnt - r_cnt) / cluster_sizes[None, :]
-            s = c_cnt + r_cnt
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            self._save_npy(cache_dir / "example_u.npy", u)
-            self._save_npy(cache_dir / "example_s.npy", s)
-            self._save_npy(cache_dir / "example_cluster_ids.npy", np.asarray(cluster_ids, dtype=np.int64))
-            _save_json(
-                cache_dir / "example_scores_meta.json",
-                {"tau": tau, "cluster_ids": cluster_ids, "matrices": self._member_cache_meta(mats)},
-            )
-
-            self._example_u = u
-            self._example_s = s
-            self._example_cluster_ids = np.asarray(cluster_ids, dtype=np.int64)
-            logger.info(f"Built per-example scores u/s ({u.shape}) and persisted under {cache_dir}.")
 
     # ==========================================================================
     # SECTION 5: Cluster & Feature Detail Interpretations (B_k, T_m, A_k, R_m, f)
@@ -906,10 +797,12 @@ class ViewerState:
         def build() -> Dict[str, Any]:
             feats = self.feature_clusters.get(m_int, [])
             label = self._load_feature_cluster_labels().get(m_int)
+            val_metrics = self._get_cluster_validation_metrics().get("clusters", {}).get(m_int)
             return {
                 "cluster_m": m_int,
                 "label": label or {"title": f"Feature cluster T_{m}", "description": "", "keywords": []},
                 "n_features": len(feats),
+                "validation": val_metrics,
                 "top_features": self._top_cluster_features(m_int, top_n=8),
                 "examples": self._cluster_top_examples(m_int, top_n=top_n_examples),
             }
@@ -1027,307 +920,57 @@ class ViewerState:
             )
         return self.inspector
 
-    def _cluster_signals(self, activations: np.ndarray, mode: str = "sum") -> Dict[int, float]:
-        """Aggregate a live (d_sae,) activation vector into per-feature-cluster signals T_m."""
-        signals: Dict[int, float] = {}
-        if activations is None or len(activations) == 0:
-            return signals
-        for m, feats in self.feature_clusters.items():
-            idx = np.asarray(feats, dtype=np.int64)
-            idx = idx[idx < len(activations)]
-            if len(idx) == 0:
-                signals[m] = 0.0
-                continue
-            vals = activations[idx]
-            signals[m] = float(vals.mean()) if mode == "mean" else float(vals.sum())
-        return signals
-
-    @staticmethod
-    def _hypothesis_evidence(hypos: List[Dict[str, Any]], signals: Dict[int, float]) -> List[Tuple[Dict[str, Any], float]]:
-        """Score hypotheses by |delta| multiplied by live per-cluster signal strength."""
-        ev: List[Tuple[Dict[str, Any], float]] = []
-        for h in hypos:
-            m = h.get("m")
-            sig = signals.get(m, 0.0) if m is not None else 0.0
-            ev.append((h, abs(float(h.get("delta", 0.0))) * abs(sig)))
-        return ev
-
-    def _cluster_keywords(self, activations: np.ndarray, feature_ms: Sequence[int], top_n: int = 3) -> List[str]:
-        """Return top individual SAE features by live activation within specified feature clusters."""
-        if activations is None or len(activations) == 0:
-            return []
-        feats: List[int] = []
-        for m in feature_ms:
-            feats.extend(self.feature_clusters.get(m, []))
-        if not feats:
-            return []
-        idx = np.asarray(feats, dtype=np.int64)
-        idx = idx[idx < len(activations)]
-        if len(idx) == 0:
-            return []
-        vals = activations[idx]
-        order = np.argsort(vals)[-top_n:][::-1]
-        return [f"SAE-Feat_{int(idx[i])} (act={vals[i]:.2f})" for i in order]
-
-    def _score_data_clusters(self, signal: Dict[int, float], feat_for_keywords: np.ndarray) -> List[Dict[str, Any]]:
-        """Rank data clusters B_k by live-evidence-weighted hypotheses."""
-        label_map = {cl.get("cluster_id"): cl for cl in self._load_data_cluster_labels()}
-        scored = []
-        for k, hypos in self.feature_hypotheses_map.items():
-            ev = self._hypothesis_evidence(hypos, signal)
-            if not ev:
-                continue
-            best_h, best_ev = max(ev, key=lambda t: t[1])
-            if best_ev <= 0:
-                continue
-            cl_info = label_map.get(k, {})
-            title = cl_info.get("title", f"Data Topic B_{k}")
-            desc = cl_info.get("description", f"Active dataset topic cluster with {len(hypos)} verified hypotheses.")
-            feature_ms = [h.get("m") for h in hypos if h.get("m") is not None]
-            scored.append({
-                "cluster_id": k,
-                "title": title,
-                "description": desc,
-                "matched_keywords": self._cluster_keywords(feat_for_keywords, feature_ms),
-                "relevance_score": float(best_ev),
-                "best_hypothesis": best_h,
-                "hypos": hypos,
-            })
-        return sorted(scored, key=lambda x: x["relevance_score"], reverse=True)
-
     def _score_prompt_conditioned_hypotheses(self, prompt_text: str, p_feat: np.ndarray, top_k: int = 10) -> List[Dict[str, Any]]:
-        """Extract top Prompt-Conditioned hypotheses (A_k x R_m) matching live prompt tokens."""
-        import re
-        pc_ex = self._load_pc_cluster_examples()
-        prompt_hypos_map = self.prompt_hypotheses_map
-        if not prompt_hypos_map:
-            return []
-
-        prompt_tokens_map = pc_ex.get("prompt_cluster_tokens", {}) if pc_ex else {}
-        prompt_words = set(re.findall(r"\w+", prompt_text.lower()))
-
-        scored_ak: List[Tuple[int, float]] = []
-        for k_str, tokens in prompt_tokens_map.items():
-            try:
-                k = int(k_str)
-            except (ValueError, TypeError):
-                continue
-            if not tokens:
-                continue
-            match_count = sum(1 for t in tokens if t.lower() in prompt_words or any(t.lower() in w for w in prompt_words))
-            if match_count > 0:
-                scored_ak.append((k, float(match_count) / max(1, len(tokens))))
-
-        if not scored_ak:
-            scored_ak = [(int(k), 1.0) for k in list(prompt_hypos_map.keys())[:10]]
-
-        scored_ak.sort(key=lambda x: x[1], reverse=True)
-
-        pc_shifts: List[Dict[str, Any]] = []
-        for k, _ in scored_ak[:top_k]:
-            hypos = prompt_hypos_map.get(k, [])
-            if not hypos:
-                continue
-            sorted_h = sorted(hypos, key=lambda h: abs(float(h.get("cohens_d", 0.0))), reverse=True)
-            for h in sorted_h[:2]:
-                m = h.get("m")
-                delta = float(h.get("delta", 0.0))
-                z = float(h.get("z_score", 0.0))
-                d = float(h.get("cohens_d", 0.0))
-                is_amplified = delta > 0
-
-                p_tokens = self._pc_cluster_tokens("prompt", k)
-                r_tokens = self._pc_cluster_tokens("response", m)
-
-                direction_word = "AMPLIFIED (Boosted)" if is_amplified else "SUPPRESSED (Inhibited)"
-                interpretation = (
-                    f"Prompt matches prompt-feature cluster A_{k} (expressed by: {', '.join(p_tokens[:4]) if p_tokens else 'local prompt subspace'}). "
-                    f"In local preference data, this condition shifts response-delta cluster R_{m} "
-                    f"(expressed by: {', '.join(r_tokens[:4]) if r_tokens else 'response disparity features'}) "
-                    f"with local effect size Cohen's d = {d:.2f} (Δ = {delta:+.5f}, Welch z = {z:.2f}), "
-                    f"indicating that post-training will likely {direction_word} these response features."
-                )
-
-                pc_shifts.append({
-                    "prompt_cluster_k": k,
-                    "response_cluster_m": m,
-                    "pipeline_type": "prompt_conditioned",
-                    "delta": delta,
-                    "effect_direction": "Amplified after DPO" if is_amplified else "Suppressed after DPO",
-                    "z_score": z,
-                    "cohens_d": d,
-                    "prompt_cluster_tokens": p_tokens[:6],
-                    "response_cluster_tokens": r_tokens[:6],
-                    "interpretation": interpretation,
-                })
-
-        return pc_shifts[:top_k]
-
-    @staticmethod
-    def _project_clusters(scored: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Strip internal full hypothesis arrays from scored clusters for lightweight JSON responses."""
-        return [{k: v for k, v in c.items() if k != "hypos"} for c in scored]
+        """Extract top Prompt-Conditioned hypotheses (A_k x R_m) via exact SAE feature-space co-activation."""
+        pc_clusters = self._load_pc_prompt_clusters()
+        if not pc_clusters:
+            logger.warning("prompt_conditioned.npz unavailable; A_k scoring falls back to summary-order prompt clusters.")
+        return inspection.score_prompt_conditioned(
+            p_feat, pc_clusters or {}, self.prompt_hypotheses_map,
+            self._pc_cluster_tokens, top_k=top_k,
+        )
 
     def _sae_feature_item(self, i: int, val: float, m: Optional[int]) -> Dict[str, Any]:
         """Format an active SAE feature item with its cluster assignment and Neuronpedia link."""
-        return {
-            "feature_index": i,
-            "activation": round(val, 4),
-            "cluster_m": m,
-            "neuronpedia_url": self._neuronpedia_url(i),
-        }
+        return inspection.sae_feature_item(i, val, m, self._neuronpedia_url)
 
-    def _top_sae_features(self, activations: np.ndarray, top_n: int = 8, min_cluster_size: Optional[int] = None) -> List[Dict[str, Any]]:
+    def _top_sae_features(self, activations: np.ndarray, top_n: int = 8) -> List[Dict[str, Any]]:
         """Extract top active SAE features sorted by magnitude."""
-        if activations is None or len(activations) == 0:
-            return []
-        min_sz = self.min_partition_cluster_size if min_cluster_size is None else min_cluster_size
-        feat_to_cluster = self.feature_to_cluster_map
-        pos_idx = np.flatnonzero(activations > 0)
-        if len(pos_idx) == 0:
-            return []
-        sorted_pos = pos_idx[np.argsort(-activations[pos_idx])]
-        out = []
-        for idx in sorted_pos:
-            i = int(idx)
-            val = float(activations[i])
-            m = feat_to_cluster.get(i)
-            if m is not None and len(self.feature_clusters.get(m, [])) < min_sz:
-                m = None
-            out.append(self._sae_feature_item(i, val, m))
-            if len(out) >= top_n:
-                break
-        return out
+        return inspection.top_sae_features(
+            activations, self.feature_to_cluster_map, self.feature_clusters,
+            self.min_partition_cluster_size, top_n, self._neuronpedia_url,
+        )
 
     def _inspect_feature_samples(self, m: int, k: int, side: str = "amplify") -> Dict[str, Any]:
-        """Top preference examples whose labels amplify (u>0) or suppress (u<0) feature cluster T_m."""
-        m_int = int(m)
-        k = max(1, min(int(k), 200))
-        side = side if side in ("amplify", "suppress") else "amplify"
-        cache_key = f"inspectSamples_{m_int}_{side}_k{k}"
-
-        def build() -> Dict[str, Any]:
-            feats = np.asarray(self.feature_clusters.get(m_int, []), dtype=np.int64)
-            label = self._load_feature_cluster_labels().get(m_int)
-            base = {
-                "cluster_m": m_int,
-                "label": label or {"title": f"Feature cluster T_{m}", "description": "", "keywords": []},
-                "n_features": int(len(feats)),
-                "side": side,
-                "total_matching": 0,
-                "samples": [],
-            }
-            if len(feats) == 0:
-                return base
-            mats = self._load_feature_matrices()
-            examples = self._load_examples()
-            if mats is None or examples is None:
-                return base
-            self._ensure_example_scores(mats)
-            if self._example_u is None or self._example_cluster_ids is None:
-                return base
-            pos = np.searchsorted(self._example_cluster_ids, m_int)
-            if pos >= len(self._example_cluster_ids) or int(self._example_cluster_ids[pos]) != m_int:
-                return base
-            u = np.asarray(self._example_u[:, pos], dtype=np.float32)
-            s = np.asarray(self._example_s[:, pos], dtype=np.float32)
-            present = np.flatnonzero(s > 0)
-            if len(present) == 0:
-                return base
-            order = present[np.argsort(-u[present], kind="stable")]
-            if side == "suppress":
-                order = order[::-1]
-            samples = []
-            for i in order[:k]:
-                i_int = int(i)
-                if i_int >= len(examples):
-                    continue
-                ex = examples[i_int]
-                u_i = float(u[i_int])
-                samples.append({
-                    "index": i_int,
-                    "u": u_i,
-                    "s": float(s[i_int]),
-                    "effect_direction": "Amplified after DPO" if u_i > 0 else ("Suppressed after DPO" if u_i < 0 else "Neutral"),
-                    **self._example_view(ex),
-                })
-            return {**base, "total_matching": int(len(present)), "samples": samples}
-
-        return self._cached_info(cache_key, build)
+        """Inverse search (Tab 4 single-cluster): rank samples by per-example disparity u against T_m."""
+        cluster_ids = sorted(int(c) for c in self.feature_clusters.keys())
+        label = self._load_feature_cluster_labels().get(int(m))
+        return inspection.rank_cluster_samples(
+            m=int(m), side=side, top_n=k,
+            fc=self._load_fc_result(),
+            examples=self._load_examples(),
+            mats=self._load_feature_matrices(),
+            feature_clusters=self.feature_clusters,
+            cluster_ids=cluster_ids,
+            example_view_fn=self._example_view,
+            neuronpedia_url_fn=self._neuronpedia_url,
+            label=label,
+        )
 
     def _inspect_compound_samples(self, conditions: List[Tuple[int, str, float]], k: int) -> Dict[str, Any]:
-        """Top preference examples satisfying EVERY compound condition: [(m, direction, tau), ...]."""
-        k = max(1, min(int(k), 200))
-        conds: List[Tuple[int, str, float]] = []
-        for m, direction, tau in conditions:
-            direction = direction if direction in ("amplify", "suppress") else "amplify"
-            tau_val = float(tau) if tau is not None and float(tau) > 0 else 0.1
-            conds.append((int(m), direction, tau_val))
-        if not conds:
-            return {"compound": True, "k": k, "total_matching": 0, "conditions": [], "samples": []}
-        cache_key = "compound_" + "_".join(f"{m}:{d}:{t:.3g}" for m, d, t in conds) + f"_k{k}"
-
-        def build() -> Dict[str, Any]:
-            base = {"compound": True, "k": k, "total_matching": 0, "conditions": [], "samples": []}
-            mats = self._load_feature_matrices()
-            examples = self._load_examples()
-            if mats is None or examples is None:
-                return base
-            self._ensure_example_scores(mats)
-            if self._example_u is None or self._example_s is None or self._example_cluster_ids is None:
-                return base
-            col_u, col_s = [], []
-            mask = None
-            for m, direction, tau in conds:
-                pos = int(np.searchsorted(self._example_cluster_ids, m))
-                if pos >= len(self._example_cluster_ids) or int(self._example_cluster_ids[pos]) != m:
-                    return base
-                u = np.asarray(self._example_u[:, pos], dtype=np.float32)
-                s = np.asarray(self._example_s[:, pos], dtype=np.float32)
-                cond = (u > tau) if direction == "amplify" else (u < -tau)
-                mask = cond if mask is None else (mask & cond)
-                col_u.append(u)
-                col_s.append(s)
-            if mask is None:
-                return base
-            idxs = np.flatnonzero(mask)
-            if len(idxs) == 0:
-                return base
-            score = np.zeros(len(idxs), dtype=np.float32)
-            for (m, direction, tau), u in zip(conds, col_u):
-                score += np.abs(u[idxs]) / tau
-            order = idxs[np.argsort(-score, kind="stable")]
-            labels = self._load_feature_cluster_labels()
-            cond_list = []
-            for m, direction, tau in conds:
-                label = labels.get(int(m))
-                cond_list.append({
-                    "m": int(m),
-                    "direction": direction,
-                    "tau": tau,
-                    "label": label or {"title": f"Feature cluster T_{m}", "description": "", "keywords": []},
-                })
-            samples = []
-            for i in order[:k]:
-                i_int = int(i)
-                if i_int >= len(examples):
-                    continue
-                ex = examples[i_int]
-                u_map = {str(m): float(u[i_int]) for (m, _, _), u in zip(conds, col_u)}
-                samples.append({
-                    "index": i_int,
-                    "u": u_map,
-                    "s": {str(m): float(s[i_int]) for (m, _, _), s in zip(conds, col_s)},
-                    "score": float(sum(abs(u_map[str(m)]) / t for (m, _, t) in conds)),
-                    "effect_directions": {
-                        str(m): "Amplified after DPO" if u[i_int] > 0 else "Suppressed after DPO"
-                        for (m, _, _), u in zip(conds, col_u)
-                    },
-                    **self._example_view(ex),
-                })
-            return {**base, "total_matching": int(len(idxs)), "conditions": cond_list, "samples": samples}
-
-        return self._cached_info(cache_key, build)
+        """Inverse search (Tab 4 compound): rank samples satisfying ALL directional conditions."""
+        cluster_ids = sorted(int(c) for c in self.feature_clusters.keys())
+        return inspection.rank_compound_samples(
+            conditions=conditions, top_n=k,
+            fc=self._load_fc_result(),
+            examples=self._load_examples(),
+            mats=self._load_feature_matrices(),
+            feature_clusters=self.feature_clusters,
+            cluster_ids=cluster_ids,
+            example_view_fn=self._example_view,
+            neuronpedia_url_fn=self._neuronpedia_url,
+            feature_cluster_labels=self._load_feature_cluster_labels(),
+        )
 
     # ==========================================================================
     # SECTION 7: Neuronpedia Integration & Web Metadata Subsystem
@@ -1337,16 +980,10 @@ class ViewerState:
     def _neuronpedia_sae_set(sae_cfg: Dict[str, Any]) -> Optional[Tuple[str, str]]:
         """Map run SAE configuration to Neuronpedia (model_slug, sae_slug)."""
         repo = str(sae_cfg.get("repo", "")).lower()
-        sae_id = str(sae_cfg.get("sae_id", "")).lower()
         layer = sae_cfg.get("layer", 12)
         if "gemma-scope" in repo or "gemma-2-2b" in repo or "canonical" in repo:
             model_id = "gemma-2-2b"
-            if "canonical" in repo or "res" in repo:
-                sae_set = f"{layer}-gemmascope-res-16k"
-            elif "mlp" in repo:
-                sae_set = f"{layer}-gemmascope-mlp-16k"
-            else:
-                sae_set = f"{layer}-gemmascope-res-16k"
+            sae_set = f"{layer}-gemmascope-mlp-16k" if "mlp" in repo else f"{layer}-gemmascope-res-16k"
             return model_id, sae_set
         return None
 
@@ -1538,6 +1175,23 @@ def get_feature_cluster_info(
     return state._feature_cluster_info(m, top_n_examples=top_n)
 
 
+@app.get("/api/cluster_validation")
+def get_cluster_validation(
+    m: Optional[int] = Query(None, description="Feature cluster ID T_m (optional)")
+) -> Dict[str, Any]:
+    """Retrieve aggregated predicted vs observed post-DPO deltas across feature clusters."""
+    state = get_state()
+    metrics = state._get_cluster_validation_metrics()
+    if m is not None:
+        return {
+            "cluster_m": m,
+            "validation": metrics.get("clusters", {}).get(int(m)),
+            "global_r2": metrics.get("r2", 0.0),
+            "global_pearson_r": metrics.get("pearson_r", 0.0),
+        }
+    return metrics
+
+
 @app.get("/api/inspect_feature_samples")
 def get_inspect_feature_samples(
     m: Optional[int] = Query(None, description="Feature cluster community ID T_m (single-cluster query)"),
@@ -1548,21 +1202,7 @@ def get_inspect_feature_samples(
     """Inverse search (Tab 4): find training preference pairs whose labels drive feature cluster T_m."""
     state = get_state()
     if conditions:
-        parsed = []
-        for part in conditions.split(","):
-            fields = part.strip().split(":")
-            if len(fields) < 2:
-                continue
-            try:
-                cm = int(fields[0])
-            except ValueError:
-                continue
-            direction = fields[1].strip() if fields[1].strip() in ("amplify", "suppress") else "amplify"
-            try:
-                tau = float(fields[2]) if len(fields) > 2 and fields[2].strip() else 0.1
-            except ValueError:
-                tau = 0.1
-            parsed.append((cm, direction, tau))
+        parsed = inspection.parse_conditions(conditions, default_thresh=0.1)
         if parsed:
             return state._inspect_compound_samples(parsed, k)
         raise HTTPException(400, "No valid conditions parsed; expected 'm:amplify|suppress[:tau],...'")
@@ -1640,58 +1280,18 @@ def inspect_prompt(req: PromptInspectionRequest) -> Dict[str, Any]:
     p_feat = inspector.extract_prompt_features(prompt_text)
 
     # 2. Per-feature-cluster activity of the live prompt (T_m <- sum of P(x) members)
-    act = state._cluster_signals(p_feat, mode="sum")
+    act = inspection.cluster_signals(p_feat, state.feature_clusters, mode="sum")
 
-    scored_clusters = state._score_data_clusters(act, p_feat)[:req.top_k]
-    matched_clusters = state._project_clusters(scored_clusters)
+    data_labels_map = {int(cl.get("cluster_id")): cl for cl in state._load_data_cluster_labels() if "cluster_id" in cl}
+    scored_clusters = inspection.score_data_clusters(
+        act, p_feat, state.feature_hypotheses_map, data_labels_map, state.feature_clusters
+    )[:req.top_k]
+    matched_clusters = inspection.project_clusters(scored_clusters)
 
     # 3. Extract Feature-Conditioned Predicted Shifts (B_k x T_m)
-    predicted_shifts = []
-    labels_t = state._load_feature_cluster_labels()
-    labels_b = state._load_data_cluster_labels()
-    b_title_map = {int(lab.get("cluster_id")): lab.get("title", f"Data Cluster B_{lab.get('cluster_id')}") for lab in labels_b if "cluster_id" in lab}
-
-    for c in scored_clusters:
-        ordered = sorted(c["hypos"], key=lambda h: abs(float(h.get("delta", 0.0))) * abs(act.get(h.get("m"), 0.0)), reverse=True)
-        for h in ordered[:2]:
-            k = h.get("k")
-            m = h.get("m")
-            delta = float(h.get("delta", 0.0))
-            z = float(h.get("z_score", 0.0))
-            d = float(h.get("cohens_d", 0.0))
-            evidence = act.get(m, 0.0)
-            is_amplified = delta > 0
-
-            t_info = labels_t.get(int(m), {}) if m is not None else {}
-            t_title = t_info.get("title", f"Feature cluster T_{m}")
-            t_desc = t_info.get("description", "")
-            b_title = b_title_map.get(int(k), f"Topic B_{k}") if k is not None else "N/A"
-
-            direction_word = "AMPLIFIED (Boosted)" if is_amplified else "SUPPRESSED (Inhibited)"
-            interpretation = (
-                f"This prompt fires SAE feature cluster T_{m} ({t_title}) with live activity {evidence:.3f}. "
-                f"In the training data, examples of type B_{k} ({b_title}) are chosen-leaning on this cluster "
-                f"(Δ = {delta:+.5f}, Welch z = {z:.2f}), so post-training will likely {direction_word} "
-                f"this response behavior for similar prompts."
-            )
-
-            predicted_shifts.append({
-                "prompt_cluster_k": k,
-                "response_cluster_m": m,
-                "feature_cluster_title": t_title,
-                "feature_cluster_description": t_desc,
-                "data_cluster_title": b_title,
-                "pipeline_type": "feature_conditioned",
-                "delta": delta,
-                "effect_direction": "Amplified after DPO" if is_amplified else "Suppressed after DPO",
-                "z_score": z,
-                "cohens_d": d,
-                "live_activity": evidence,
-                "interpretation": interpretation,
-            })
-
-    predicted_shifts.sort(key=lambda s: abs(float(s["delta"])) * abs(float(s.get("live_activity", 0.0))), reverse=True)
-    predicted_shifts = predicted_shifts[:10]
+    predicted_shifts = inspection.predicted_behavior_shifts(
+        scored_clusters, act, state._load_feature_cluster_labels(), state._load_data_cluster_labels()
+    )
 
     # 4. Extract Prompt-Conditioned Predicted Shifts (A_k x R_m)
     pc_shifts = state._score_prompt_conditioned_hypotheses(prompt_text, p_feat, top_k=req.top_k)
@@ -1724,58 +1324,21 @@ def inspect_preference_pair(req: PreferencePairInspectionRequest) -> Dict[str, A
     c_p, r_p, u = inspector.extract_pair_features(prompt_text, chosen_text, rejected_text, tau=state._feature_delta_tau())
 
     # 2. Per-feature-cluster live disparity: u_m = mean over T_m members of u
-    u_sig = state._cluster_signals(u, mode="mean")
+    u_sig = inspection.cluster_signals(u, state.feature_clusters, mode="mean")
     pair_act = c_p + r_p
 
     # 3. Score Data Clusters B_k by live-evidence-weighted hypotheses
-    scored_clusters = state._score_data_clusters(u_sig, pair_act)[:req.top_k]
-    matched_clusters = state._project_clusters(scored_clusters)
+    data_labels_map = {int(cl.get("cluster_id")): cl for cl in state._load_data_cluster_labels() if "cluster_id" in cl}
+    scored_clusters = inspection.score_data_clusters(
+        u_sig, pair_act, state.feature_hypotheses_map, data_labels_map, state.feature_clusters
+    )[:req.top_k]
+    matched_clusters = inspection.project_clusters(scored_clusters)
 
     # 4. Extract Promoted vs. Suppressed Concepts from the LIVE disparity
-    best_by_m = state._best_hypothesis_by_m()
-    labels_t = state._load_feature_cluster_labels()
-    labels_b = state._load_data_cluster_labels()
-    b_title_map = {int(lab.get("cluster_id")): lab.get("title", f"Data Cluster B_{lab.get('cluster_id')}") for lab in labels_b if "cluster_id" in lab}
-
-    promoted_concepts = []
-    suppressed_concepts = []
-    for m, uval in sorted(u_sig.items(), key=lambda t: abs(t[1]), reverse=True):
-        if uval == 0.0:
-            continue
-        if len(state.feature_clusters.get(m, [])) < state.min_feat_cluster_size or m not in best_by_m:
-            continue
-        h = best_by_m.get(m, {})
-        k = h.get("k")
-        z = float(h.get("z_score", 0.0))
-        is_chosen = uval > 0
-        t_info = labels_t.get(int(m), {}) if m is not None else {}
-        t_title = t_info.get("title", f"Feature cluster T_{m}")
-        b_title = b_title_map.get(int(k), f"Topic B_{k}") if k is not None else "N/A"
-
-        item = {
-            "feature_cluster_m": m,
-            "feature_cluster_title": t_title,
-            "data_cluster_k": k,
-            "data_cluster_title": b_title,
-            "delta": float(uval),
-            "hypothesis_delta": float(h.get("delta", 0.0)),
-            "z_score": z,
-            "signal_strength": "Strong" if abs(uval) > 0.15 else ("Moderate" if abs(uval) > 0.05 else "Weak"),
-            "explanation": (
-                f"Live SAE disparity: the chosen response fires feature cluster T_{m} ({t_title}) "
-                f"more than the rejected (net u = {uval:+.3f})."
-                + (f" Consistent with training hypothesis B_{k} ({b_title}) (Δ = {h.get('delta', 0.0):+.4f}, Welch z = {z:.2f})." if k is not None else "")
-            ),
-        }
-        if is_chosen:
-            promoted_concepts.append(item)
-        else:
-            suppressed_concepts.append(item)
-
-    promoted_concepts.sort(key=lambda x: x["delta"], reverse=True)
-    suppressed_concepts.sort(key=lambda x: x["delta"])
-    promoted_concepts = promoted_concepts[:5]
-    suppressed_concepts = suppressed_concepts[:5]
+    promoted_concepts, suppressed_concepts = inspection.pair_concepts(
+        u_sig, state._best_hypothesis_by_m(), state.feature_clusters, state.min_feat_cluster_size,
+        state._load_feature_cluster_labels(), state._load_data_cluster_labels(),
+    )
 
     top_pair_feats = state._top_sae_features(np.abs(u))
     state._prewarm_neuronpedia_features([f["feature_index"] for f in top_pair_feats])

@@ -258,7 +258,24 @@ document.addEventListener("DOMContentLoaded", () => {
     if (family === "T") {
       const topFeats = data.top_features || [];
       const exs = data.examples || [];
+      const val = data.validation;
+      let valHtml = "";
+      if (val) {
+        const pred = Number(val.predicted_delta || 0);
+        const obs = Number(val.observed_delta || 0);
+        valHtml = `
+          <div class="detail-section" style="margin-top:16px;">
+            <div class="detail-section-title">📊 Post-DPO Shift Validation (Predicted vs Empirical)</div>
+            <div style="display:flex; gap:12px; flex-wrap:wrap; background:var(--bg-card); padding:10px 14px; border:1px solid var(--border-color); border-radius:6px; margin-top:6px;">
+              <div><span style="color:var(--text-muted); font-size:0.75rem;">Predicted Disparity (u):</span> <strong style="color:${pred >= 0 ? '#4caf7d' : '#e06c75'}; font-family:var(--font-mono);">${pred >= 0 ? '+' : ''}${pred.toFixed(4)}</strong></div>
+              <div><span style="color:var(--text-muted); font-size:0.75rem;">Observed Post-DPO Shift (Δ):</span> <strong style="color:${obs >= 0 ? '#4caf7d' : '#e06c75'}; font-family:var(--font-mono);">${obs >= 0 ? '+' : ''}${obs.toFixed(4)}</strong></div>
+              <div><span style="color:var(--text-muted); font-size:0.75rem;">Validated Features:</span> <strong>${val.n_features || data.n_features}</strong></div>
+            </div>
+          </div>
+        `;
+      }
       bodyHtml += `
+        ${valHtml}
         <div class="detail-section" style="margin-top:16px;">
           <div class="detail-section-title">⚡ Top Member SAE Features (${data.n_features || topFeats.length} total)</div>
           <div class="feature-rows-wrap">
@@ -1786,17 +1803,16 @@ if (clustersMasterList) {
     }
   });
 
-  // --- FEATURE → TOP SAMPLES EXPLORER (TAB 4) — inverse of the Prompt Debugger ---
+  // --- FEATURE → TOP SAMPLES EXPLORER (TAB 4) — Per-sample inverse search ---
   const samplesSearch = document.getElementById("samples-cluster-search");
   const samplesMetaRow = document.getElementById("samples-meta-row");
   const samplesLists = document.getElementById("samples-lists");
   const compoundCluster = document.getElementById("compound-cluster");
   const compoundDir = document.getElementById("compound-dir");
-  const compoundTau = document.getElementById("compound-tau");
   const compoundAdd = document.getElementById("compound-add");
   const compoundRun = document.getElementById("compound-run");
   const compoundConds = document.getElementById("compound-conditions");
-  const SAMPLE_TOP_K = 50;
+  const SAMPLE_TOP_K = 30;
 
   let samplesClusters = [];
   let activeSampleCluster = null;
@@ -1830,18 +1846,12 @@ if (clustersMasterList) {
       `<option value="${esc(c.m)}">T_${c.m} ${esc(c.title)}</option>`).join("");
   }
 
-  function getConfigTau() {
-    return Number(currentRunData?.tau ?? currentRunData?.summary?.config?.feature_conditioned?.tau ?? 0.01);
-  }
-
   function addCompoundCondition() {
-    if (!compoundCluster || !compoundDir || !compoundTau) return;
+    if (!compoundCluster || !compoundDir) return;
     const m = Number(compoundCluster.value);
     const direction = compoundDir.value;
-    const minTau = getConfigTau();
-    const tau = Math.max(minTau, parseFloat(compoundTau.value) || 0.1);
-    const dup = compoundConditions.find(c => c.m === m && c.direction === direction && c.tau === tau);
-    if (!dup) compoundConditions.push({ m, direction, tau });
+    const dup = compoundConditions.find(c => c.m === m && c.direction === direction);
+    if (!dup) compoundConditions.push({ m, direction });
     renderCompoundConditions();
   }
 
@@ -1856,10 +1866,10 @@ if (clustersMasterList) {
       ? compoundConditions.map((c, i) => {
           const cl = samplesClusters.find(s => s.m === c.m);
           return `<span class="pill ${c.direction === 'amplify' ? 'pill-chosen' : 'pill-rejected'}">
-            T_${c.m} ${c.direction === 'amplify' ? '▲' : '▼'} · u${c.direction === 'amplify' ? '>' : '<−'}${c.tau} ${esc(cl ? cl.title : "")}
+            T_${c.m} ${c.direction === 'amplify' ? '▲' : '▼'} ${esc(cl ? cl.title : "")}
             <button class="compound-remove" data-compound-idx="${i}" title="Remove condition">✕</button></span>`;
         }).join("")
-      : '<span class="compound-hint">Add ≥2 conditions to find samples that amplify AND/OR suppress multiple clusters at once (a sample carries a u-score for every cluster, so it can satisfy many conditions).</span>';
+      : '<span class="compound-hint">Add conditions to find samples that amplify AND/OR suppress multiple clusters.</span>';
     document.querySelectorAll("[data-compound-idx]").forEach(btn => {
       btn.addEventListener("click", () => removeCompoundCondition(Number(btn.dataset.compoundIdx)));
     });
@@ -1870,7 +1880,7 @@ if (clustersMasterList) {
       samplesLists.innerHTML = '<p class="loading-cell">Add at least one condition first.</p>';
       return;
     }
-    const condStr = compoundConditions.map(c => `${c.m}:${c.direction}:${c.tau}`).join(",");
+    const condStr = compoundConditions.map(c => `${c.m}:${c.direction}`).join(",");
     samplesLists.innerHTML = '<p class="loading-cell">Ranking samples that satisfy ALL conditions...</p>';
     try {
       const res = await fetch(`/api/inspect_feature_samples?conditions=${encodeURIComponent(condStr)}&k=${SAMPLE_TOP_K}`).then(r => r.json());
@@ -1881,17 +1891,29 @@ if (clustersMasterList) {
   }
 
   function renderCompoundSampleRow(s) {
-    const condPills = compoundConditions.map(c => {
-      const u = s.u != null ? Number(s.u[c.m]) : NaN;
-      const isAmp = !isNaN(u) && u > 0;
-      return `<span class="pill ${isAmp ? 'pill-chosen' : 'pill-rejected'}">T_${c.m} ${isAmp ? '▲' : '▼'} ${isNaN(u) ? '—' : u.toFixed(3)}</span>`;
+    const condPills = (s.effect_directions || []).map((d, i) => {
+      const c = compoundConditions[i];
+      if (!c) return "";
+      const rawU = s.u != null ? (s.u[c.m] ?? s.u[String(c.m)]) : null;
+      const u = rawU != null ? Number(rawU) : NaN;
+      return `<span class="pill ${d === 'Amplified' ? 'pill-chosen' : 'pill-rejected'}">T_${c.m} ${d === 'Amplified' ? '▲' : '▼'} ${isNaN(u) ? '—' : u.toFixed(3)}</span>`;
     }).join("");
-    return `
-      <div class="example-item" style="margin-bottom:8px; padding:8px; background:var(--bg-card); border:1px solid var(--border-color); border-radius:6px;">
+    const firing = s.member_firing || [];
+    const featBadges = firing.length > 0
+      ? `<div style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap; align-items:center;">
+          ${firing.slice(0, 6).map(f =>
+            `<span class="keyword-tag" style="font-size:0.72rem; font-family:var(--font-mono);">
+              #${f.feature_index} (${f.active_in === 'chosen' ? 'C' : (f.active_in === 'rejected' ? 'R' : 'B')})
+              ${f.neuronpedia_url ? `<a href="${esc(f.neuronpedia_url)}" target="_blank" style="color:var(--color-accent); text-decoration:none;">↗</a>` : ""}
+            </span>`).join("")}
+        </div>` : "";
+    return `<div class="example-item" style="margin-bottom:8px; padding:8px; background:var(--bg-card); border:1px solid var(--border-color); border-radius:6px;">
         <div style="font-size:0.75rem; margin-bottom:4px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
           <span class="keyword-tag">#${esc(s.index)}</span>${condPills}
-          <span class="keyword-tag">score=${Number(s.score).toFixed(2)}</span>
+          <span class="keyword-tag">score=${Number(s.score).toFixed(3)}</span>
+          ${s.context_k >= 0 ? `<span class="cluster-badge badge-b" style="font-size:0.7rem;">B_${s.context_k}</span>` : ""}
         </div>
+        ${featBadges}
         <div class="example-item-prompt" style="font-size:0.82rem;"><strong>Prompt:</strong> ${esc(s.prompt)}</div>
         <div class="example-item-chosen" style="font-size:0.82rem; margin-top:4px; color:#4caf7d;"><strong>Chosen (+):</strong> ${esc(s.chosen)}</div>
         <div class="example-item-rejected" style="font-size:0.82rem; margin-top:4px; color:#e06c75;"><strong>Rejected (-):</strong> ${esc(s.rejected)}</div>
@@ -1905,15 +1927,14 @@ if (clustersMasterList) {
     }).join(" + ");
     const totalMatch = res.total_matching != null ? res.total_matching : (res.samples || []).length;
     const nShown = (res.samples || []).length;
-    samplesLists.innerHTML = `
-      <div class="compound-results">
+    samplesLists.innerHTML = `<div class="compound-results">
         <div style="width:100%; margin-bottom:10px; padding:10px 12px; background:var(--border-subtle); border:1px solid var(--border-color); border-radius:6px;">
-          <span class="guide-title">🔀 Compound results</span>
+          <span class="guide-title">Compound results</span>
           <div style="font-size:0.85rem; color:var(--text-muted); margin-top:4px;">
-            ${esc(condDesc)} — <strong>${nShown}</strong> shown of <strong>${totalMatch.toLocaleString()}</strong> matching samples (out of 260k total) that satisfy every condition.
+            ${esc(condDesc)} &mdash; <strong>${nShown}</strong> shown of <strong>${totalMatch.toLocaleString()}</strong> matching samples that satisfy every condition.
           </div>
         </div>
-        ${(res.samples || []).map(renderCompoundSampleRow).join("") || '<p class="loading-cell">No samples satisfy all conditions — lower the thresholds.</p>'}
+        ${(res.samples || []).map(renderCompoundSampleRow).join("") || '<p class="loading-cell">No samples satisfy all conditions.</p>'}
       </div>`;
   }
 
@@ -1953,13 +1974,24 @@ if (clustersMasterList) {
 
   function renderInspectorSampleRow(s) {
     const isAmp = s.u > 0;
-    return `
-      <div class="example-item" style="margin-bottom:8px; padding:8px; background:var(--bg-card); border:1px solid var(--border-color); border-radius:6px;">
+    const uStr = (s.u > 0 ? "+" : "") + Number(s.u).toFixed(3);
+    const firing = s.member_firing || [];
+    const featBadges = firing.length > 0
+      ? `<div style="margin-top:4px; display:flex; gap:4px; flex-wrap:wrap; align-items:center;">
+          <span style="font-size:0.72rem; color:var(--text-muted);">Active T_m:</span>
+          ${firing.slice(0, 6).map(f =>
+            `<span class="keyword-tag" style="font-size:0.72rem; font-family:var(--font-mono);">
+              #${f.feature_index} (${f.active_in === 'chosen' ? 'C' : (f.active_in === 'rejected' ? 'R' : 'B')})
+              ${f.neuronpedia_url ? `<a href="${esc(f.neuronpedia_url)}" target="_blank" style="color:var(--color-accent); text-decoration:none;">↗</a>` : ""}
+            </span>`).join("")}
+        </div>` : "";
+    return `<div class="example-item" style="margin-bottom:8px; padding:8px; background:var(--bg-card); border:1px solid var(--border-color); border-radius:6px;">
         <div style="font-size:0.75rem; margin-bottom:4px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
           <span class="keyword-tag">#${esc(s.index)}</span>
-          <span class="pill ${isAmp ? 'pill-chosen' : 'pill-rejected'}">${esc(s.effect_direction)} · u=${Number(s.u).toFixed(3)}</span>
-          <span class="keyword-tag">s=${Number(s.s).toFixed(0)}</span>
+          <span class="pill ${isAmp ? 'pill-chosen' : 'pill-rejected'}">${esc(s.effect_direction)} · u=${uStr}</span>
+          ${s.context_k >= 0 ? `<span class="cluster-badge badge-b" style="font-size:0.7rem;">B_${s.context_k}</span>` : ""}
         </div>
+        ${featBadges}
         <div class="example-item-prompt" style="font-size:0.82rem;"><strong>Prompt:</strong> ${esc(s.prompt)}</div>
         <div class="example-item-chosen" style="font-size:0.82rem; margin-top:4px; color:#4caf7d;"><strong>Chosen (+):</strong> ${esc(s.chosen)}</div>
         <div class="example-item-rejected" style="font-size:0.82rem; margin-top:4px; color:#e06c75;"><strong>Rejected (-):</strong> ${esc(s.rejected)}</div>
@@ -1969,13 +2001,15 @@ if (clustersMasterList) {
   function renderInspectorSampleLists(amp, sup) {
     const ampLabel = (amp.label && amp.label.title) || `T_${amp.cluster_m}`;
     const supLabel = (sup.label && sup.label.title) || `T_${sup.cluster_m}`;
+    const ampTotal = (amp.total_matching || 0).toLocaleString();
+    const supTotal = (sup.total_matching || 0).toLocaleString();
     samplesLists.innerHTML = `
       <div class="samples-col">
-        <div class="pane-header"><span class="pane-title">🎯 Chosen-Leaning (u&gt;0) — Amplified after DPO</span><span class="pane-count">${esc(ampLabel)}</span></div>
+        <div class="pane-header"><span class="pane-title">Chosen-Leaning (u>0) — ${esc(ampLabel)}</span><span class="pane-count">${ampTotal} total · top ${(amp.samples||[]).length}</span></div>
         ${(amp.samples || []).map(renderInspectorSampleRow).join("") || '<p class="loading-cell">No amplifying samples found.</p>'}
       </div>
       <div class="samples-col">
-        <div class="pane-header"><span class="pane-title">🚫 Rejected-Leaning (u&lt;0) — Suppressed after DPO</span><span class="pane-count">${esc(supLabel)}</span></div>
+        <div class="pane-header"><span class="pane-title">Rejected-Leaning (u<0) — ${esc(supLabel)}</span><span class="pane-count">${supTotal} total · top ${(sup.samples||[]).length}</span></div>
         ${(sup.samples || []).map(renderInspectorSampleRow).join("") || '<p class="loading-cell">No suppressing samples found.</p>'}
       </div>`;
   }

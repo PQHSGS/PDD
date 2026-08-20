@@ -14,13 +14,13 @@ for _pkg in ("torchvision", "torchaudio"):
         sys.modules[f"{_pkg}.io"] = None
         sys.modules[f"{_pkg}.ops"] = None
 
-import torch
-from huggingface_hub import hf_hub_download
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from typing import Any, Tuple
+import torch  # noqa: E402
+from huggingface_hub import hf_hub_download  # noqa: E402
+from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: E402
+from typing import Any, Tuple  # noqa: E402
 
-from .config import ModelConfig, SAEConfig
-from .logger import get_logger
+from .config import ModelConfig, SAEConfig  # noqa: E402
+from .logger import get_logger  # noqa: E402
 
 logger = get_logger("PDD.SAE")
 

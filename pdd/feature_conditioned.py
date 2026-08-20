@@ -8,7 +8,7 @@ import os
 import numpy as np
 from sklearn.cluster import MiniBatchKMeans
 from tqdm import tqdm
-from typing import List
+from typing import List, Optional
 
 from .config import FeatureConditionedConfig
 from .feature_clusters import FeatureClusterMap

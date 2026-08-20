@@ -24,7 +24,7 @@ import json
 import sys
 import urllib.request
 import urllib.error
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 
 BUILTIN_TEST_CASES = [

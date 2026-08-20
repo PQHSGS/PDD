@@ -267,9 +267,11 @@
               <h2 class="section-title">Behavior → Prompt</h2>
               <p class="section-desc">The inverse of <strong>Prompt → Behavior</strong>: instead of asking what a prompt predicts about a behavior, pick a response-feature cluster (refusal, math) and surface the preference pairs whose labels most strongly amplify or suppress it across the whole extracted dataset.</p>
             </div>
-            <div class="guide-box">
-              <span class="guide-title">💡 How to Read the Two Lists:</span>
-              <span class="guide-text"><strong>u &gt; 0 (Chosen-leaning):</strong> the chosen response carries the concept more than the rejected one — post-training amplifies this behavior. | <strong>u &lt; 0 (Rejected-leaning):</strong> the rejected response carries it — post-training suppresses this behavior. | <strong>s</strong> = cluster members firing anywhere in the pair.</span>
+            <div class="view-guide">
+              <div class="guide-box">
+                <span class="guide-title">💡 Two-Layer Behavioral Explorer (Paper-Grounded):</span>
+                <span class="guide-text"><strong>Layer 1 (Contexts B_k):</strong> Find which training data topics systematically amplify or suppress feature cluster T_m against dataset baselines (Δ = E_in[u] − E_out[u]). | <strong>Layer 2 (Samples):</strong> Drill down into context-confined preference pairs to inspect member feature firing and contribution scores.</span>
+              </div>
             </div>
           </div>
 
@@ -282,17 +284,16 @@
           <!-- Compound query builder (multi-cluster conditions) -->
           <div class="compound-bar">
             <div class="compound-builder">
-              <span class="guide-title">🔀 Compound query</span>
+              <span class="guide-title">Compound query</span>
               <select id="compound-cluster" class="compound-select" title="Feature cluster condition"></select>
               <select id="compound-dir" class="compound-select" title="Direction">
                 <option value="amplify">Amplify (chosen carries concept)</option>
                 <option value="suppress">Suppress (rejected carries concept)</option>
               </select>
-              <input type="number" id="compound-tau" value="0.1" step="0.05" min="0.01" class="compound-tau" title="|u| threshold this condition must exceed">
               <button id="compound-add" class="btn btn-secondary" title="Add this condition">+ Add condition</button>
-              <button id="compound-run" class="btn btn-primary" title="Rank samples matching ALL conditions">🔍 Run compound</button>
+              <button id="compound-run" class="btn btn-primary" title="Rank samples matching ALL conditions">Run compound</button>
             </div>
-            <div id="compound-conditions" class="compound-conditions"><span class="compound-hint">Add ≥2 conditions to find samples that amplify AND/OR suppress multiple clusters at once (a sample carries a u-score for every cluster, so it can satisfy many conditions).</span></div>
+            <div id="compound-conditions" class="compound-conditions"><span class="compound-hint">Add conditions to find samples that amplify AND/OR suppress multiple clusters.</span></div>
           </div>
 
           <div class="samples-meta-row" id="samples-meta-row">Select a cluster to begin.</div>

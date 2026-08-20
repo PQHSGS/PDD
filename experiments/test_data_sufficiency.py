@@ -38,6 +38,9 @@ import sys
 from typing import Any, Dict, List, Optional, Set
 import numpy as np
 
+# Ensure repository root is on sys.path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # Import discovery engine from test_data_bottlenecks
 try:
     from experiments.test_data_bottlenecks import find_bottlenecks
@@ -275,16 +278,28 @@ def evaluate_sufficiency(
     u_file = os.path.join(cache_dir, "example_u.npy")
     s_file = os.path.join(cache_dir, "example_s.npy")
     meta_file = os.path.join(cache_dir, "example_scores_meta.json")
+    u_mat = None
+    s_mat = None
+    cluster_ids = None
 
-    if not os.path.exists(u_file) or not os.path.exists(s_file):
-        print("Error: Precomputed cache not found. Ensure viewer prewarm ran.", file=sys.stderr)
+    if os.path.exists(u_file) and os.path.exists(s_file) and os.path.exists(meta_file):
+        with open(meta_file, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        cluster_ids = meta.get("cluster_ids", [])
+        u_mat = np.load(u_file, mmap_mode="r")
+        s_mat = np.load(s_file, mmap_mode="r")
+    else:
+        fc_file = os.path.join(ckpt_dir, "feature_conditioned.npz") if ckpt_dir else None
+        if fc_file and os.path.exists(fc_file):
+            from pdd.feature_conditioned import FeatureConditionedResult
+            fc = FeatureConditionedResult.load_checkpoint(fc_file)
+            u_mat = fc.u_matrix
+            s_mat = fc.s_matrix
+            cluster_ids = sorted(int(k) for k in labels_raw.keys()) if labels_raw else list(range(u_mat.shape[1]))
+
+    if u_mat is None or s_mat is None or cluster_ids is None:
+        print("Error: Could not load score matrices from run or checkpoint directory.", file=sys.stderr)
         sys.exit(1)
-
-    meta = json.load(open(meta_file))
-    cluster_ids = meta["cluster_ids"]
-
-    u_mat = np.load(u_file, mmap_mode="r")
-    s_mat = np.load(s_file, mmap_mode="r")
 
     member_c_file = os.path.join(cache_dir, "member_matrix_C_max.npy")
     member_cols_file = os.path.join(cache_dir, "member_cols.npy")
@@ -369,8 +384,8 @@ def evaluate_sufficiency(
                     "recommended_quota": res["recommended_quota"],
                     "llm_system_prompt": (
                         f"Generate {res['recommended_quota']} contrastive preference pairs under mode '{mode}':\n"
-                        f"- Concept A: {res['target_title']} ({desc_a})\n"
-                        f"- Concept B: {res['interference_title']} ({desc_b})\n"
+                        f"- Concept A: {res['target_title']} ({desc_a}) [Keywords: {', '.join(kws_a)}]\n"
+                        f"- Concept B: {res['interference_title']} ({desc_b}) [Keywords: {', '.join(kws_b)}]\n"
                         "- Format: JSON array of [{\"prompt\": \"...\", \"chosen\": \"...\", \"rejected\": \"...\"}]"
                     ),
                 })
@@ -411,6 +426,12 @@ def evaluate_sufficiency(
         tau=tau,
     )
 
+    print_single_report(res, target_cluster, interference_cluster, mode, export_report)
+    return res
+
+
+def print_single_report(res: Dict[str, Any], target_cluster: int, interference_cluster: Optional[int], mode: str, export_report: Optional[str] = None) -> None:
+    """Print human-readable diagnostic report for a single pair audit."""
     print("=" * 90)
     print(f"PDD BEHAVIORAL INTERFERENCE & DATA SUFFICIENCY AUDIT ({mode.upper()})")
     print(f"Concept A : T_{target_cluster} ({res['target_title']}) [Contains {res['total_target_features']} SAE Latent Features]")
@@ -418,35 +439,34 @@ def evaluate_sufficiency(
         print(f"Concept B : T_{interference_cluster} ({res['interference_title']})")
     print("=" * 90)
 
-    print(f"\n--- 1. OPTIMIZATION DYNAMICS & GRADIENT RANK ---")
+    print("\n--- 1. OPTIMIZATION DYNAMICS & GRADIENT RANK ---")
     print(f"  * Available Training Samples in Dataset : {res['sample_count']:,} pair(s)")
     print(f"  * Parameter Update Subspace Rank Bound  : {res['rank_bound']} (Maximum rank of loss gradient)")
     print(f"  * Stochastic Batch Visibility Chance    : {res['batch_visibility_pct']:.4f}% per batch (B=64)")
 
-    print(f"\n--- 2. SAE LATENT FEATURE COVERAGE (MECHANISTIC PROOF) ---")
+    print("\n--- 2. SAE LATENT FEATURE COVERAGE (MECHANISTIC PROOF) ---")
     print(f"  * Total Latents in Concept Community T_{target_cluster} : {res['total_target_features']} SAE features")
     print(f"  * Actively Steered Features in Subset    : {res['active_count']} features ({res['coverage_ratio']:.1f}%)")
     print(f"  * DEAD / UNTOUCHED Latents (0 Gradient)  : {res['dead_count']} features ({(res['dead_count']/max(1,res['total_target_features']))*100:.1f}%)")
     print(f"  * Sample Dead Features (Never Activated) : {res['dead_features'][:8]} ...")
 
-    print(f"\n--- 3. STATISTICAL CONFIDENCE & GENERALIZATION VERDICT ---")
+    print("\n--- 3. STATISTICAL CONFIDENCE & GENERALIZATION VERDICT ---")
     print(f"  * Statistical Welch z-Score Bound       : {res['welch_z']:.2f}" + (" (Fails p < 0.05 noise floor)" if res['welch_z'] < 2.0 else " (Significant)"))
     print(f"  * Memorization / Overfitting Risk Score : {res['risk_score']:.1f} / 100")
     print(f"  * Formal Sufficiency Verdict             : {res['verdict']}")
     print(f"    -> {res['verdict_description']}")
 
-    print(f"\n--- 4. ACTIONABLE PDD SYNTHETIC INOCULATION REQUIREMENT ---")
+    print("\n--- 4. ACTIONABLE PDD SYNTHETIC INOCULATION REQUIREMENT ---")
     if res['recommended_quota'] > 0:
         print(f"  * Required Synthetic Data Quota         : {res['recommended_quota']:,} targeted preference pairs")
         print(f"  * Inoculation Objective                 : Synthesize pairs satisfying ({mode}) to activate {res['dead_count']} un-steered latents.")
     else:
-        print(f"  * Synthetic Data Quota                 : 0 (Dataset is already robustly covered).")
+        print("  * Synthetic Data Quota                 : 0 (Dataset is already robustly covered).")
     print("=" * 90 + "\n")
 
     if export_report:
         with open(export_report, "w", encoding="utf-8") as f:
             json.dump(res, f, indent=2)
-        print(f"Saved formal sufficiency report to '{export_report}'.")
 
     return res
 

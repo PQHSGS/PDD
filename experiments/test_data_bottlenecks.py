@@ -31,6 +31,9 @@ import time
 from typing import Any, Dict, List, Optional
 import numpy as np
 
+# Ensure repository root is on sys.path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 
 def find_bottlenecks(
     run_dir: str = "runs/qwen3_1.7b_batchtopk_65k",
@@ -48,53 +51,47 @@ def find_bottlenecks(
     meta_file = os.path.join(cache_dir, "example_scores_meta.json")
     u_file = os.path.join(cache_dir, "example_u.npy")
     s_file = os.path.join(cache_dir, "example_s.npy")
+    u_mat = None
+    s_mat = None
+    cluster_ids = None
 
-    if not os.path.exists(u_file) or not os.path.exists(s_file):
-        print(f"Error: Precomputed score cache not found in {cache_dir}.", file=sys.stderr)
-        print("Please start the viewer once (`python -m pdd.viewer --run_dir ...`) to precompute the matrix cache.", file=sys.stderr)
+    if os.path.exists(u_file) and os.path.exists(s_file) and os.path.exists(meta_file):
+        with open(meta_file, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        cluster_ids = meta.get("cluster_ids", [])
+        print(f"Loading score matrices from viewer cache '{cache_dir}' for mode '{mode}'...")
+        u_mat = np.load(u_file, mmap_mode="r")
+        s_mat = np.load(s_file, mmap_mode="r")
+    else:
+        summary_file = os.path.join(run_dir, "pdd_summary.json")
+        if os.path.exists(summary_file):
+            with open(summary_file, "r", encoding="utf-8") as f:
+                summary = json.load(f)
+            ckpt_dir = summary.get("checkpoint_subfolder") or summary.get("config", {}).get("checkpoint_dir")
+            fc_file = os.path.join(ckpt_dir, "feature_conditioned.npz") if ckpt_dir else None
+            if fc_file and os.path.exists(fc_file):
+                from pdd.feature_conditioned import FeatureConditionedResult
+                fc = FeatureConditionedResult.load_checkpoint(fc_file)
+                u_mat = fc.u_matrix
+                s_mat = fc.s_matrix
+                labels_raw_data = {}
+                if os.path.exists(labels_file):
+                    with open(labels_file, "r", encoding="utf-8") as lf:
+                        labels_raw_data = json.load(lf).get("feature_clusters", {})
+                cluster_ids = sorted(int(k) for k in labels_raw_data.keys()) if labels_raw_data else list(range(u_mat.shape[1]))
+                print(f"Loaded score matrices directly from '{fc_file}' ({u_mat.shape})...")
+
+    if u_mat is None or s_mat is None or cluster_ids is None:
+        print(f"Error: Could not load score matrices from {run_dir}.", file=sys.stderr)
         sys.exit(1)
-
-    # If mode == "all", run across the 3 primary regimes
-    if mode == "all":
-        modes_to_run = ["amp_sup", "amp_amp", "sup_sup"]
-        all_results = []
-        for m in modes_to_run:
-            print(f"\n{'#' * 85}")
-            print(f"### RUNNING EXHAUSTIVE DISCOVERY FOR REGIME: {m.upper()}")
-            print(f"{'#' * 85}")
-            res = find_bottlenecks(
-                run_dir=run_dir, mode=m, tau=tau, min_demand=min_demand,
-                max_joint=max_joint, top_k=top_k, target_cluster=target_cluster
-            )
-            all_results.extend(res)
-
-        if export_path:
-            with open(export_path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "run_dir": run_dir,
-                    "mode": "all",
-                    "tau": tau,
-                    "total_deficits_found": len(all_results),
-                    "deficits": all_results,
-                }, f, indent=2)
-            print(f"Saved consolidated multi-regime deficit export to '{export_path}'.")
-
-        return all_results
 
     labels_raw = {}
     if os.path.exists(labels_file):
         with open(labels_file, "r", encoding="utf-8") as f:
-            labels_raw = json.load(f).get("feature_clusters", {})
+            raw_data = json.load(f)
+            labels_raw = raw_data.get("feature_clusters", raw_data)
 
-    with open(meta_file, "r", encoding="utf-8") as f:
-        meta = json.load(f)
-    cluster_ids = meta["cluster_ids"]
     K = len(cluster_ids)
-
-    print(f"Loading score matrices from '{cache_dir}' for mode '{mode}'...")
-    t0 = time.time()
-    u_mat = np.load(u_file, mmap_mode="r")
-    s_mat = np.load(s_file, mmap_mode="r")
     N = u_mat.shape[0]
 
     amp = ((u_mat > tau) & (s_mat > 0)).astype(np.float32)
@@ -121,6 +118,7 @@ def find_bottlenecks(
         print(f"Error: Unsupported mode '{mode}'. Choose from 'all', 'amp_sup', 'amp_amp', 'sup_sup', 'amp_neutral'.", file=sys.stderr)
         sys.exit(1)
 
+    t0 = time.time()
     joint_matrix = (mat_a.T @ mat_b).astype(np.int32)
     totals_a = mat_a.sum(axis=0).astype(np.int32)
     totals_b = mat_b.sum(axis=0).astype(np.int32)

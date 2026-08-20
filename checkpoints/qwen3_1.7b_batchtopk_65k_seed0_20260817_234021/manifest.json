@@ -1,7 +1,7 @@
 {
   "name": "qwen3_1.7b_batchtopk_65k",
   "seed": 0,
-  "timestamp": "2026-08-19 21:32:33",
+  "timestamp": "2026-08-19 23:48:32",
   "config": {
     "name": "qwen3_1.7b_batchtopk_65k",
     "seed": 0,
@@ -85,5 +85,10 @@
       "max_length": 512,
       "num_features": 50
     }
+  },
+  "extraction_state": {
+    "N": 259783,
+    "d_sae": 16384,
+    "ex_hash": "b69a0f55c812166a"
   }
 }

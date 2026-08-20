@@ -10,7 +10,6 @@ import argparse
 import json
 import os
 import numpy as np
-import torch
 
 from pdd.config import PipelineConfig
 from pdd.data import DatasetLoader, PreferenceExample

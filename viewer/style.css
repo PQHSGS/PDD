@@ -704,6 +704,24 @@ body {
   min-width: 0;
 }
 
+.example-item {
+  min-width: 0;
+}
+
+.example-item-prompt,
+.example-item-chosen,
+.example-item-rejected {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.compound-results {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
+}
+
 .samples-meta-row {
   margin-top: 10px;
 }
@@ -734,15 +752,7 @@ body {
   font-size: 0.85rem;
 }
 
-.compound-tau {
-  width: 72px;
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-color);
-  background: var(--bg-card);
-  color: var(--text-main);
-  font-size: 0.85rem;
-}
+
 
 .compound-conditions {
   display: flex;

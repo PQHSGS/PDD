@@ -24,7 +24,7 @@ import sys
 import urllib.request
 import urllib.error
 import urllib.parse
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 
 BENCHMARK_PROMPTS = [
@@ -118,10 +118,11 @@ def test_tab4_cluster(base_url: str, m: int, top_n: int = 3) -> None:
 
     # 1. Cluster Metadata & Labels
     meta = http_get(f"{base_url}/api/feature_cluster_info?m={m}&top_n=5")
-    title = meta.get("title", f"Feature Cluster T_{m}")
-    desc = meta.get("description", "")
-    kws = meta.get("keywords", [])
-    members = meta.get("features", [])
+    label = meta.get("label", {}) if isinstance(meta.get("label"), dict) else {}
+    title = label.get("title") or meta.get("title", f"Feature Cluster T_{m}")
+    desc = label.get("description") or meta.get("description", "")
+    kws = label.get("keywords") or meta.get("keywords", [])
+    members = meta.get("top_features") or meta.get("features", [])
 
     print(f"Title      : {title}")
     print(f"Description: {desc}")
@@ -162,7 +163,7 @@ def test_mode_a_prompt(base_url: str, prompt_text: str, category: str = "", top_
     """Test Mode A on prompt and automatically fetch the driving Tab 4 training examples."""
     base_url = base_url.rstrip("/")
     print("=" * 80)
-    print(f"MODE A PREDICTION -> TAB 4 CAUSAL TEST")
+    print("MODE A PREDICTION -> TAB 4 CAUSAL TEST")
     if category:
         print(f"Category: {category}")
     print("=" * 80)
