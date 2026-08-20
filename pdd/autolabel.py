@@ -17,10 +17,10 @@ import threading
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
-import warnings
+import logging as _log
 from tqdm import tqdm
 
-warnings.filterwarnings("ignore", message=".*MatMul8bitLt.*")
+_log.getLogger("bitsandbytes.autograd._functions").setLevel(_log.ERROR)
 
 from .config import AutoLabelConfig, FeatureConditionedConfig, PromptConditionedConfig
 from .logger import get_logger
