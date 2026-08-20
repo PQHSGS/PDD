@@ -130,7 +130,7 @@ class PDDPipeline:
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "config": self.cfg.to_dict(),
         }
-        manifest_tmp = manifest_ckpt + ".tmp"
+        manifest_tmp = manifest_ckpt + f".{os.getpid()}.tmp"
         with open(manifest_tmp, "w", encoding="utf-8") as f:
             json.dump(manifest_data, f, indent=2)
         os.replace(manifest_tmp, manifest_ckpt)

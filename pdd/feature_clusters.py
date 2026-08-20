@@ -30,14 +30,16 @@ class FeatureClusterMap:
         return len(self.clusters)
 
     def save_json(self, filepath: str) -> None:
-        """Save cluster mapping to disk as JSON."""
+        """Save cluster mapping to disk as JSON atomically."""
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
         data = {
             "clusters": {str(k): v for k, v in self.clusters.items()},
             "feature_to_cluster": {str(k): v for k, v in self.feature_to_cluster.items()},
         }
-        with open(filepath, "w", encoding="utf-8") as f:
+        tmp_path = filepath + f".{os.getpid()}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+        os.replace(tmp_path, filepath)
 
     @classmethod
     def load_json(cls, filepath: str) -> FeatureClusterMap:

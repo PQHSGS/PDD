@@ -61,7 +61,7 @@ def write_matrices_state(dirpath: str, matrices: "FeatureMatrices") -> None:
             with open(manifest_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             data["extraction_state"] = state
-            tmp_path = manifest_path + ".tmp"
+            tmp_path = manifest_path + f".{os.getpid()}.tmp"
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             os.replace(tmp_path, manifest_path)
@@ -70,7 +70,7 @@ def write_matrices_state(dirpath: str, matrices: "FeatureMatrices") -> None:
 
     # 2. Write matrices_state.json for legacy compatibility
     state_path = os.path.join(dirpath, "matrices_state.json")
-    tmp_path = state_path + ".tmp"
+    tmp_path = state_path + f".{os.getpid()}.tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
     os.replace(tmp_path, state_path)

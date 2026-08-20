@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass
 import json
 import os
 import re
+import threading
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -49,7 +50,7 @@ def pc_cluster_examples_path(run_dir: Union[str, "os.PathLike[str]"]) -> str:
 def _save_json(path: str, data: Dict[str, Any]) -> None:
     """Atomic JSON write (tmp + replace) so a crash never corrupts an artifact."""
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    tmp_path = path + ".tmp"
+    tmp_path = path + f".{os.getpid()}_{threading.get_ident()}.tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
     os.replace(tmp_path, path)
