@@ -47,6 +47,23 @@ def _read_json(path: Path) -> Optional[Any]:
         return None
 
 
+def _save_json(path: Path, data: Any, indent: Optional[int] = None) -> None:
+    """Atomically write a JSON file using a thread-safe temporary file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f".{path.stem}_{os.getpid()}_{threading.get_ident()}.tmp.json"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=indent)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
+        raise
+
+
 def _mtime_of(path: Path) -> float:
     """mtime of ``path`` (0.0 when missing) so lazy loaders can detect pipeline updates."""
     try:
@@ -496,8 +513,7 @@ class ViewerState:
         data = self._neuronpedia_feature(np_set[0], np_set[1], f)
         if data is not None:
             try:
-                with open(cache_file, "w", encoding="utf-8") as fp:
-                    json.dump(data, fp)
+                _save_json(cache_file, data)
             except Exception as e:
                 logger.debug(f"Failed to persist Neuronpedia cache for feature {f}: {e}")
         return data
@@ -929,10 +945,7 @@ class ViewerState:
         cache_dir = self.run_dir / "viewer_cache"
         if cache_dir.is_dir() and self._feat_delta is not None:
             self._save_npy(cache_dir / "feature_delta.npy", self._feat_delta)
-            meta_tmp = cache_dir / "feature_delta_meta.json.tmp"
-            with open(meta_tmp, "w", encoding="utf-8") as f:
-                json.dump({"tau": self._feature_delta_tau()}, f)
-            os.replace(meta_tmp, cache_dir / "feature_delta_meta.json")
+            _save_json(cache_dir / "feature_delta_meta.json", {"tau": self._feature_delta_tau()})
 
     def _persist_member_cache(self, mats) -> None:
         """Atomically write the built member cache under <run_dir>/viewer_cache/."""
@@ -949,10 +962,7 @@ class ViewerState:
         for name, arr in payload.items():
             if arr is not None:
                 self._save_npy(cache_dir / name, arr)
-        meta_tmp = cache_dir / "meta.json.tmp"
-        with open(meta_tmp, "w", encoding="utf-8") as f:
-            json.dump(self._member_cache_meta(mats), f, indent=2)
-        os.replace(meta_tmp, cache_dir / "meta.json")
+        _save_json(cache_dir / "meta.json", self._member_cache_meta(mats), indent=2)
         logger.info(f"Persisted member cache to {cache_dir}.")
 
     def _load_member_cache(self, mats) -> None:
@@ -1200,11 +1210,10 @@ class ViewerState:
             self._save_npy(cache_dir / "example_u.npy", u)
             self._save_npy(cache_dir / "example_s.npy", s)
             self._save_npy(cache_dir / "example_cluster_ids.npy", np.asarray(cluster_ids, dtype=np.int64))
-
-            meta_tmp = cache_dir / f".example_scores_meta_{os.getpid()}_{threading.get_ident()}.json.tmp"
-            with open(meta_tmp, "w", encoding="utf-8") as f:
-                json.dump({"tau": tau, "cluster_ids": cluster_ids, "matrices": self._member_cache_meta(mats)}, f)
-            os.replace(meta_tmp, cache_dir / "example_scores_meta.json")
+            _save_json(
+                cache_dir / "example_scores_meta.json",
+                {"tau": tau, "cluster_ids": cluster_ids, "matrices": self._member_cache_meta(mats)},
+            )
 
             self._example_u = u
             self._example_s = s
