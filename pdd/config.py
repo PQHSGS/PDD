@@ -122,6 +122,8 @@ class AutoLabelConfig:
     pc_n_top: int = 15                        # Examples per A_k / R_m in Pass 3
     max_prompt_chars: int = 600               # Max text length shown to the LLM
     max_examples: int = 15                    # Max examples per cluster shown to the LLM
+    max_new_tokens: int = 50                  # Max output tokens for JSON generation
+    batch_size: int = 8                       # Inference batch size for multi-cluster labeling
 
     def validate(self) -> None:
         if not self.label_model:
@@ -132,6 +134,10 @@ class AutoLabelConfig:
             raise ValueError("max_prompt_chars must be positive.")
         if self.max_examples <= 0:
             raise ValueError("max_examples must be positive.")
+        if self.max_new_tokens <= 0:
+            raise ValueError("max_new_tokens must be positive.")
+        if self.batch_size <= 0:
+            raise ValueError("batch_size must be positive.")
 
 
 @dataclass

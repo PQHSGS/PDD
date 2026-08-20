@@ -20,10 +20,10 @@ import numpy as np
 import logging as _log
 from tqdm import tqdm
 
-_log.getLogger("bitsandbytes.autograd._functions").setLevel(_log.ERROR)
-
 from .config import AutoLabelConfig, FeatureConditionedConfig, PromptConditionedConfig
 from .logger import get_logger
+
+_log.getLogger("bitsandbytes.autograd._functions").setLevel(_log.ERROR)
 
 if TYPE_CHECKING:
     from .data import PreferenceExample
@@ -226,11 +226,15 @@ class LLMClusterLabeler(ClusterAutoLabeler):
         max_prompt_chars: int = 600,
         max_examples: int = 10,
         min_vram_gb: float = 3.5,
+        max_new_tokens: int = 50,
+        batch_size: int = 8,
     ):
         super().__init__(max_prompt_chars=max_prompt_chars)
         self.model_path = model_path
         self.max_examples = max_examples
         self.min_vram_gb = min_vram_gb
+        self.max_new_tokens = max_new_tokens
+        self.batch_size = batch_size
         self._model = None
         self._tokenizer = None
         self._device = None
@@ -255,13 +259,12 @@ class LLMClusterLabeler(ClusterAutoLabeler):
                     dtype = torch.bfloat16
                     # INT8 quantization halves VRAM (~4GB vs ~8GB) with negligible quality loss
                     try:
-                        import bitsandbytes as bnb
                         from transformers import BitsAndBytesConfig
                         quant_config = BitsAndBytesConfig(
                             load_in_8bit=True,
                             llm_int8_threshold=6.0,
                         )
-                        logger.info(f"Using bitsandbytes INT8 quantization for label model.")
+                        logger.info("Using bitsandbytes INT8 quantization for label model.")
                     except Exception as e:
                         logger.debug(f"bitsandbytes INT8 unavailable ({e}); loading in BF16.")
                 else:
@@ -275,6 +278,7 @@ class LLMClusterLabeler(ClusterAutoLabeler):
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_path, token=True)
         if self._tokenizer.pad_token_id is None:
             self._tokenizer.pad_token_id = self._tokenizer.eos_token_id
+        self._tokenizer.padding_side = "left"
         load_kwargs = {"torch_dtype": dtype, "device_map": device, "token": True}
         if quant_config is not None:
             load_kwargs["quantization_config"] = quant_config
@@ -374,22 +378,12 @@ class LLMClusterLabeler(ClusterAutoLabeler):
             fallback,
         )
 
-    def _label_dict(self, texts: List[str], kind: str = "prompt") -> Optional[Dict[str, Any]]:
-        """Ask the LLM to label a cluster of ``texts``, returning the raw parsed JSON dict.
-
-        ``kind`` switches the instruction between "user prompts" (data clusters B_k)
-        and "response texts" (SAE feature clusters T_m). Returns None on any failure
-        so the caller can fall back to the keyword heuristic.
-        """
-        import torch
-
-        if not texts:
-            return None
-        self.load()
+    def _build_prompt_message(self, texts: List[str], kind: str = "prompt") -> str:
+        """Format the system instruction and real prompt/response examples into a single prompt string."""
         examples = "\n\n".join(f"[{i}]\n{self._truncate(t, self.max_prompt_chars)}" for i, t in enumerate(texts, 1))
 
         if kind == "response":
-            instruction = (
+            return (
                 "You are analyzing a Sparse Autoencoder (SAE) feature cluster extracted from model activations. "
                 "Below are representative prompt-response pairs from an RLHF dataset where this specific feature cluster fires. "
                 "Each example shows the cluster's activation strength (0.0 = no firing, higher = stronger firing).\n\n"
@@ -403,7 +397,7 @@ class LLMClusterLabeler(ClusterAutoLabeler):
                 "Do NOT output markdown commentary or conversational filler. Output ONLY the JSON object."
             )
         else:
-            instruction = (
+            return (
                 "You are analyzing a prompt topic cluster from an instruction-tuning preference dataset. "
                 "Below are representative user prompts belonging to this cluster:\n\n"
                 f"{examples}\n\n"
@@ -415,33 +409,65 @@ class LLMClusterLabeler(ClusterAutoLabeler):
                 'Output ONLY a valid JSON object, e.g. {"title": "Python Scripting Assistance", "description": "User requests for writing, debugging, and explaining Python scripts.", "keywords": ["python", "scripting", "debugging", "functions"]}.\n'
                 "Do NOT output markdown commentary or conversational filler. Output ONLY the JSON object."
             )
-        messages = [{"role": "user", "content": instruction}]
+
+    def _label_dicts_batch(self, batch_items: List[Tuple[List[str], str]]) -> List[Optional[Dict[str, Any]]]:
+        """Batched inference over multiple clusters [(texts_1, kind_1), (texts_2, kind_2), ...]."""
+        import torch
+
+        if not batch_items:
+            return []
+        self.load()
+
+        formatted_prompts = []
         template_kwargs = self._chat_template_kwargs()
-        try:
-            inputs = self._tokenizer.apply_chat_template(
-                messages, tokenize=True, add_generation_prompt=True,
-                return_tensors="pt", **template_kwargs,
-            ).to(self._device)
-        except Exception as e:
-            logger.warning(
-                f"Chat template rejected thinking-control kwargs {template_kwargs} ({e}); "
-                "falling back to the plain chat template (thinking mode may be on)."
-            )
-            inputs = self._tokenizer.apply_chat_template(
-                messages, tokenize=True, add_generation_prompt=True, return_tensors="pt",
-            ).to(self._device)
+        for texts, kind in batch_items:
+            msg = self._build_prompt_message(texts, kind=kind)
+            messages = [{"role": "user", "content": msg}]
+            try:
+                prompt_str = self._tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True, **template_kwargs
+                )
+            except Exception as e:
+                logger.debug(f"Chat template kwargs rejected ({e}); falling back to plain template.")
+                prompt_str = self._tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True
+                )
+            formatted_prompts.append(prompt_str)
+
+        enc = self._tokenizer(
+            formatted_prompts,
+            padding=True,
+            return_tensors="pt"
+        ).to(self._device)
 
         pad_token_id = self._tokenizer.pad_token_id if self._tokenizer.pad_token_id is not None else self._tokenizer.eos_token_id
+        prompt_len = enc.input_ids.shape[1]
+
         with torch.no_grad():
             outputs = self._model.generate(
-                inputs,
-                max_new_tokens=512,
+                **enc,
+                max_new_tokens=self.max_new_tokens,
                 do_sample=False,
                 pad_token_id=pad_token_id,
             )
-        gen_ids = outputs[0][inputs.shape[1]:]
-        text = self._tokenizer.decode(gen_ids, skip_special_tokens=True)
-        return self._extract_json(text)
+
+        results = []
+        for i in range(len(formatted_prompts)):
+            gen_ids = outputs[i, prompt_len:]
+            text = self._tokenizer.decode(gen_ids, skip_special_tokens=True)
+            results.append(self._extract_json(text))
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        return results
+
+    def _label_dict(self, texts: List[str], kind: str = "prompt") -> Optional[Dict[str, Any]]:
+        """Ask the LLM to label a cluster of ``texts``, returning the raw parsed JSON dict."""
+        if not texts:
+            return None
+        res = self._label_dicts_batch([(texts, kind)])
+        return res[0] if res else None
 
     def _clean_label(self, parsed: Dict[str, Any], fallback: ClusterLabel) -> Tuple[str, str, List[str]]:
         """Normalize a parsed LLM label (title/description/keywords) against a keyword fallback.
@@ -457,6 +483,55 @@ class LLMClusterLabeler(ClusterAutoLabeler):
         kws = [str(k).strip().lower() for k in kws if str(k).strip()][:5]
         return title, desc, kws
 
+    def generate_labels_batch(
+        self,
+        cluster_items: List[Tuple[int, List[str], List[str]]],
+    ) -> List[ClusterLabel]:
+        """Generate semantic labels for a batch of data clusters [(cluster_id, centroid_p, sample_p), ...]."""
+        results: List[ClusterLabel] = []
+        to_infer: List[Tuple[int, List[str], ClusterLabel]] = []
+
+        for cluster_id, centroid_prompts, sample_prompts in cluster_items:
+            fallback = super().generate_label(cluster_id, centroid_prompts, sample_prompts)
+            if cluster_id == 0:
+                results.append(fallback)
+                continue
+            all_prompts = centroid_prompts[: self.max_examples] or sample_prompts[: self.max_examples]
+            if not all_prompts:
+                results.append(fallback)
+                continue
+            to_infer.append((cluster_id, all_prompts, fallback))
+
+        if not to_infer:
+            return results
+
+        batch_inputs = [(prompts, "prompt") for _, prompts, _ in to_infer]
+        try:
+            parsed_list = self._label_dicts_batch(batch_inputs)
+        except Exception as e:
+            logger.warning(f"Batch LLM labeling failed ({e}); using keyword fallback for batch.")
+            parsed_list = [None] * len(to_infer)
+
+        for (cluster_id, _, fallback), parsed in zip(to_infer, parsed_list):
+            if parsed is None:
+                logger.warning(f"LLM label for B_{cluster_id} was not valid JSON; using keyword fallback.")
+                results.append(fallback)
+                continue
+            title, desc, kws = self._clean_label(parsed, fallback)
+            if not kws:
+                kws = fallback.keywords
+            results.append(ClusterLabel(
+                cluster_id=cluster_id,
+                title=title[:120],
+                description=desc[:600],
+                keywords=kws,
+                centroid_prompts=fallback.centroid_prompts,
+                sample_prompts=fallback.sample_prompts,
+            ))
+
+        id_to_label = {lbl.cluster_id: lbl for lbl in results}
+        return [id_to_label[c_id] for c_id, _, _ in cluster_items if c_id in id_to_label]
+
     def generate_label(
         self,
         cluster_id: int,
@@ -464,35 +539,8 @@ class LLMClusterLabeler(ClusterAutoLabeler):
         sample_prompts: List[str],
     ) -> ClusterLabel:
         """Generate a semantic label for data cluster B_k from REAL sampled prompts."""
-        # B_0 is always the silent (low-activity) bucket; never send it to the LLM.
-        if cluster_id == 0:
-            return super().generate_label(cluster_id, centroid_prompts, sample_prompts)
-
-        fallback = super().generate_label(cluster_id, centroid_prompts, sample_prompts)
-        all_prompts = centroid_prompts[: self.max_examples] or sample_prompts[: self.max_examples]
-
-        try:
-            self.load()
-            parsed = self._label_dict(all_prompts, kind="prompt")
-        except Exception as e:
-            logger.warning(f"LLM labeling failed for B_{cluster_id} ({e}); using keyword fallback.")
-            return fallback
-
-        if parsed is None:
-            logger.warning(f"LLM label for B_{cluster_id} was not valid JSON; using keyword fallback.")
-            return fallback
-
-        title, desc, kws = self._clean_label(parsed, fallback)
-        if not kws:
-            kws = fallback.keywords
-        return ClusterLabel(
-            cluster_id=cluster_id,
-            title=title[:120],
-            description=desc[:600],
-            keywords=kws,
-            centroid_prompts=centroid_prompts[:5],
-            sample_prompts=sample_prompts[:5],
-        )
+        res = self.generate_labels_batch([(cluster_id, centroid_prompts, sample_prompts)])
+        return res[0] if res else super().generate_label(cluster_id, centroid_prompts, sample_prompts)
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +564,8 @@ class AutoLabelingPipeline:
             model_path=self.cfg.label_model,
             max_prompt_chars=self.cfg.max_prompt_chars,
             max_examples=self.cfg.max_examples,
+            max_new_tokens=getattr(self.cfg, "max_new_tokens", 50),
+            batch_size=getattr(self.cfg, "batch_size", 8),
         )
 
     def _label_data_clusters(
@@ -525,26 +575,42 @@ class AutoLabelingPipeline:
         fc_res: Any,
         seed: int,
     ) -> int:
-        """Pass 1: LLM (or keyword) labels for data clusters B_k."""
+        """Pass 1: LLM (or keyword) labels for data clusters B_k in batches."""
         unique_clusters = sorted(set(fc_res.cluster_assignments.tolist()))
         if self.cfg.num_clusters > 0:
             unique_clusters = unique_clusters[: self.cfg.num_clusters]
 
         out_path = cluster_labels_path(self.run_dir)
         labels: List[Dict[str, Any]] = []
-        for idx, k in enumerate(tqdm(unique_clusters, desc="Pass 1: labeling data clusters", unit="cluster")):
-            centroid_p, sample_p = labeler.sample_cluster_prompts(
-                examples=examples,
-                cluster_assignments=fc_res.cluster_assignments,
-                s_matrix=fc_res.s_matrix,
-                cluster_id=k,
-                seed=seed,
-            )
-            labels.append(asdict(labeler.generate_label(k, centroid_p, sample_p)))
-            if (idx + 1) % 10 == 0:
-                _save_json(out_path, {"total_clusters": len(labels), "labels": labels})
-                logger.info(f"  ...{idx + 1}/{len(unique_clusters)} labeled (checkpoint saved).")
+        batch_size = getattr(self.cfg, "batch_size", 8)
 
+        pbar = tqdm(total=len(unique_clusters), desc="Pass 1: labeling data clusters", unit="cluster")
+        for i in range(0, len(unique_clusters), batch_size):
+            batch_ids = unique_clusters[i:i + batch_size]
+            batch_items = []
+            for k in batch_ids:
+                centroid_p, sample_p = labeler.sample_cluster_prompts(
+                    examples=examples,
+                    cluster_assignments=fc_res.cluster_assignments,
+                    s_matrix=fc_res.s_matrix,
+                    cluster_id=k,
+                    seed=seed,
+                )
+                batch_items.append((k, centroid_p, sample_p))
+
+            if isinstance(labeler, LLMClusterLabeler):
+                batch_labels = labeler.generate_labels_batch(batch_items)
+            else:
+                batch_labels = [labeler.generate_label(k, c_p, s_p) for k, c_p, s_p in batch_items]
+
+            for lbl in batch_labels:
+                labels.append(asdict(lbl))
+
+            pbar.update(len(batch_ids))
+            if (len(labels) // batch_size) % 2 == 0:
+                _save_json(out_path, {"total_clusters": len(labels), "labels": labels})
+
+        pbar.close()
         _save_json(out_path, {"total_clusters": len(labels), "labels": labels})
         return len(labels)
 
@@ -555,11 +621,15 @@ class AutoLabelingPipeline:
         matrices: Any,
         clusters: Dict[int, Sequence[int]],
     ) -> int:
-        """Pass 2: whole-cluster labels for SAE feature clusters T_m."""
+        """Pass 2: whole-cluster labels for SAE feature clusters T_m in batches."""
         d_sae = matrices.C_max.shape[1]
         out_path = feature_cluster_labels_path(self.run_dir)
         labels: Dict[str, Dict[str, Any]] = {}
-        for m in tqdm(sorted(clusters.keys()), desc="Pass 2: labeling feature clusters", unit="cluster"):
+        batch_size = getattr(self.cfg, "batch_size", 8)
+
+        active_clusters = sorted(clusters.keys())
+        cluster_prepared = []
+        for m in active_clusters:
             feats = [f for f in clusters[m] if 0 <= f < d_sae]
             if not feats:
                 continue
@@ -567,7 +637,6 @@ class AutoLabelingPipeline:
             scores = np.asarray(firing.sum(axis=1)).ravel()
 
             # Stratified sampling: pick examples across activation deciles for diversity
-            # (Neuronpedia autointerp finding: top-only sampling has high specificity but low sensitivity)
             n_samples = min(20, max(10, len(feats) // 2))
             firing_mask = scores > 0
             firing_indices = np.where(firing_mask)[0]
@@ -583,12 +652,10 @@ class AutoLabelingPipeline:
                 if len(in_range) > 0:
                     pick = in_range[np.argsort(-firing_scores[in_range])[:n_per_decile]]
                     selected.extend(firing_indices[pick].tolist())
-            # Deduplicate, cap at n_samples, sort by score descending
             selected = list(dict.fromkeys(selected))[:n_samples]
             selected.sort(key=lambda i: -scores[i])
             idxs = [int(i) for i in selected if int(i) < len(examples)]
 
-            # Show activation strength so LLM sees firing intensity
             texts = [
                 f"[Activation: {scores[i]:.3f}]\n"
                 f"Prompt: {(examples[i].prompt or '').strip()[:180]}\n"
@@ -598,24 +665,43 @@ class AutoLabelingPipeline:
             ]
 
             fallback = labeler._keyword_label(m, texts, [])
+            cluster_prepared.append((m, texts, fallback))
+
+        pbar = tqdm(total=len(cluster_prepared), desc="Pass 2: labeling feature clusters", unit="cluster")
+        for i in range(0, len(cluster_prepared), batch_size):
+            batch = cluster_prepared[i:i + batch_size]
             if isinstance(labeler, LLMClusterLabeler):
-                # Keyword-heuristic fallback only — never fire an extra LLM call here.
-                parsed = labeler._label_dict(texts, kind="response")
-                if parsed is None:
-                    logger.warning(f"LLM label for T_{m} was not valid JSON; using keyword fallback.")
-                    title, desc, kws = fallback.title, fallback.description, []
-                else:
-                    title, desc, kws = labeler._clean_label(parsed, fallback)
+                batch_inputs = [(texts, "response") for _, texts, _ in batch]
+                try:
+                    parsed_list = labeler._label_dicts_batch(batch_inputs)
+                except Exception as e:
+                    logger.warning(f"Batch LLM feature labeling failed ({e}); using keyword fallback.")
+                    parsed_list = [None] * len(batch)
+
+                for (m, _, fallback), parsed in zip(batch, parsed_list):
+                    if parsed is None:
+                        logger.warning(f"LLM label for T_{m} was not valid JSON; using keyword fallback.")
+                        title, desc, kws = fallback.title, fallback.description, []
+                    else:
+                        title, desc, kws = labeler._clean_label(parsed, fallback)
+                    labels[str(m)] = {
+                        "title": str(title)[:120],
+                        "description": str(desc)[:600],
+                        "keywords": [str(k).strip().lower() for k in kws if str(k).strip()][:5],
+                    }
+                    logger.info(f"T_{m}: {labels[str(m)]['title']}")
             else:
-                title, desc, kws = fallback.title, fallback.description, fallback.keywords
+                for m, _, fallback in batch:
+                    labels[str(m)] = {
+                        "title": str(fallback.title)[:120],
+                        "description": str(fallback.description)[:600],
+                        "keywords": [str(k).strip().lower() for k in fallback.keywords if str(k).strip()][:5],
+                    }
+                    logger.info(f"T_{m}: {labels[str(m)]['title']}")
 
-            labels[str(m)] = {
-                "title": str(title)[:120],
-                "description": str(desc)[:600],
-                "keywords": [str(k).strip().lower() for k in kws if str(k).strip()][:5],
-            }
-            logger.info(f"T_{m}: {labels[str(m)]['title']}")
+            pbar.update(len(batch))
 
+        pbar.close()
         payload: Dict[str, Any] = {"feature_clusters": labels}
         _save_json(out_path, payload)
         return len(labels)
