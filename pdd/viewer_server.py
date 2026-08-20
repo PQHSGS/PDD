@@ -100,6 +100,8 @@ class ViewerState:
         self.k_to_pc: Dict[int, List[Dict[str, Any]]] = {}
         self.inspector = None
         self._examples_lock = threading.Lock()
+        self._scores_lock = threading.Lock()
+        self._member_cache_lock = threading.Lock()
         self._feat_to_cluster: Optional[Dict[int, int]] = None
         self._feature_matrices = None
         self._examples = None
@@ -902,10 +904,22 @@ class ViewerState:
 
     @staticmethod
     def _save_npy(path: Path, arr: np.ndarray) -> None:
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        with open(tmp, "wb") as f:
-            np.save(f, arr)
-        os.replace(tmp, path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        import tempfile
+        tmp_file = tempfile.NamedTemporaryFile(
+            dir=path.parent, prefix=f".{path.stem}_{os.getpid()}_{threading.get_ident()}_", suffix=".tmp.npy", delete=False
+        )
+        try:
+            with open(tmp_file.name, "wb") as f:
+                np.save(f, arr)
+            os.replace(tmp_file.name, path)
+        except Exception:
+            try:
+                if os.path.exists(tmp_file.name):
+                    os.remove(tmp_file.name)
+            except Exception:
+                pass
+            raise
 
     def _feature_delta_tau(self) -> float:
         """The B.1 tau threshold the cached per-feature delta was computed with."""
@@ -949,42 +963,43 @@ class ViewerState:
         + feature clusters on every start; any source change (re-clustering, new
         matrices) rebuilds automatically — no manual rebuild script.
         """
-        if not self.feature_clusters:
-            logger.info("No feature clusters for this run; skipping member cache.")
-            return
-        cache_dir = self.run_dir / "viewer_cache"
-        cache_files = [
-            "member_cols.npy", "positions_C_max.npy", "positions_R_max.npy",
-            "member_matrix_C_max.npy", "member_matrix_R_max.npy", "feature_totals.npy",
-        ]
-        meta = _read_json(cache_dir / "meta.json")
-        if all((cache_dir / f).exists() for f in cache_files) and self._member_cache_valid(mats, meta):
-            try:
-                self._all_member_cols = np.load(cache_dir / "member_cols.npy")
-                self._member_positions_cache = {
-                    "C_max": np.load(cache_dir / "positions_C_max.npy"),
-                    "R_max": np.load(cache_dir / "positions_R_max.npy"),
-                }
-                self._member_matrices = {
-                    "C_max": np.load(cache_dir / "member_matrix_C_max.npy", mmap_mode="r"),
-                    "R_max": np.load(cache_dir / "member_matrix_R_max.npy", mmap_mode="r"),
-                }
-                self._feature_totals = np.load(cache_dir / "feature_totals.npy")
-                fd_path = cache_dir / "feature_delta.npy"
-                if fd_path.exists():
-                    fd_meta = _read_json(cache_dir / "feature_delta_meta.json")
-                    if fd_meta is None:
-                        logger.debug(f"No feature_delta meta in {cache_dir}; assuming default tau.")
-                        fd_meta = {}
-                    if float(fd_meta.get("tau", 0.01)) == self._feature_delta_tau():
-                        self._feat_delta = np.load(fd_path)
-                logger.info(f"Loaded member cache from {cache_dir} (mmap).")
+        with self._member_cache_lock:
+            if not self.feature_clusters:
+                logger.info("No feature clusters for this run; skipping member cache.")
                 return
-            except Exception as e:
-                logger.warning(f"Failed to load member cache ({e}); rebuilding.")
-        self._feature_firings()
-        self._feature_delta()
-        self._persist_member_cache(mats)
+            cache_dir = self.run_dir / "viewer_cache"
+            cache_files = [
+                "member_cols.npy", "positions_C_max.npy", "positions_R_max.npy",
+                "member_matrix_C_max.npy", "member_matrix_R_max.npy", "feature_totals.npy",
+            ]
+            meta = _read_json(cache_dir / "meta.json")
+            if all((cache_dir / f).exists() for f in cache_files) and self._member_cache_valid(mats, meta):
+                try:
+                    self._all_member_cols = np.load(cache_dir / "member_cols.npy")
+                    self._member_positions_cache = {
+                        "C_max": np.load(cache_dir / "positions_C_max.npy"),
+                        "R_max": np.load(cache_dir / "positions_R_max.npy"),
+                    }
+                    self._member_matrices = {
+                        "C_max": np.load(cache_dir / "member_matrix_C_max.npy", mmap_mode="r"),
+                        "R_max": np.load(cache_dir / "member_matrix_R_max.npy", mmap_mode="r"),
+                    }
+                    self._feature_totals = np.load(cache_dir / "feature_totals.npy")
+                    fd_path = cache_dir / "feature_delta.npy"
+                    if fd_path.exists():
+                        fd_meta = _read_json(cache_dir / "feature_delta_meta.json")
+                        if fd_meta is None:
+                            logger.debug(f"No feature_delta meta in {cache_dir}; assuming default tau.")
+                            fd_meta = {}
+                        if float(fd_meta.get("tau", 0.01)) == self._feature_delta_tau():
+                            self._feat_delta = np.load(fd_path)
+                    logger.info(f"Loaded member cache from {cache_dir} (mmap).")
+                    return
+                except Exception as e:
+                    logger.warning(f"Failed to load member cache ({e}); rebuilding.")
+            self._feature_firings()
+            self._feature_delta()
+            self._persist_member_cache(mats)
 
     def prewarm(self) -> None:
         """Load (or build + persist) the SAE cluster member cache at startup."""
@@ -1113,74 +1128,75 @@ class ViewerState:
         same fingerprint as the member cache so re-clustering/rebuilds refresh them. Tab-4
         queries then only sort a 260k column in-RAM — milliseconds, not a per-query scan.
         """
-        if self._example_u is not None and self._example_s is not None:
-            return
-        cluster_ids = sorted(int(k) for k in self.feature_clusters.keys())
-        if not cluster_ids:
-            return
-        cache_dir = self.run_dir / "viewer_cache"
-        meta = _read_json(cache_dir / "example_scores_meta.json")
-        if (
-            all((cache_dir / f).exists() for f in ("example_u.npy", "example_s.npy", "example_cluster_ids.npy"))
-            and meta is not None
-            and meta.get("matrices") == self._member_cache_meta(mats)
-            and float(meta.get("tau", -1.0)) == self._feature_delta_tau()
-            and meta.get("cluster_ids") == cluster_ids
-        ):
-            try:
-                self._example_u = np.load(cache_dir / "example_u.npy", mmap_mode="r")
-                self._example_s = np.load(cache_dir / "example_s.npy", mmap_mode="r")
-                self._example_cluster_ids = np.load(cache_dir / "example_cluster_ids.npy")
-                logger.info(f"Loaded per-example scores from {cache_dir} (mmap).")
+        with self._scores_lock:
+            if self._example_u is not None and self._example_s is not None:
                 return
-            except Exception as e:
-                logger.warning(f"Failed to load per-example scores ({e}); recomputing.")
-        if self._all_member_cols is None:
-            self._all_member_cols = self._expected_member_cols()
-        n_members = int(len(self._all_member_cols))
-        K = len(cluster_ids)
-        A = np.zeros((n_members, K), dtype=np.float32)
-        for c_idx, cid in enumerate(cluster_ids):
-            feats = np.asarray(self.feature_clusters[cid], dtype=np.int64)
-            if len(feats) == 0:
-                continue
-            slots = np.searchsorted(self._all_member_cols, feats)
-            A[slots, c_idx] = 1.0
-        cluster_sizes = np.maximum(A.sum(axis=0), 1.0)
-        tau = self._feature_delta_tau()
+            cluster_ids = sorted(int(k) for k in self.feature_clusters.keys())
+            if not cluster_ids:
+                return
+            cache_dir = self.run_dir / "viewer_cache"
+            meta = _read_json(cache_dir / "example_scores_meta.json")
+            if (
+                all((cache_dir / f).exists() for f in ("example_u.npy", "example_s.npy", "example_cluster_ids.npy"))
+                and meta is not None
+                and meta.get("matrices") == self._member_cache_meta(mats)
+                and float(meta.get("tau", -1.0)) == self._feature_delta_tau()
+                and meta.get("cluster_ids") == cluster_ids
+            ):
+                try:
+                    self._example_u = np.load(cache_dir / "example_u.npy", mmap_mode="r")
+                    self._example_s = np.load(cache_dir / "example_s.npy", mmap_mode="r")
+                    self._example_cluster_ids = np.load(cache_dir / "example_cluster_ids.npy")
+                    logger.info(f"Loaded per-example scores from {cache_dir} (mmap).")
+                    return
+                except Exception as e:
+                    logger.warning(f"Failed to load per-example scores ({e}); recomputing.")
+            if self._all_member_cols is None:
+                self._all_member_cols = self._expected_member_cols()
+            n_members = int(len(self._all_member_cols))
+            K = len(cluster_ids)
+            A = np.zeros((n_members, K), dtype=np.float32)
+            for c_idx, cid in enumerate(cluster_ids):
+                feats = np.asarray(self.feature_clusters[cid], dtype=np.int64)
+                if len(feats) == 0:
+                    continue
+                slots = np.searchsorted(self._all_member_cols, feats)
+                A[slots, c_idx] = 1.0
+            cluster_sizes = np.maximum(A.sum(axis=0), 1.0)
+            tau = self._feature_delta_tau()
 
-        def fire_counts(M: Optional[np.ndarray]) -> Optional[np.ndarray]:
-            if M is None:
-                return None
-            N = int(M.shape[0])
-            out = np.zeros((N, K), dtype=np.float32)
-            rows_per_block = 20_000
-            for start in range(0, N, rows_per_block):
-                end = min(start + rows_per_block, N)
-                out[start:end] = (M[start:end] > tau).astype(np.float32) @ A
-            return out
+            def fire_counts(M: Optional[np.ndarray]) -> Optional[np.ndarray]:
+                if M is None:
+                    return None
+                N = int(M.shape[0])
+                out = np.zeros((N, K), dtype=np.float32)
+                rows_per_block = 20_000
+                for start in range(0, N, rows_per_block):
+                    end = min(start + rows_per_block, N)
+                    out[start:end] = (M[start:end] > tau).astype(np.float32) @ A
+                return out
 
-        M_c = self._member_matrix(mats, "C_max")
-        M_r = self._member_matrix(mats, "R_max")
-        c_cnt = fire_counts(M_c)
-        r_cnt = fire_counts(M_r)
-        if c_cnt is None or r_cnt is None:
-            logger.warning("Member matrices unavailable; cannot build per-example scores.")
-            return
-        u = (c_cnt - r_cnt) / cluster_sizes[None, :]
-        s = c_cnt + r_cnt
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        self._save_npy(cache_dir / "example_u.npy", u)
-        self._save_npy(cache_dir / "example_s.npy", s)
-        self._save_npy(cache_dir / "example_cluster_ids.npy", np.asarray(cluster_ids, dtype=np.int64))
-        meta_tmp = cache_dir / "example_scores_meta.json.tmp"
-        with open(meta_tmp, "w", encoding="utf-8") as f:
-            json.dump({"tau": tau, "cluster_ids": cluster_ids, "matrices": self._member_cache_meta(mats)}, f)
-        os.replace(meta_tmp, cache_dir / "example_scores_meta.json")
-        self._example_u = u
-        self._example_s = s
-        self._example_cluster_ids = np.asarray(cluster_ids, dtype=np.int64)
-        logger.info(f"Built per-example scores u/s ({u.shape}) and persisted under {cache_dir}.")
+            M_c = self._member_matrix(mats, "C_max")
+            M_r = self._member_matrix(mats, "R_max")
+            c_cnt = fire_counts(M_c)
+            r_cnt = fire_counts(M_r)
+            if c_cnt is None or r_cnt is None:
+                logger.warning("Member matrices unavailable; cannot build per-example scores.")
+                return
+            u = (c_cnt - r_cnt) / cluster_sizes[None, :]
+            s = c_cnt + r_cnt
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            self._save_npy(cache_dir / "example_u.npy", u)
+            self._save_npy(cache_dir / "example_s.npy", s)
+            self._save_npy(cache_dir / "example_cluster_ids.npy", np.asarray(cluster_ids, dtype=np.int64))
+            meta_tmp = cache_dir / f".example_scores_meta_{os.getpid()}_{threading.get_ident()}.json.tmp"
+            with open(meta_tmp, "w", encoding="utf-8") as f:
+                json.dump({"tau": tau, "cluster_ids": cluster_ids, "matrices": self._member_cache_meta(mats)}, f)
+            os.replace(meta_tmp, cache_dir / "example_scores_meta.json")
+            self._example_u = u
+            self._example_s = s
+            self._example_cluster_ids = np.asarray(cluster_ids, dtype=np.int64)
+            logger.info(f"Built per-example scores u/s ({u.shape}) and persisted under {cache_dir}.")
 
     def _inspect_feature_samples(self, m: int, k: int, side: str = "amplify") -> Dict[str, Any]:
         """Top preference examples whose labels amplify or suppress feature cluster T_m.
