@@ -758,8 +758,32 @@ class ViewerState:
                 return
 
             cache_dir = self.run_dir / "viewer_cache"
+            tau = self._feature_delta_tau()
             if self._load_cached_example_scores(cache_dir, cluster_ids, mats):
                 return
+
+            if self.checkpoint_dir:
+                fc_file = self.checkpoint_dir / "feature_conditioned.npz"
+                if fc_file.exists():
+                    try:
+                        from .feature_conditioned import FeatureConditionedResult
+                        res = FeatureConditionedResult.load_checkpoint(str(fc_file))
+                        if res.u_matrix.shape[1] == len(cluster_ids):
+                            self._example_u = res.u_matrix
+                            self._example_s = res.s_matrix
+                            self._example_cluster_ids = np.asarray(cluster_ids, dtype=np.int64)
+                            cache_dir.mkdir(parents=True, exist_ok=True)
+                            self._save_npy(cache_dir / "example_u.npy", self._example_u)
+                            self._save_npy(cache_dir / "example_s.npy", self._example_s)
+                            self._save_npy(cache_dir / "example_cluster_ids.npy", self._example_cluster_ids)
+                            _save_json(
+                                cache_dir / "example_scores_meta.json",
+                                {"tau": tau, "cluster_ids": cluster_ids, "matrices": self._member_cache_meta(mats)},
+                            )
+                            logger.info(f"Loaded exact B.1 per-example scores u/s ({self._example_u.shape}) from checkpoint.")
+                            return
+                    except Exception as e:
+                        logger.warning(f"Could not load feature_conditioned.npz for example scores: {e}")
 
             if self._all_member_cols is None:
                 self._all_member_cols = self._expected_member_cols()
@@ -774,7 +798,6 @@ class ViewerState:
                     A[slots, c_idx] = 1.0
 
             cluster_sizes = np.maximum(A.sum(axis=0), 1.0)
-            tau = self._feature_delta_tau()
 
             def fire_counts(M: Optional[np.ndarray]) -> Optional[np.ndarray]:
                 if M is None:
@@ -787,8 +810,12 @@ class ViewerState:
                     out[start:end] = (M[start:end] > tau).astype(np.float32) @ A
                 return out
 
-            M_c = self._member_matrix(mats, "C_max")
-            M_r = self._member_matrix(mats, "R_max")
+            M_c = self._member_matrix(mats, "C_freq")
+            if M_c is None:
+                M_c = self._member_matrix(mats, "C_max")
+            M_r = self._member_matrix(mats, "R_freq")
+            if M_r is None:
+                M_r = self._member_matrix(mats, "R_max")
             c_cnt = fire_counts(M_c)
             r_cnt = fire_counts(M_r)
             if c_cnt is None or r_cnt is None:
