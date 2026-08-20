@@ -1830,11 +1830,16 @@ if (clustersMasterList) {
       `<option value="${esc(c.m)}">T_${c.m} ${esc(c.title)}</option>`).join("");
   }
 
+  function getConfigTau() {
+    return Number(currentRunData?.tau ?? currentRunData?.summary?.config?.feature_conditioned?.tau ?? 0.01);
+  }
+
   function addCompoundCondition() {
     if (!compoundCluster || !compoundDir || !compoundTau) return;
     const m = Number(compoundCluster.value);
     const direction = compoundDir.value;
-    const tau = Math.max(0.01, parseFloat(compoundTau.value) || 0.1);
+    const minTau = getConfigTau();
+    const tau = Math.max(minTau, parseFloat(compoundTau.value) || 0.1);
     const dup = compoundConditions.find(c => c.m === m && c.direction === direction && c.tau === tau);
     if (!dup) compoundConditions.push({ m, direction, tau });
     renderCompoundConditions();
@@ -1901,13 +1906,15 @@ if (clustersMasterList) {
     const totalMatch = res.total_matching != null ? res.total_matching : (res.samples || []).length;
     const nShown = (res.samples || []).length;
     samplesLists.innerHTML = `
-      <div style="width:100%; margin-bottom:10px; padding:10px 12px; background:var(--border-subtle); border:1px solid var(--border-color); border-radius:6px;">
-        <span class="guide-title">🔀 Compound results</span>
-        <div style="font-size:0.85rem; color:var(--text-muted); margin-top:4px;">
-          ${esc(condDesc)} — <strong>${nShown}</strong> shown of <strong>${totalMatch.toLocaleString()}</strong> matching samples (out of 260k total) that satisfy every condition.
+      <div class="compound-results">
+        <div style="width:100%; margin-bottom:10px; padding:10px 12px; background:var(--border-subtle); border:1px solid var(--border-color); border-radius:6px;">
+          <span class="guide-title">🔀 Compound results</span>
+          <div style="font-size:0.85rem; color:var(--text-muted); margin-top:4px;">
+            ${esc(condDesc)} — <strong>${nShown}</strong> shown of <strong>${totalMatch.toLocaleString()}</strong> matching samples (out of 260k total) that satisfy every condition.
+          </div>
         </div>
-      </div>
-      ${(res.samples || []).map(renderCompoundSampleRow).join("") || '<p class="loading-cell">No samples satisfy all conditions — lower the thresholds.</p>'}`;
+        ${(res.samples || []).map(renderCompoundSampleRow).join("") || '<p class="loading-cell">No samples satisfy all conditions — lower the thresholds.</p>'}
+      </div>`;
   }
 
   function renderInspectorSampleChips() {

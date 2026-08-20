@@ -1520,6 +1520,7 @@ def get_run_data() -> Dict[str, Any]:
     return {
         "summary": state.summary,
         "validation_metrics": validation_metrics,
+        "tau": state._feature_delta_tau(),
         "cluster_labels": state._load_data_cluster_labels(),
         "feature_cluster_labels": state._load_feature_cluster_labels(),
         "top_feature_conditioned_hypotheses": state._cluster_covered_hypos(state.fc_hypos, 30),
