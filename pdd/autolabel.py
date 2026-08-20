@@ -233,7 +233,7 @@ class LLMClusterLabeler(ClusterAutoLabeler):
         self._device = None
 
     def load(self) -> None:
-        """Load the small instruct model, falling back to CPU when VRAM is tight."""
+        """Load the small instruct model with INT8 quantization on GPU, fallback to CPU."""
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -242,6 +242,7 @@ class LLMClusterLabeler(ClusterAutoLabeler):
 
         device = "cpu"
         dtype = torch.float32
+        quant_config = None
         if torch.cuda.is_available():
             try:
                 free_bytes, _ = torch.cuda.mem_get_info()
@@ -249,6 +250,17 @@ class LLMClusterLabeler(ClusterAutoLabeler):
                 if free_gb >= self.min_vram_gb:
                     device = "cuda"
                     dtype = torch.bfloat16
+                    # INT8 quantization halves VRAM (~4GB vs ~8GB) with negligible quality loss
+                    try:
+                        import bitsandbytes as bnb
+                        from transformers import BitsAndBytesConfig
+                        quant_config = BitsAndBytesConfig(
+                            load_in_8bit=True,
+                            llm_int8_threshold=6.0,
+                        )
+                        logger.info(f"Using bitsandbytes INT8 quantization for label model.")
+                    except Exception as e:
+                        logger.debug(f"bitsandbytes INT8 unavailable ({e}); loading in BF16.")
                 else:
                     logger.warning(
                         f"Label model VRAM congested ({free_gb:.2f} GB free). Running labeler on CPU."
@@ -260,9 +272,10 @@ class LLMClusterLabeler(ClusterAutoLabeler):
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_path, token=True)
         if self._tokenizer.pad_token_id is None:
             self._tokenizer.pad_token_id = self._tokenizer.eos_token_id
-        self._model = AutoModelForCausalLM.from_pretrained(
-            self.model_path, torch_dtype=dtype, device_map=device, token=True
-        )
+        load_kwargs = {"torch_dtype": dtype, "device_map": device, "token": True}
+        if quant_config is not None:
+            load_kwargs["quantization_config"] = quant_config
+        self._model = AutoModelForCausalLM.from_pretrained(self.model_path, **load_kwargs)
         self._model.eval()
         self._device = device
         logger.info(f"Label model ready on {device}.")
