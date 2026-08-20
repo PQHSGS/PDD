@@ -226,7 +226,7 @@ class LLMClusterLabeler(ClusterAutoLabeler):
         max_prompt_chars: int = 600,
         max_examples: int = 10,
         min_vram_gb: float = 3.5,
-        max_new_tokens: int = 50,
+        max_new_tokens: int = 150,
         batch_size: int = 8,
     ):
         super().__init__(max_prompt_chars=max_prompt_chars)
@@ -340,7 +340,29 @@ class LLMClusterLabeler(ClusterAutoLabeler):
                                 return obj
                         except Exception:
                             break
+
+            # Try auto-repair if output was slightly truncated
+            sub = text[start:].strip()
+            for suffix in ("}", '"}', '"]}', '"]}}', '"}'):
+                try:
+                    obj = json.loads(sub + suffix)
+                    if isinstance(obj, dict) and ("title" in obj or "description" in obj):
+                        return obj
+                except Exception:
+                    pass
             start = text.find("{", start + 1)
+
+        # Regex fallback for structured fields if JSON syntax was incomplete
+        t_match = re.search(r'"title"\s*:\s*"([^"]+)"', text)
+        d_match = re.search(r'"description"\s*:\s*"([^"]+)"', text)
+        if t_match or d_match:
+            kws = re.findall(r'"([^"]+)"', text.split('"keywords"')[-1]) if '"keywords"' in text else []
+            return {
+                "title": t_match.group(1) if t_match else "",
+                "description": d_match.group(1) if d_match else "",
+                "keywords": [k for k in kws if k not in ("title", "description", "keywords")][:5],
+            }
+
         return None
 
     @staticmethod

@@ -65,7 +65,7 @@
     "pc_n_top": 10,
     "max_prompt_chars": 600,
     "max_examples": 20,
-    "max_new_tokens": 50,
+    "max_new_tokens": 150,
     "batch_size": 8
   },
   "dpo_validation": {
