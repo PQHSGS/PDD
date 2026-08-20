@@ -415,8 +415,9 @@ class LLMClusterLabeler(ClusterAutoLabeler):
                 "- 'title': 2-5 words naming the core concept specifically (e.g. 'Binary Search Algorithms', 'LaTeX Proof Formulations', 'HTML Form Input Validation', 'Python Type Annotations'). NEVER use meta words like 'Cluster', 'User Prompts', 'Response', or 'Labeling'.\n"
                 "- 'description': 1 concise sentence describing the shared semantic concept or behavioral attribute.\n"
                 "- 'keywords': 3-5 specific domain keywords (lowercase).\n\n"
-                'Output ONLY a valid JSON object, e.g. {"title": "Binary Tree Traversal", "description": "Implementations and explanations of tree traversal algorithms.", "keywords": ["binary tree", "tree traversal", "algorithms", "recursion"]}.\n'
-                "Do NOT output markdown commentary or conversational filler. Output ONLY the JSON object."
+                'Respond ONLY with a valid JSON object matching this schema:\n'
+                '{"title": "Binary Tree Traversal", "description": "Implementations and explanations of tree traversal algorithms.", "keywords": ["binary tree", "tree traversal", "algorithms", "recursion"]}\n'
+                "Do NOT include markdown code fences (```), conversational commentary, or preamble. Begin directly with { and end with }."
             )
         else:
             return (
@@ -428,8 +429,9 @@ class LLMClusterLabeler(ClusterAutoLabeler):
                 "- 'title': 2-5 words naming the specific user intent or domain (e.g. 'Python Scripting Assistance', 'Creative Short Story Writing', 'Algebra Problem Solving'). NEVER use meta words like 'Cluster', 'User Prompts', 'Response', or 'Labeling'.\n"
                 "- 'description': 1 concise sentence describing the user requests in this cluster.\n"
                 "- 'keywords': 3-5 specific domain keywords (lowercase).\n\n"
-                'Output ONLY a valid JSON object, e.g. {"title": "Python Scripting Assistance", "description": "User requests for writing, debugging, and explaining Python scripts.", "keywords": ["python", "scripting", "debugging", "functions"]}.\n'
-                "Do NOT output markdown commentary or conversational filler. Output ONLY the JSON object."
+                'Respond ONLY with a valid JSON object matching this schema:\n'
+                '{"title": "Python Scripting Assistance", "description": "User requests for writing, debugging, and explaining Python scripts.", "keywords": ["python", "scripting", "debugging", "functions"]}\n'
+                "Do NOT include markdown code fences (```), conversational commentary, or preamble. Begin directly with { and end with }."
             )
 
     def _label_dicts_batch(self, batch_items: List[Tuple[List[str], str]]) -> List[Optional[Dict[str, Any]]]:
@@ -659,7 +661,8 @@ class AutoLabelingPipeline:
             scores = np.asarray(firing.sum(axis=1)).ravel()
 
             # Stratified sampling: pick examples across activation deciles for diversity
-            n_samples = min(20, max(10, len(feats) // 2))
+            max_ex = getattr(self.cfg, "max_examples", 10)
+            n_samples = min(max_ex, max(4, len(feats) // 2))
             firing_mask = scores > 0
             firing_indices = np.where(firing_mask)[0]
             if len(firing_indices) == 0:
@@ -678,11 +681,13 @@ class AutoLabelingPipeline:
             selected.sort(key=lambda i: -scores[i])
             idxs = [int(i) for i in selected if int(i) < len(examples)]
 
+            p_len = max(80, int(self.cfg.max_prompt_chars * 0.35))
+            r_len = max(80, int(self.cfg.max_prompt_chars * 0.40))
             texts = [
                 f"[Activation: {scores[i]:.3f}]\n"
-                f"Prompt: {(examples[i].prompt or '').strip()[:180]}\n"
-                f"Chosen (Promoted): {(examples[i].chosen or '').strip()[:200]}\n"
-                f"Rejected (Suppressed): {(examples[i].rejected or '').strip()[:200]}"
+                f"Prompt: {(examples[i].prompt or '').strip()[:p_len]}\n"
+                f"Chosen (Promoted): {(examples[i].chosen or '').strip()[:r_len]}\n"
+                f"Rejected (Suppressed): {(examples[i].rejected or '').strip()[:r_len]}"
                 for i in idxs
             ]
 

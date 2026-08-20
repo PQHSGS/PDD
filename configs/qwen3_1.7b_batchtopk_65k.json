@@ -63,8 +63,8 @@
     "skip_feature_clusters": false,
     "skip_pc_examples": false,
     "pc_n_top": 10,
-    "max_prompt_chars": 600,
-    "max_examples": 20,
+    "max_prompt_chars": 400,
+    "max_examples": 10,
     "max_new_tokens": 150,
     "batch_size": 8
   },
