@@ -53,8 +53,10 @@ class PDDPipeline:
             "config": self.cfg.to_dict(),
         }
         try:
-            with open(manifest_ckpt, "w", encoding="utf-8") as f:
+            tmp_path = manifest_ckpt + f".{os.getpid()}.tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(manifest_data, f, indent=2)
+            os.replace(tmp_path, manifest_ckpt)
         except Exception as e:
             logger.warning(f"Could not write manifest file '{manifest_ckpt}': {e}")
 
