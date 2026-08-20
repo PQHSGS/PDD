@@ -17,7 +17,10 @@ import threading
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
+import warnings
 from tqdm import tqdm
+
+warnings.filterwarnings("ignore", message=".*MatMul8bitLt.*")
 
 from .config import AutoLabelConfig, FeatureConditionedConfig, PromptConditionedConfig
 from .logger import get_logger
@@ -257,7 +260,6 @@ class LLMClusterLabeler(ClusterAutoLabeler):
                         quant_config = BitsAndBytesConfig(
                             load_in_8bit=True,
                             llm_int8_threshold=6.0,
-                            llm_int8_compute_dtype=torch.float16,
                         )
                         logger.info(f"Using bitsandbytes INT8 quantization for label model.")
                     except Exception as e:
