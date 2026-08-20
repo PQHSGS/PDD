@@ -254,7 +254,7 @@ class LLMClusterLabeler(ClusterAutoLabeler):
             "torch_dtype": dtype,
             "device_map": device,
             "token": True,
-            "attn_implementation": "sdpa",
+            "attn_implementation": "eager",
         }
         if device == "cuda":
             load_kwargs["quantization_config"] = BitsAndBytesConfig(
