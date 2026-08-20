@@ -22,6 +22,10 @@ from tqdm import tqdm
 from .config import AutoLabelConfig, FeatureConditionedConfig, PromptConditionedConfig
 from .logger import get_logger
 
+import logging as _logging
+_logging.getLogger("bitsandbytes").setLevel(_logging.WARNING)
+_logging.getLogger("transformers").setLevel(_logging.WARNING)
+
 if TYPE_CHECKING:
     from .data import PreferenceExample
 
