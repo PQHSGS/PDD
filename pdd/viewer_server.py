@@ -861,12 +861,14 @@ class ViewerState:
                 "title": f"Feature cluster T_{m}", "description": "", "keywords": [],
             }
             val_metrics = self._get_cluster_validation_metrics().get("clusters", {}).get(m_int)
+            # Disparity view: prefer the Pass 2b contrastive label when present
+            use_disp = sort_mode == "disparity" and lbl.get("disparity_title")
             return {
                 "cluster_m": m_int,
                 "label": lbl,
-                "title": lbl.get("title"),
-                "description": lbl.get("description"),
-                "keywords": lbl.get("keywords", []),
+                "title": lbl.get("disparity_title") if use_disp else lbl.get("title"),
+                "description": lbl.get("disparity_description") if use_disp else lbl.get("description"),
+                "keywords": (lbl.get("disparity_keywords") if use_disp else lbl.get("keywords")) or [],
                 "n_features": len(feats),
                 "validation": val_metrics,
                 "top_features": self._top_cluster_features(m_int, top_n=8),
@@ -1028,7 +1030,11 @@ class ViewerState:
     def _inspect_feature_samples(self, m: int, k: int, side: str = "amplify") -> Dict[str, Any]:
         """Inverse search (Tab 4 single-cluster): rank samples by per-example disparity u against T_m."""
         cluster_ids = sorted(int(c) for c in self.feature_clusters.keys())
-        label = self._load_feature_cluster_labels().get(int(m))
+        lbl = dict(self._load_feature_cluster_labels().get(int(m)) or {})
+        if lbl.get("disparity_title"):
+            lbl["title"] = lbl["disparity_title"]
+            if lbl.get("disparity_description"):
+                lbl["description"] = lbl["disparity_description"]
         return inspection.rank_cluster_samples(
             m=int(m), side=side, top_n=k,
             fc=self._load_fc_result(),
@@ -1038,12 +1044,17 @@ class ViewerState:
             cluster_ids=cluster_ids,
             example_view_fn=self._example_view,
             neuronpedia_url_fn=self._neuronpedia_url,
-            label=label,
+            label=lbl or None,
         )
 
     def _inspect_compound_samples(self, conditions: List[Tuple[int, str, float]], k: int) -> Dict[str, Any]:
         """Inverse search (Tab 4 compound): rank samples satisfying ALL directional conditions."""
         cluster_ids = sorted(int(c) for c in self.feature_clusters.keys())
+        raw_labels = self._load_feature_cluster_labels() or {}
+        disp_labels = {
+            mid: ({**lbl_entry, "title": lbl_entry["disparity_title"]} if isinstance(lbl_entry, dict) and lbl_entry.get("disparity_title") else lbl_entry)
+            for mid, lbl_entry in raw_labels.items()
+        }
         return inspection.rank_compound_samples(
             conditions=conditions, top_n=k,
             fc=self._load_fc_result(),
@@ -1053,7 +1064,7 @@ class ViewerState:
             cluster_ids=cluster_ids,
             example_view_fn=self._example_view,
             neuronpedia_url_fn=self._neuronpedia_url,
-            feature_cluster_labels=self._load_feature_cluster_labels(),
+            feature_cluster_labels=disp_labels,
         )
 
     # ==========================================================================

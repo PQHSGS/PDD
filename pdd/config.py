@@ -118,6 +118,7 @@ class AutoLabelConfig:
     heuristic: bool = False                   # Keyword labels instead of the local LLM
     num_clusters: int = -1                    # Data clusters B_k to label (-1 = all active)
     skip_feature_clusters: bool = False       # Skip Pass 2 (T_m whole-cluster labels)
+    skip_disparity_labels: bool = False       # Skip Pass 2b (T_m contrastive |u| preference-shift labels)
     skip_pc_examples: bool = False            # Skip Pass 3 (A_k / R_m example indices)
     pc_n_top: int = 15                        # Examples per A_k / R_m in Pass 3
     max_prompt_chars: int = 400               # Max text length shown to the LLM

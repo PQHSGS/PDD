@@ -368,6 +368,22 @@ class LLMClusterLabeler(ClusterAutoLabeler):
                 '{"title": "Binary Tree Traversal", "description": "Implementations and explanations of tree traversal algorithms.", "keywords": ["binary tree", "tree traversal", "algorithms", "recursion"]}\n'
                 "Do NOT include markdown code fences (```), conversational commentary, or preamble. Begin directly with { and end with }."
             )
+        elif kind == "disparity":
+            return (
+                "You are analyzing a Sparse Autoencoder (SAE) feature cluster from an RLHF preference dataset. "
+                "Below are preference pairs where this cluster's firing DIFFERS between the preferred and rejected response. "
+                "The [Disparity: u=...] tag shows the signed difference: u > 0 means the CHOSEN response fired the cluster more "
+                "(training amplifies this concept), u < 0 means the REJECTED response fired it more (training suppresses it).\n\n"
+                f"{examples}\n\n"
+                "Task: Identify the specific PREFERENCE SHIFT these pairs encode — what behavior, style, or content the model is being pushed toward or away from for this concept.\n\n"
+                "Rules:\n"
+                "- 'title': 2-6 words naming the behavioral preference (e.g. 'Prefers Concise Code Answers', 'Rewards Step-By-Step Rigor', 'Penalizes Hedging Language'). NEVER use meta words like 'Cluster', 'Pair', 'Preference', or 'Labeling'.\n"
+                "- 'description': 1 concise sentence describing what chosen responses do that rejected ones do not (or vice versa).\n"
+                "- 'keywords': 3-5 specific domain keywords (lowercase).\n\n"
+                'Respond ONLY with a valid JSON object matching this schema:\n'
+                '{"title": "Rewards Step-By-Step Rigor", "description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.", "keywords": ["step-by-step", "reasoning", "worked solutions"]}\n'
+                "Do NOT include markdown code fences (```), conversational commentary, or preamble. Begin directly with { and end with }."
+            )
         else:
             return (
                 "You are analyzing a prompt topic cluster from an instruction-tuning preference dataset. "
@@ -575,8 +591,15 @@ class AutoLabelingPipeline:
         examples: List[Any],
         matrices: Any,
         clusters: Dict[int, Sequence[int]],
+        fc_res: Optional[Any] = None,
     ) -> int:
-        """Pass 2: whole-cluster labels for SAE feature clusters T_m in batches."""
+        """Pass 2: whole-cluster labels for SAE feature clusters T_m in batches.
+
+        When ``fc_res`` is provided and ``skip_disparity_labels`` is unset, a
+        contrastive Pass 2b merges |u|-ranked preference-shift labels
+        (disparity_title / disparity_description / disparity_keywords) into the
+        same artifact entries.
+        """
         d_sae = matrices.C_max.shape[1]
         out_path = feature_cluster_labels_path(self.run_dir)
         labels: Dict[str, Dict[str, Any]] = {}
@@ -660,9 +683,103 @@ class AutoLabelingPipeline:
             pbar.update(len(batch))
 
         pbar.close()
+        if fc_res is not None and not getattr(self.cfg, "skip_disparity_labels", False):
+            self._append_disparity_labels(labeler, examples, clusters, fc_res, labels)
         payload: Dict[str, Any] = {"feature_clusters": labels}
         _save_json(out_path, payload)
         return len(labels)
+
+    def _append_disparity_labels(
+        self,
+        labeler: Any,
+        examples: List[Any],
+        clusters: Dict[int, Sequence[int]],
+        fc_res: Any,
+        labels: Dict[str, Dict[str, Any]],
+    ) -> None:
+        """Pass 2b: contrastive preference-shift labels for T_m, merged into ``labels`` in place.
+
+        Samples the top-|u| examples per cluster (signed disparity against the
+        cluster's u_matrix column) and asks the LLM to name the behavioral
+        preference the pairs encode. Falls back to keyword labels on parse
+        failure; never mutates the activation-based Pass 2 fields.
+        """
+        u_matrix = getattr(fc_res, "u_matrix", None)
+        if u_matrix is None or u_matrix.size == 0:
+            logger.warning("No u_matrix available; skipping Pass 2b disparity labels.")
+            return
+        cluster_ids = sorted(int(c) for c in clusters.keys())
+        if u_matrix.shape[1] != len(cluster_ids):
+            logger.warning(
+                f"u_matrix shape {u_matrix.shape} does not match {len(cluster_ids)} feature clusters; "
+                "skipping Pass 2b disparity labels."
+            )
+            return
+
+        max_ex = self.cfg.max_examples
+        p_len = max(80, int(self.cfg.max_prompt_chars * 0.35))
+        r_len = max(80, int(self.cfg.max_prompt_chars * 0.40))
+        n_ex = len(examples)
+
+        prepared: List[Tuple[int, List[str], ClusterLabel]] = []
+        for m_int in cluster_ids:
+            if str(m_int) not in labels:
+                continue
+            u_col = np.asarray(u_matrix[:, cluster_ids.index(m_int)]).ravel()
+            abs_u = np.abs(u_col)
+            nz = np.where(abs_u > 0)[0]
+            if len(nz) == 0:
+                continue
+            n_samples = min(max_ex, max(4, len(clusters.get(m_int, [])) // 2))
+            top = nz[np.argsort(-abs_u[nz])[:n_samples]]
+            texts = [
+                f"[Disparity: u={u_col[i]:+.3f}]\n"
+                f"Prompt: {(examples[i].prompt or '').strip()[:p_len]}\n"
+                f"Chosen (Promoted): {(examples[i].chosen or '').strip()[:r_len]}\n"
+                f"Rejected (Suppressed): {(examples[i].rejected or '').strip()[:r_len]}"
+                for i in top if int(i) < n_ex
+            ]
+            if not texts:
+                continue
+            fallback = labeler._keyword_label(m_int, texts, [])
+            prepared.append((m_int, texts, fallback))
+
+        if not prepared:
+            logger.info("No clusters with non-zero disparity; Pass 2b produced no labels.")
+            return
+
+        pbar = tqdm(total=len(prepared), desc="Pass 2b: labeling cluster disparities", unit="cluster")
+        for i in range(0, len(prepared), self.cfg.batch_size):
+            batch = prepared[i:i + self.cfg.batch_size]
+            if isinstance(labeler, LLMClusterLabeler):
+                try:
+                    parsed_list = labeler._label_dicts_batch([(texts, "disparity") for _, texts, _ in batch])
+                except Exception as e:
+                    logger.warning(f"Batch LLM disparity labeling failed ({e}); using keyword fallback.")
+                    parsed_list = [None] * len(batch)
+
+                for (m_int, _, fallback), parsed in zip(batch, parsed_list):
+                    entry = labels[str(m_int)]
+                    if parsed is None:
+                        logger.warning(f"LLM disparity label for T_{m_int} was not valid JSON; using keyword fallback.")
+                        d_title, d_desc, d_kws = fallback.title, fallback.description, []
+                    else:
+                        d_title, d_desc, d_kws = labeler._clean_label(parsed, fallback)
+                    entry["disparity_title"] = str(d_title)[:120]
+                    entry["disparity_description"] = str(d_desc)[:600]
+                    entry["disparity_keywords"] = [str(k).strip().lower() for k in d_kws if str(k).strip()][:5]
+                    logger.info(f"T_{m_int} (disparity): {entry['disparity_title']}")
+            else:
+                for m_int, _, fallback in batch:
+                    entry = labels[str(m_int)]
+                    entry["disparity_title"] = str(fallback.title)[:120]
+                    entry["disparity_description"] = str(fallback.description)[:600]
+                    entry["disparity_keywords"] = [str(k).strip().lower() for k in fallback.keywords if str(k).strip()][:5]
+                    logger.info(f"T_{m_int} (disparity): {entry['disparity_title']}")
+
+            pbar.update(len(batch))
+
+        pbar.close()
 
     def _pc_cluster_examples(self, pc_res: Any, examples: List[Any], n_top: int) -> int:
         """Pass 3: real-example indices + top tokens for prompt clusters A_k and response-delta clusters R_m."""
@@ -725,7 +842,7 @@ class AutoLabelingPipeline:
 
         if not self.cfg.skip_feature_clusters:
             counts["feature_clusters"] = self._label_feature_clusters(
-                labeler, examples, matrices, cluster_map.clusters
+                labeler, examples, matrices, cluster_map.clusters, fc_res=fc_res
             )
 
         if not self.cfg.skip_pc_examples:
