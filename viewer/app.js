@@ -309,6 +309,31 @@ document.addEventListener("DOMContentLoaded", () => {
   // Client-side in-memory cache for instant cluster inspection
   const clusterDetailCache = new Map();
 
+  // Shared fetch for the polymorphic cluster-detail endpoint (throws on HTTP error)
+  async function fetchClusterDetail(query) {
+    const res = await fetch(`/api/cluster_detail?${query}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  // Cache-through load: serve from memory when present, else fetch+cache
+  async function loadClusterDetail(cacheKey, query) {
+    if (!clusterDetailCache.has(cacheKey)) {
+      clusterDetailCache.set(cacheKey, await fetchClusterDetail(query));
+    }
+    return clusterDetailCache.get(cacheKey);
+  }
+
+  // Spinner placeholder injected into a detail container while fetching
+  function loadingHtml(label) {
+    return `
+      <div style="padding:40px 20px; text-align:center; color:var(--text-muted); font-size:0.9rem;">
+        <div class="placeholder-icon" style="font-size:2rem; margin-bottom:8px;">⚡</div>
+        ${label}
+      </div>
+    `;
+  }
+
   async function openSlidePanel(type, cid) {
     if (!slidePanel || !drawerBody) return;
     const ctype = String(type).toLowerCase().trim();
@@ -408,6 +433,7 @@ document.addEventListener("DOMContentLoaded", () => {
               <button class="tm-sort-btn ${sortMode === "disparity" ? "active" : ""}" data-cid="${esc(cid)}" data-sort="disparity">By Disparity |u|</button>
             </div>
           </div>
+          ${sortMode === "disparity" ? `<div style="font-size:0.72rem; color:var(--text-muted); margin-bottom:8px; background:var(--border-subtle); border-radius:6px; padding:6px 10px;">⇅ Ranked by preference disparity |u| (chosen-vs-rejected firing gap). The cluster label derives from activation exemplars, so top disparity pairs may emphasize the suppressed side.</div>` : ""}
           ${renderExampleCarousel(`📄 Top Real Dataset Response Examples Firing ${esc(badgeText)}`, exs, carouselFiringCard, `t_${cid}_carousel`)}
         </div>
       `;
@@ -499,7 +525,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // T_m example ranking toggle (Tab 2 drawer): re-fetch examples ranked by activation or disparity
+  // T_m example ranking toggle: re-fetch examples ranked by activation or disparity
   document.addEventListener("click", async (ev) => {
     const btn = ev.target.closest(".tm-sort-btn");
     if (!btn || btn.classList.contains("active")) return;
@@ -510,8 +536,13 @@ document.addEventListener("DOMContentLoaded", () => {
     btn.parentElement.querySelectorAll(".tm-sort-btn").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
 
-    if (drawerBody) {
-      drawerBody.innerHTML = `
+    const inDrawer = Boolean(btn.closest("#slide-panel"));
+    const inStatTab = Boolean(btn.closest("#stat-detail-view"));
+    const inLabelsTab = Boolean(btn.closest("#cluster-detail-view"));
+
+    const container = inDrawer ? drawerBody : (inStatTab ? statDetailView : clusterDetailView);
+    if (container) {
+      container.innerHTML = `
         <div style="padding:40px 20px; text-align:center; color:var(--text-muted); font-size:0.9rem;">
           <div class="placeholder-icon" style="font-size:2rem; margin-bottom:8px;">⚡</div>
           Re-ranking T_${esc(cid)} examples by <strong>${sort === "disparity" ? "|u| disparity" : "activation"}</strong>...
@@ -523,10 +554,26 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       clusterDetailCache.set(`T_${cid}`, data);
-      renderDrawerDetail(data, "T", cid);
+
+      if (inDrawer) {
+        renderDrawerDetail(data, "T", cid);
+      } else if (inLabelsTab) {
+        const item = (typeof explorerClusters !== "undefined" && explorerClusters) ? explorerClusters.find(c => c.family === "T" && String(c.id) === String(cid)) : null;
+        if (item) renderClusterDetail(item, data);
+        else renderDrawerDetail(data, "T", cid);
+      } else if (inStatTab) {
+        const currentHypo = (typeof b1Hypotheses !== "undefined" && b1Hypotheses) ? b1Hypotheses.find(h => String(h.m) === String(cid) && `${h.k}_${h.m}` === activeSelectedHypoKey) : null;
+        if (currentHypo) {
+          const secondaryCacheKey = `B_${currentHypo.k}`;
+          const contextData = clusterDetailCache.get(secondaryCacheKey);
+          renderStatDetail(currentHypo, "b1", data, contextData);
+        } else {
+          renderDrawerDetail(data, "T", cid);
+        }
+      }
     } catch (err) {
-      if (drawerBody) {
-        drawerBody.innerHTML = `<div style="padding:20px; color:var(--color-rejected);">Failed to re-rank examples: ${esc(err.message)}</div>`;
+      if (container) {
+        container.innerHTML = `<div style="padding:20px; color:var(--color-rejected);">Failed to re-rank examples: ${esc(err.message)}</div>`;
       }
     }
   });

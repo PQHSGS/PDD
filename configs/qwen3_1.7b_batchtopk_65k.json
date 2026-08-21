@@ -71,8 +71,8 @@
   "dpo_validation": {
     "train_samples": 10000,
     "eval_prompts": 500,
-    "batch_size": 8,
-    "grad_accum": 16,
+    "batch_size": 4,
+    "grad_accum": 32,
     "lr": 1e-4,
     "beta": 2.0,
     "epochs": 10,

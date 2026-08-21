@@ -305,11 +305,22 @@ class ViewerState:
 
     def prewarm(self) -> None:
         """Prewarm the dense member cache at server startup for zero-latency lookups."""
-        mats = self._load_feature_matrices()
-        if mats is None:
-            logger.info("No feature matrices for this run; skipping member-cache prewarm.")
-            return
-        self._load_member_cache(mats)
+        self._ensure_member_cache()
+
+    def prefetch_background(self) -> None:
+        """Sequentially prewarm all lazily-loaded disk singletons in a background daemon thread.
+
+        Pre-warms cached examples (examples.json), feature-conditioned matrices (u_matrix/s_matrix),
+        P4 validation metrics, and prompt-conditioned clusters. Sequential execution keeps mechanical
+        HDD contention low while ensuring instant first-click responses across all tabs.
+        """
+        def _bg_prefetch() -> None:
+            self._load_examples()
+            self._load_fc_result()
+            self._get_cluster_validation_metrics()
+            self._load_pc_prompt_clusters()
+
+        threading.Thread(target=_bg_prefetch, daemon=True, name="PDD-StatePrefetch").start()
 
     def _ensure_member_cache(self) -> None:
         """Lazily build/load the dense member cache when skipped (e.g. --no-prewarm boots).
@@ -810,25 +821,26 @@ class ViewerState:
         feats = self.feature_clusters.get(m_int, [])
         if mats is None or examples is None or not feats:
             return []
-        self._ensure_member_cache()
 
+        if sort == "disparity":
+            fc = self._load_fc_result()
+            if fc is not None and fc.u_matrix is not None:
+                cluster_ids = sorted(int(c) for c in self.feature_clusters.keys())
+                if m_int in cluster_ids:
+                    u_col = fc.u_matrix[:, cluster_ids.index(m_int)]
+                    scores = np.abs(np.asarray(u_col, dtype=np.float32))
+                    return self._top_examples(scores, examples, top_n)
+                logger.warning(f"T_{m_int} not found in u_matrix columns; falling back to activation order.")
+            else:
+                logger.warning("Disparity ranking unavailable (feature_conditioned.npz missing); falling back to activation order.")
+
+        self._ensure_member_cache()
         if self._all_member_cols is not None:
             feats_arr = np.asarray(feats, dtype=np.int64)
             slots = np.searchsorted(self._all_member_cols, feats_arr)
             valid_mask = (slots < len(self._all_member_cols)) & (self._all_member_cols[slots] == feats_arr)
             slots = slots[valid_mask]
             if len(slots) > 0:
-                if sort == "disparity":
-                    fc = self._load_fc_result()
-                    if fc is None or fc.u_matrix is None:
-                        logger.warning("Disparity ranking unavailable (feature_conditioned.npz missing); falling back to activation order.")
-                    else:
-                        cluster_ids = sorted(int(c) for c in self.feature_clusters.keys())
-                        if m_int in cluster_ids:
-                            u_col = fc.u_matrix[:, cluster_ids.index(m_int)]
-                            scores = np.abs(np.asarray(u_col, dtype=np.float32))
-                            return self._top_examples(scores, examples, top_n)
-                        logger.warning(f"T_{m_int} not found in u_matrix columns; falling back to activation order.")
                 scores = np.zeros(len(examples), dtype=np.float32)
                 for attr in ("C_max", "R_max"):
                     M = self._member_matrix(mats, attr)
@@ -1510,8 +1522,8 @@ def main():
     if not args.no_prewarm:
         _STATE.prewarm()
 
-    # Pre-warm cached examples in a background daemon thread to eliminate first-click disk latency
-    threading.Thread(target=_STATE._load_examples, daemon=True).start()
+    # Pre-warm all lazily-loaded singletons in background thread
+    _STATE.prefetch_background()
 
     logger.info(f"Starting PDD Viewer for '{args.run_dir}' at http://localhost:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port)

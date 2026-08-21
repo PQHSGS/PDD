@@ -62,7 +62,8 @@ def split_half_se(per_prompt: np.ndarray, cluster_ids: list[int], cluster_map) -
 
 
 def analyze_epoch(epoch: int, dirpath: str, u_bar: np.ndarray, delta_full: np.ndarray,
-                  delta_all: np.ndarray, u_feature: np.ndarray, ks: list[int],
+                  delta_all: np.ndarray, u_feature: np.ndarray, cluster_ids: list[int],
+                  cluster_map: FeatureClusterMap, ks: list[int],
                   n_perm: int, n_boot: int, n_neg: int, seed: int = 0) -> dict:
     rng = np.random.RandomState(seed)
     valid = ~np.isnan(delta_full)
@@ -148,6 +149,7 @@ def main():
         delta_all = np.load(os.path.join(out_dir, f"delta_all_epoch{epoch}.npy"))
         report[f"epoch_{epoch}"] = analyze_epoch(
             epoch, out_dir, u_bar, delta_full, delta_all, u_feature,
+            cluster_ids, cluster_map,
             args.ks, args.n_perm, args.n_boot, args.n_neg, seed=cfg.seed,
         )
 
