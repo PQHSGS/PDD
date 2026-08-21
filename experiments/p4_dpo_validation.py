@@ -185,7 +185,7 @@ def train_dpo_model(
     ref_c_arr = np.zeros(len(dataset), dtype=np.float32)
     ref_r_arr = np.zeros(len(dataset), dtype=np.float32)
 
-    ref_batch_size = max(4, min(8, batch_size * 2))
+    ref_batch_size = max(1, min(2, batch_size))
     ref_dataloader = DataLoader(dataset, batch_size=ref_batch_size, shuffle=False)
 
     with torch.inference_mode():
@@ -582,6 +582,7 @@ def main():
     sft_act_mean, sft_per_prompt = sample_rollout_activations(
         model, tokenizer, sae, cfg.sae.layer, eval_prompts, cfg.model.device,
         tau=cfg.feature_conditioned.tau, seed=cfg.seed, temperature=v.temperature,
+        batch_size=2,
     )
     np.save(os.path.join(output_dir, "per_prompt_pre.npy"), sft_per_prompt)
 
@@ -667,6 +668,7 @@ def main():
         dpo_act_mean, dpo_per_prompt = sample_rollout_activations(
             current_model, tokenizer, sae, cfg.sae.layer, eval_prompts, cfg.model.device,
             tau=cfg.feature_conditioned.tau, seed=cfg.seed, temperature=v.temperature,
+            batch_size=2,
         )
         np.save(os.path.join(output_dir, f"per_prompt_post_epoch{epoch}.npy"), dpo_per_prompt)
         delta_empirical_all = dpo_act_mean - sft_act_mean  # mean(f(y_DPO)) - mean(f(y_SFT))

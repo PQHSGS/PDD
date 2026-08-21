@@ -79,7 +79,7 @@
     "lora_rank": 16,
     "warmup_ratio": 0.1,
     "temperature": 0.0,
-    "max_length": 512,
+    "max_length": 256,
     "num_features": 50
   }
 }
