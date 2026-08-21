@@ -311,6 +311,19 @@ class ViewerState:
             return
         self._load_member_cache(mats)
 
+    def _ensure_member_cache(self) -> None:
+        """Lazily build/load the dense member cache when skipped (e.g. --no-prewarm boots).
+
+        Thread-safe: ``_load_member_cache`` holds ``_member_cache_lock`` and is a
+        no-op once ``_all_member_cols`` is populated, so concurrent requests converge
+        on the first build.
+        """
+        if self._all_member_cols is not None or not self.feature_clusters:
+            return
+        mats = self._load_feature_matrices()
+        if mats is not None:
+            self._load_member_cache(mats)
+
     @property
     def _fc_cfg(self) -> Dict[str, Any]:
         """Feature-conditioned pipeline configuration block from run metadata."""
@@ -772,6 +785,9 @@ class ViewerState:
 
         tot = self._feature_firings()
         if tot is None or len(tot) == 0:
+            self._ensure_member_cache()
+            tot = self._feature_firings()
+        if tot is None or len(tot) == 0:
             logger.warning(f"Feature firing totals unavailable; returning T_{m} members unranked.")
             return [_make_entry(int(f), 0.0) for f in feats[:top_n]]
 
@@ -782,14 +798,19 @@ class ViewerState:
         order = np.argsort(firings)[-top_n:][::-1]
         return [_make_entry(int(valid_feats[j]), firings[j]) for j in order]
 
-    def _cluster_top_examples(self, m: int, top_n: int = 12) -> List[Dict[str, Any]]:
-        """Return top dataset examples firing feature cluster T_m across all its member features."""
+    def _cluster_top_examples(self, m: int, top_n: int = 12, sort: str = "activation") -> List[Dict[str, Any]]:
+        """Return top dataset examples firing feature cluster T_m across all its member features.
+
+        ``sort="activation"`` ranks by summed C_max+R_max activation mass (presence);
+        ``sort="disparity"`` ranks by |u| per-example preference disparity against T_m.
+        """
         mats = self._load_feature_matrices()
         examples = self._load_examples()
         m_int = int(m)
         feats = self.feature_clusters.get(m_int, [])
         if mats is None or examples is None or not feats:
             return []
+        self._ensure_member_cache()
 
         if self._all_member_cols is not None:
             feats_arr = np.asarray(feats, dtype=np.int64)
@@ -797,6 +818,17 @@ class ViewerState:
             valid_mask = (slots < len(self._all_member_cols)) & (self._all_member_cols[slots] == feats_arr)
             slots = slots[valid_mask]
             if len(slots) > 0:
+                if sort == "disparity":
+                    fc = self._load_fc_result()
+                    if fc is None or fc.u_matrix is None:
+                        logger.warning("Disparity ranking unavailable (feature_conditioned.npz missing); falling back to activation order.")
+                    else:
+                        cluster_ids = sorted(int(c) for c in self.feature_clusters.keys())
+                        if m_int in cluster_ids:
+                            u_col = fc.u_matrix[:, cluster_ids.index(m_int)]
+                            scores = np.abs(np.asarray(u_col, dtype=np.float32))
+                            return self._top_examples(scores, examples, top_n)
+                        logger.warning(f"T_{m_int} not found in u_matrix columns; falling back to activation order.")
                 scores = np.zeros(len(examples), dtype=np.float32)
                 for attr in ("C_max", "R_max"):
                     M = self._member_matrix(mats, attr)
@@ -805,22 +837,29 @@ class ViewerState:
                 return self._top_examples(scores, examples, top_n)
         return []
 
-    def _feature_cluster_info(self, m: int, top_n_examples: int = 12) -> Dict[str, Any]:
+    def _feature_cluster_info(self, m: int, top_n_examples: int = 12, sort: str = "activation") -> Dict[str, Any]:
         """Whole-cluster interpretation for T_m: LLM label, top features, and representative examples."""
         m_int = int(m)
-        cache_key = f"T_{m_int}_{top_n_examples}"
+        sort_mode = "disparity" if sort == "disparity" else "activation"
+        cache_key = f"T_{m_int}_{top_n_examples}_{sort_mode}"
 
         def build() -> Dict[str, Any]:
             feats = self.feature_clusters.get(m_int, [])
-            label = self._load_feature_cluster_labels().get(m_int)
+            lbl = self._load_feature_cluster_labels().get(m_int) or {
+                "title": f"Feature cluster T_{m}", "description": "", "keywords": [],
+            }
             val_metrics = self._get_cluster_validation_metrics().get("clusters", {}).get(m_int)
             return {
                 "cluster_m": m_int,
-                "label": label or {"title": f"Feature cluster T_{m}", "description": "", "keywords": []},
+                "label": lbl,
+                "title": lbl.get("title"),
+                "description": lbl.get("description"),
+                "keywords": lbl.get("keywords", []),
                 "n_features": len(feats),
                 "validation": val_metrics,
                 "top_features": self._top_cluster_features(m_int, top_n=8),
-                "examples": self._cluster_top_examples(m_int, top_n=top_n_examples),
+                "examples": self._cluster_top_examples(m_int, top_n=top_n_examples, sort=sort_mode),
+                "sort": sort_mode,
             }
 
         res = self._cached_info(cache_key, build)
@@ -1311,7 +1350,8 @@ def get_pc_cluster_examples(
 def get_cluster_detail(
     type: str = Query(..., description="'data' (B_k), 'feature' (T_m), 'prompt' (A_k), or 'response' (R_m)"),
     id: int = Query(..., description="Cluster ID integer"),
-    top_n: int = Query(5, description="Number of top examples to return")
+    top_n: int = Query(5, description="Number of top examples to return"),
+    sort: str = Query("activation", description="T_m example ranking: 'activation' (C+R mass) or 'disparity' (|u|)")
 ) -> Dict[str, Any]:
     """Unified polymorphic lookup endpoint for all 4 cluster families (B_k, T_m, A_k, R_m)."""
     state = get_state()
@@ -1319,7 +1359,7 @@ def get_cluster_detail(
     if t in ("data", "b", "bk"):
         return {"cluster_family": "B", "cluster_type": "data", "id": id, **state._data_cluster_info(id, top_n_examples=top_n)}
     elif t in ("feature", "t", "tm"):
-        return {"cluster_family": "T", "cluster_type": "feature", "id": id, **state._feature_cluster_info(id, top_n_examples=top_n)}
+        return {"cluster_family": "T", "cluster_type": "feature", "id": id, **state._feature_cluster_info(id, top_n_examples=top_n, sort=sort)}
     elif t in ("prompt", "a", "ak", "response", "r", "rm"):
         is_prompt = t in ("prompt", "a", "ak")
         cluster_type = "prompt" if is_prompt else "response"

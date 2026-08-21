@@ -1,7 +1,7 @@
 {
   "name": "qwen3_1.7b_batchtopk_65k",
   "seed": 0,
-  "timestamp": "2026-08-20 21:07:57",
+  "timestamp": "2026-08-20 23:07:29",
   "config": {
     "name": "qwen3_1.7b_batchtopk_65k",
     "seed": 0,
@@ -69,8 +69,10 @@
       "skip_feature_clusters": false,
       "skip_pc_examples": false,
       "pc_n_top": 10,
-      "max_prompt_chars": 600,
-      "max_examples": 20
+      "max_prompt_chars": 400,
+      "max_examples": 10,
+      "max_new_tokens": 150,
+      "batch_size": 8
     },
     "dpo_validation": {
       "train_samples": 10000,
@@ -86,5 +88,10 @@
       "max_length": 512,
       "num_features": 50
     }
+  },
+  "extraction_state": {
+    "N": 259783,
+    "d_sae": 16384,
+    "ex_hash": "b69a0f55c812166a"
   }
 }

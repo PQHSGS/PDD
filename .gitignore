@@ -46,3 +46,4 @@ runs/**/prompt_conditioned_hypotheses.json
 # CodeGraph / notebooklm indexes
 .codegraph/
 .notebooklm/
+.env

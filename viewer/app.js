@@ -30,6 +30,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }[c]));
   }
 
+  // LLM-generated title for feature cluster T_m (from feature_cluster_labels.json via /api/run_data)
+  function fcLabelTitle(m) {
+    const l = currentRunData && currentRunData.feature_cluster_labels ? currentRunData.feature_cluster_labels[String(m)] : null;
+    return l && l.title ? l.title : null;
+  }
+
   // Render math in text: detect LaTeX patterns and render with KaTeX.
   // Returns HTML with inline/block math rendered, non-math text escaped.
   function renderMath(text) {
@@ -366,6 +372,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (family === "T") {
       const topFeats = data.top_features || [];
       const exs = data.examples || [];
+      const sortMode = data.sort === "disparity" ? "disparity" : "activation";
       const val = data.validation;
       let valHtml = "";
       if (val) {
@@ -394,6 +401,13 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
 
         <div class="detail-section">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
+            <div class="detail-section-title" style="margin-bottom:0;">📄 Real Dataset Examples Firing ${esc(badgeText)}</div>
+            <div style="display:flex; gap:4px;" title="Rank examples by total activation mass (C+R) or by preference disparity |u| against this cluster">
+              <button class="tm-sort-btn ${sortMode === "activation" ? "active" : ""}" data-cid="${esc(cid)}" data-sort="activation">By Activation</button>
+              <button class="tm-sort-btn ${sortMode === "disparity" ? "active" : ""}" data-cid="${esc(cid)}" data-sort="disparity">By Disparity |u|</button>
+            </div>
+          </div>
           ${renderExampleCarousel(`📄 Top Real Dataset Response Examples Firing ${esc(badgeText)}`, exs, carouselFiringCard, `t_${cid}_carousel`)}
         </div>
       `;
@@ -482,6 +496,38 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!type && tag.dataset.cluster !== undefined) type = "feature";
     if (cid !== undefined && type) {
       openSlidePanel(type, cid);
+    }
+  });
+
+  // T_m example ranking toggle (Tab 2 drawer): re-fetch examples ranked by activation or disparity
+  document.addEventListener("click", async (ev) => {
+    const btn = ev.target.closest(".tm-sort-btn");
+    if (!btn || btn.classList.contains("active")) return;
+    const cid = btn.dataset.cid;
+    const sort = btn.dataset.sort === "disparity" ? "disparity" : "activation";
+    if (cid === undefined) return;
+
+    btn.parentElement.querySelectorAll(".tm-sort-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+
+    if (drawerBody) {
+      drawerBody.innerHTML = `
+        <div style="padding:40px 20px; text-align:center; color:var(--text-muted); font-size:0.9rem;">
+          <div class="placeholder-icon" style="font-size:2rem; margin-bottom:8px;">⚡</div>
+          Re-ranking T_${esc(cid)} examples by <strong>${sort === "disparity" ? "|u| disparity" : "activation"}</strong>...
+        </div>
+      `;
+    }
+    try {
+      const res = await fetch(`/api/cluster_detail?type=feature&id=${encodeURIComponent(cid)}&top_n=12&sort=${sort}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      clusterDetailCache.set(`T_${cid}`, data);
+      renderDrawerDetail(data, "T", cid);
+    } catch (err) {
+      if (drawerBody) {
+        drawerBody.innerHTML = `<div style="padding:20px; color:var(--color-rejected);">Failed to re-rank examples: ${esc(err.message)}</div>`;
+      }
     }
   });
 
@@ -708,6 +754,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const dirBadge = h.is_chosen_leaning
           ? '<span class="pill pill-chosen">Chosen (Δ>0)</span>'
           : '<span class="pill pill-rejected">Rejected (Δ<0)</span>';
+        const tmTitle = fcLabelTitle(h.m);
         return `
           <div class="cluster-master-item ${isActive}" data-stat-type="b1" data-k="${esc(h.k)}" data-m="${esc(h.m)}" data-key="${key}">
             <div class="cluster-item-head">
@@ -718,6 +765,7 @@ document.addEventListener("DOMContentLoaded", () => {
               </div>
               ${dirBadge}
             </div>
+            ${tmTitle ? `<div title="${esc(tmTitle)}" style="font-size:0.76rem; color:var(--text-muted); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">🏷️ ${esc(tmTitle)}</div>` : ""}
             <div style="display:flex; justify-content:space-between; align-items:center; font-family:var(--font-mono); font-size:0.78rem; margin-top:2px;">
               <span>Effect Δ: <strong>${(h.delta > 0 ? '+' : '') + h.delta.toFixed(4)}</strong></span>
               <span style="color:var(--text-muted);">z=${h.z_score ? h.z_score.toFixed(1) : '-'} · d=${h.cohens_d ? h.cohens_d.toFixed(2) : '-'}</span>
@@ -753,40 +801,56 @@ document.addEventListener("DOMContentLoaded", () => {
     activeSelectedHypoKey = key;
     renderStatHypothesesList();
 
-    const targetType = type === "b1" ? "feature" : "response";
-    const targetId = h.m;
-    const cacheKey = `${type === "b1" ? "T" : "R"}_${targetId}`;
+    // Primary block: T_m (b1) / R_m (b2). Context block: B_k (b1) / A_k (b2).
+    const primaryType = type === "b1" ? "feature" : "response";
+    const primaryId = h.m;
+    const secondaryType = type === "b1" ? "data" : "prompt";
+    const secondaryId = h.k;
+    const primaryCacheKey = `${type === "b1" ? "T" : "R"}_${primaryId}`;
+    const secondaryCacheKey = `${type === "b1" ? "B" : "A"}_${secondaryId}`;
 
-    if (clusterDetailCache.has(cacheKey)) {
-      renderStatDetail(h, type, clusterDetailCache.get(cacheKey));
+    if (clusterDetailCache.has(primaryCacheKey) && clusterDetailCache.has(secondaryCacheKey)) {
+      renderStatDetail(h, type, clusterDetailCache.get(primaryCacheKey), clusterDetailCache.get(secondaryCacheKey));
       return;
     }
 
     statDetailView.innerHTML = `
       <div style="padding:30px; text-align:center; color:var(--text-muted); font-size:0.9rem;">
-        Loading interpretation for <strong>${type === "b1" ? `T_${targetId}` : `R_${targetId}`}</strong>...
+        Loading interpretation for <strong>${type === "b1" ? `T_${primaryId}` : `R_${primaryId}`}</strong>...
       </div>
     `;
 
     try {
-      const res = await fetch(`/api/cluster_detail?type=${encodeURIComponent(targetType)}&id=${encodeURIComponent(targetId)}&top_n=12`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      clusterDetailCache.set(cacheKey, data);
-      renderStatDetail(h, type, data);
+      const [primaryRes, secondaryRes] = await Promise.all([
+        clusterDetailCache.has(primaryCacheKey) ? null : fetch(`/api/cluster_detail?type=${encodeURIComponent(primaryType)}&id=${encodeURIComponent(primaryId)}&top_n=12`),
+        clusterDetailCache.has(secondaryCacheKey) ? null : fetch(`/api/cluster_detail?type=${encodeURIComponent(secondaryType)}&id=${encodeURIComponent(secondaryId)}&top_n=8`),
+      ]);
+      let primaryData = clusterDetailCache.get(primaryCacheKey);
+      if (primaryRes) {
+        if (!primaryRes.ok) throw new Error(`HTTP ${primaryRes.status}`);
+        primaryData = await primaryRes.json();
+        clusterDetailCache.set(primaryCacheKey, primaryData);
+      }
+      let secondaryData = clusterDetailCache.get(secondaryCacheKey);
+      if (secondaryRes && secondaryRes.ok) {
+        secondaryData = await secondaryRes.json();
+        clusterDetailCache.set(secondaryCacheKey, secondaryData);
+      }
+      renderStatDetail(h, type, primaryData, secondaryData);
     } catch (err) {
       statDetailView.innerHTML = `<div style="padding:20px; color:var(--color-rejected);">Failed to load cluster details: ${esc(err.message)}</div>`;
     }
   }
 
-  function renderStatDetail(h, type, data) {
+  function renderStatDetail(h, type, data, contextData) {
     if (!statDetailView) return;
     let hypoHeader = "";
     if (type === "b1") {
+      const tmTitle = fcLabelTitle(h.m);
       hypoHeader = `
         <div style="background:var(--border-subtle); border:1px solid var(--border-color); border-radius:var(--radius-md); padding:12px 16px; margin-bottom:18px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-            <div style="font-weight:700; font-size:0.95rem;">Hypothesis: Data Cluster B_${esc(h.k)} × Feature Community T_${esc(h.m)}</div>
+            <div style="font-weight:700; font-size:0.95rem;">Hypothesis: Data Cluster B_${esc(h.k)} × Feature Community T_${esc(h.m)}${tmTitle ? ` <span style="font-weight:500; color:var(--text-muted);">· ${esc(tmTitle)}</span>` : ""}</div>
             <span class="pill ${h.is_chosen_leaning ? 'pill-chosen' : 'pill-rejected'}">${h.is_chosen_leaning ? 'Chosen-Leaning (Δ>0)' : 'Rejected-Leaning (Δ<0)'}</span>
           </div>
           <div style="font-family:var(--font-mono); font-size:0.82rem; color:var(--text-muted); display:flex; gap:14px; flex-wrap:wrap;">
@@ -813,7 +877,38 @@ document.addEventListener("DOMContentLoaded", () => {
       `;
     }
 
-    statDetailView.innerHTML = hypoHeader + buildClusterDetailHtml(data.badgeText || (type === "b1" ? `T_${h.m}` : `R_${h.m}`), type === "b1" ? "T" : "R", h.m, data.title || "Cluster Detail", data.description || "", data.keywords || [], data);
+    let html = hypoHeader + buildClusterDetailHtml(
+      type === "b1" ? `T_${h.m}` : `R_${h.m}`,
+      type === "b1" ? "T" : "R",
+      h.m,
+      data.title || (type === "b1" ? fcLabelTitle(h.m) || `Feature Cluster T_${h.m}` : `Response Delta R_${h.m}`),
+      data.description || "",
+      data.keywords || [],
+      data
+    );
+
+    // Second interpretation block for the co-occurring cluster (B_k in B.1, A_k in B.2)
+    if (contextData) {
+      const ctxFamily = type === "b1" ? "B" : "A";
+      const ctxLabel = type === "b1" ? `DATA CLUSTER B_${h.k} INTERPRETATION` : `PROMPT CLUSTER A_${h.k} INTERPRETATION`;
+      html += `
+        <div style="display:flex; align-items:center; gap:10px; margin:24px 0 14px;">
+          <div style="flex:1; height:1px; background:var(--border-color);"></div>
+          <div style="font-size:0.75rem; font-weight:700; color:var(--text-muted); letter-spacing:0.06em;">${ctxLabel}</div>
+          <div style="flex:1; height:1px; background:var(--border-color);"></div>
+        </div>
+      ` + buildClusterDetailHtml(
+        `${ctxFamily}_${h.k}`,
+        ctxFamily,
+        h.k,
+        contextData.title || `Cluster ${ctxFamily}_${h.k}`,
+        contextData.description || "",
+        contextData.keywords || [],
+        contextData
+      );
+    }
+
+    statDetailView.innerHTML = html;
   }
 
   // Stat Toolbar Event Listeners

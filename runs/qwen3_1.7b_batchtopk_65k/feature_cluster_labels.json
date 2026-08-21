@@ -1,710 +1,873 @@
 {
   "feature_clusters": {
     "1": {
-      "title": "Convolutional Neural Networks",
-      "description": "The responses consistently involve the design and implementation of Convolutional Neural Networks for image classification tasks.",
+      "title": "Code Generation & Problem Solving",
+      "description": "The responses demonstrate a tendency to provide direct, step-by-step solutions to programming and mathematical problems, often with explicit code examples.",
       "keywords": [
-        "cnn",
-        "tensorflow",
-        "image classification",
-        "neural networks",
-        "digit recognition"
+        "programming",
+        "algorithms",
+        "mathematics",
+        "problem solving"
       ]
     },
     "2": {
-      "title": "String Manipulation & Regular Expressions",
-      "description": "The responses demonstrate a strong preference for solutions involving string processing, particularly using regular expressions for pattern matching and extraction.",
+      "title": "Code Implementation Examples",
+      "description": "The responses demonstrate examples of code solutions to specific programming problems.",
       "keywords": [
-        "strings",
-        "regex",
-        "pattern matching",
-        "text processing",
-        "validation"
+        "python",
+        "programming",
+        "code",
+        "examples"
       ]
     },
     "3": {
-      "title": "HTML Form Development",
-      "description": "The responses consistently demonstrate the creation and implementation of interactive HTML forms with various features like validation, AJAX submission, and user input fields.",
+      "title": "Code Generation with HTML",
+      "description": "The responses demonstrate a tendency to provide code snippets, particularly HTML, to directly address user requests.",
       "keywords": [
         "html",
-        "forms",
-        "validation",
+        "code",
+        "programming",
         "javascript",
-        "input"
+        "webdev"
       ]
     },
     "4": {
       "title": "Step-by-Step Problem Solving",
-      "description": "The responses consistently demonstrate a structured, methodical approach to presenting and solving mathematical or analytical problems, often involving explicit steps and explanations.",
+      "description": "The responses demonstrate a preference for providing detailed, sequential explanations and reasoning processes when addressing questions or tasks.",
       "keywords": [
-        "mathematics",
-        "problem solving",
-        "stepwise",
-        "reasoning"
+        "reasoning",
+        "explanation",
+        "step-by-step",
+        "logic"
       ]
     },
     "5": {
-      "title": "Table Mapping & Correspondence",
-      "description": "The responses consistently demonstrate an ability to identify and map corresponding elements between two structured tables or lists.",
+      "title": "Code Transformation Requests",
+      "description": "The responses frequently involve modifying or rewriting existing code snippets to meet specific requirements or constraints.",
       "keywords": [
-        "table mapping",
-        "column correspondence",
-        "data alignment",
-        "relation extraction"
-      ]
-    },
-    "6": {
-      "title": "Automated Code Generation",
-      "description": "The responses consistently provide complete, ready-to-use code snippets demonstrating specific technical solutions.",
-      "keywords": [
-        "code generation",
-        "python",
-        "javascript",
-        "web development",
-        "deployment"
-      ]
-    },
-    "7": {
-      "title": "Summarization & Keyword Extraction",
-      "description": "The responses consistently demonstrate the ability to condense text and extract relevant keywords, often with a focus on providing concise summaries and lists.",
-      "keywords": [
-        "summarization",
-        "keyword extraction",
-        "text reduction",
-        "information retrieval"
-      ]
-    },
-    "8": {
-      "title": "Harmful Request Mitigation",
-      "description": "The responses consistently demonstrate a strong tendency to refuse or deflect prompts involving potentially dangerous, unethical, or illegal activities.",
-      "keywords": [
-        "risk assessment",
-        "safety protocols",
-        "content filtering",
-        "ethical guidelines"
-      ]
-    },
-    "9": {
-      "title": "SVG Visual Effects",
-      "description": "The responses consistently address techniques for modifying and enhancing the appearance of SVG graphics.",
-      "keywords": [
-        "svg",
-        "filters",
-        "effects",
-        "animation",
-        "styling"
-      ]
-    },
-    "10": {
-      "title": "Technical Product Naming",
-      "description": "The responses consistently focus on identifying and describing specific software products, platforms, or technologies.",
-      "keywords": [
-        "windows",
-        "python",
-        "java",
-        "sql server",
-        "microsoft"
-      ]
-    },
-    "11": {
-      "title": "Practical Code Implementation",
-      "description": "The responses consistently demonstrate providing concrete, working code examples and tutorials rather than abstract explanations or high-level guides.",
-      "keywords": [
-        "code example",
-        "tutorial",
-        "implementation",
-        "python",
-        "javascript"
-      ]
-    },
-    "12": {
-      "title": "Optimal Substructure Problems",
-      "description": "The prompts consistently require identifying optimal solutions within a larger problem structure, often involving minimizing or maximizing a specific quantity subject to constraints.",
-      "keywords": [
-        "optimization",
-        "dynamic programming",
-        "minimum/maximum",
-        "constraints",
-        "problem decomposition"
-      ]
-    },
-    "13": {
-      "title": "Prime Number Identification",
-      "description": "The responses consistently involve identifying and manipulating prime numbers within various data structures and algorithms.",
-      "keywords": [
-        "prime numbers",
-        "number theory",
-        "mathematics",
-        "algorithms",
-        "integer"
-      ]
-    },
-    "14": {
-      "title": "Multiplayer Web Applications",
-      "description": "The responses consistently relate to the development and structure of web-based multiplayer chat or server applications.",
-      "keywords": [
-        "html",
-        "css",
-        "javascript",
-        "server",
-        "chat"
-      ]
-    },
-    "15": {
-      "title": "Quantum Mechanics Exploration",
-      "description": "The responses consistently demonstrate a detailed and comprehensive exploration of complex scientific concepts, particularly within the domain of quantum mechanics.",
-      "keywords": [
-        "quantum mechanics",
-        "physics",
-        "entanglement",
-        "superposition",
-        "theory"
-      ]
-    },
-    "16": {
-      "title": "Functional Python Data Processing",
-      "description": "The responses demonstrate a preference for concise, well-defined Python functions designed to manipulate and transform data structures, often with clear input and output specifications.",
-      "keywords": [
-        "python",
-        "data processing",
-        "functions",
-        "list manipulation",
-        "data transformation"
-      ]
-    },
-    "17": {
-      "title": "Historical Event Summarization",
-      "description": "The responses consistently provide detailed, factual summaries of complex historical events, often emphasizing causes and consequences.",
-      "keywords": [
-        "history",
-        "genocide",
-        "political events",
-        "world war"
-      ]
-    },
-    "18": {
-      "title": "Quadratic Function Modeling",
-      "description": "All responses involve solving and interpreting problems using quadratic equations and functions.",
-      "keywords": [
-        "quadratic equations",
-        "polynomial functions",
-        "modeling",
-        "optimization"
-      ]
-    },
-    "19": {
-      "title": "Supervised Learning Applications",
-      "description": "The responses consistently demonstrate the application of supervised learning techniques and associated data science practices.",
-      "keywords": [
-        "supervised learning",
-        "machine learning",
-        "data science",
-        "classification",
-        "regression"
-      ]
-    },
-    "20": {
-      "title": "Step-by-Step Solution Guides",
-      "description": "The responses consistently provide detailed, sequential instructions and examples for completing specific tasks or utilizing tools.",
-      "keywords": [
-        "tutorial",
-        "implementation",
-        "example",
-        "procedure"
-      ]
-    },
-    "21": {
-      "title": "Governmental Policy & Analysis",
-      "description": "The responses consistently demonstrate a detailed, authoritative, and structured explanation of complex governmental organizations, initiatives, and procedures.",
-      "keywords": [
-        "government",
-        "policy",
-        "defense",
-        "security",
-        "infrastructure"
-      ]
-    },
-    "22": {
-      "title": "Quantum Superposition & Mechanics",
-      "description": "The responses consistently explore the concept of quantum superposition and its related principles within the broader context of quantum mechanics and its applications.",
-      "keywords": [
-        "quantum mechanics",
-        "superposition",
-        "quantum computing",
-        "quantum theory",
-        "entanglement"
-      ]
-    },
-    "23": {
-      "title": "Financial Security Practices",
-      "description": "The responses consistently focus on strategies and advice related to protecting personal and financial information from fraud, scams, and unauthorized access.",
-      "keywords": [
-        "finance",
-        "security",
-        "fraud",
-        "protection",
-        "privacy"
-      ]
-    },
-    "24": {
-      "title": "Formal Definitions & Explanations",
-      "description": "The responses consistently provide precise, structured definitions and explanations of complex concepts, often utilizing technical terminology.",
-      "keywords": [
-        "definition",
-        "explanation",
-        "technical",
-        "formal",
-        "terminology"
-      ]
-    },
-    "25": {
-      "title": "Structured Information Extraction",
-      "description": "The responses consistently provide structured, organized answers, often utilizing lists, headings, and specific terminology related to technical documentation or guides.",
-      "keywords": [
-        "documentation",
-        "guides",
-        "structured data",
-        "technical writing",
-        "information"
-      ]
-    },
-    "26": {
-      "title": "Risk Mitigation Strategies",
-      "description": "The responses consistently focus on identifying and implementing strategies to reduce or prevent potential negative outcomes or vulnerabilities.",
-      "keywords": [
-        "security",
-        "espionage",
-        "privacy",
-        "scams",
-        "data protection"
-      ]
-    },
-    "27": {
-      "title": "Government Security Protocols",
-      "description": "The responses consistently focus on security measures, procedures, and regulations within government organizations and agencies.",
-      "keywords": [
-        "security",
-        "government",
-        "cybersecurity",
-        "protocols",
-        "clearance"
-      ]
-    },
-    "28": {
-      "title": "Responsive Web Layouts",
-      "description": "The responses consistently demonstrate a focus on creating web interfaces that adapt to different screen sizes and devices.",
-      "keywords": [
-        "html",
-        "css",
-        "responsive design",
-        "web development",
-        "layout"
-      ]
-    },
-    "29": {
-      "title": "Problem Decomposition & Solution",
-      "description": "The responses consistently demonstrate a structured approach to complex questions, breaking them down into smaller, manageable steps and providing focused, targeted solutions.",
-      "keywords": [
-        "mathematics",
-        "physics",
-        "chemistry",
-        "engineering",
-        "calculation"
-      ]
-    },
-    "30": {
-      "title": "Contrarian Argumentation & Denial",
-      "description": "The responses consistently exhibit a pattern of presenting arguments that challenge established knowledge, often employing conspiracy theories or dismissing scientific consensus.",
-      "keywords": [
-        "denial",
-        "conspiracy",
-        "misinformation",
-        "skepticism",
-        "alternative facts"
-      ]
-    },
-    "31": {
-      "title": "HTML Form Development",
-      "description": "These responses demonstrate a focus on creating and validating HTML forms with client-side JavaScript.",
-      "keywords": [
-        "html",
-        "form",
-        "validation",
-        "javascript",
-        "web development"
-      ]
-    },
-    "32": {
-      "title": "Emphasis on Key Term Highlighting",
-      "description": "The responses consistently emphasize and italicize specific terms or phrases within the generated text.",
-      "keywords": [
-        "highlighting",
-        "emphasis",
-        "text formatting",
-        "keyword extraction",
-        "prompts"
-      ]
-    },
-    "33": {
-      "title": "Risk Mitigation Strategies",
-      "description": "The responses consistently focus on identifying and addressing potential dangers or vulnerabilities, emphasizing preventative measures and protective actions.",
-      "keywords": [
-        "security",
-        "safety",
-        "fraud",
-        "risk",
-        "protection"
-      ]
-    },
-    "34": {
-      "title": "Step-by-Step Instructions",
-      "description": "The responses consistently provide detailed, sequential guides and explanations for accomplishing specific tasks.",
-      "keywords": [
-        "tutorial",
-        "guide",
-        "process",
-        "explanation",
-        "methodology"
-      ]
-    },
-    "35": {
-      "title": "Biomedical Terminology Extraction",
-      "description": "The responses consistently demonstrate the ability to extract and summarize complex biomedical concepts, particularly focusing on disease mechanisms, biological processes, and specific molecules.",
-      "keywords": [
-        "biomedical",
-        "medical",
-        "disease",
-        "molecular",
-        "genetics"
-      ]
-    },
-    "36": {
-      "title": "Structured Summarization",
-      "description": "The responses consistently present information in a highly organized and explicitly labeled format, often using headings, lists, and clear section divisions.",
-      "keywords": [
-        "summarization",
-        "organization",
-        "headings",
-        "structure"
-      ]
-    },
-    "37": {
-      "title": "Structured Technical Explanations",
-      "description": "The responses consistently provide detailed, step-by-step instructions and explanations of complex technical topics, often using lists and clear headings.",
-      "keywords": [
-        "tutorial",
-        "technical",
-        "explanation",
-        "step-by-step",
+        "code modification",
+        "rewriting",
+        "algorithm implementation",
         "programming"
       ]
     },
-    "38": {
-      "title": "Policy Reform Proposals",
-      "description": "The responses consistently involve drafting or analyzing proposals related to legislative or systemic changes.",
+    "6": {
+      "title": "Code Generation Examples",
+      "description": "The responses demonstrate the generation of code snippets, often in Python, to fulfill user requests.",
       "keywords": [
-        "policy",
-        "reform",
-        "legislation",
-        "proposals",
-        "regulation"
+        "python",
+        "code",
+        "programming",
+        "scripting"
+      ]
+    },
+    "7": {
+      "title": "Instruction Following & Detail",
+      "description": "The responses demonstrate a strong tendency to provide detailed, step-by-step instructions and explanations, often elaborating on the prompt's requirements.",
+      "keywords": [
+        "instructions",
+        "explanation",
+        "details",
+        "response"
+      ]
+    },
+    "8": {
+      "title": "Code Generation Examples",
+      "description": "The responses demonstrate the generation of code snippets, primarily in Python, to fulfill user requests.",
+      "keywords": [
+        "python",
+        "code",
+        "programming",
+        "scripting"
+      ]
+    },
+    "9": {
+      "title": "Code Generation Examples",
+      "description": "The responses demonstrate the generation of code snippets, particularly in Python, to address specific programming challenges.",
+      "keywords": [
+        "python",
+        "code",
+        "programming",
+        "algorithms"
+      ]
+    },
+    "10": {
+      "title": "Structured Response Generation",
+      "description": "The responses consistently demonstrate a preference for providing detailed, formatted, and often lengthy answers, adhering to specific output constraints or requirements.",
+      "keywords": [
+        "format",
+        "constraints",
+        "output",
+        "requirements"
+      ]
+    },
+    "11": {
+      "title": "Code Explanation & Debugging",
+      "description": "The prompts and responses frequently involve explaining or debugging code snippets, particularly in programming contexts.",
+      "keywords": [
+        "code",
+        "programming",
+        "debugging",
+        "syntax"
+      ]
+    },
+    "12": {
+      "title": "Step-by-Step Problem Solving",
+      "description": "These examples demonstrate a preference for providing detailed, procedural explanations and solutions to specific questions, often involving mathematical or logical reasoning.",
+      "keywords": [
+        "mathematics",
+        "problem solving",
+        "explanation",
+        "reasoning"
+      ]
+    },
+    "13": {
+      "title": "Step-by-Step Problem Solving",
+      "description": "The responses demonstrate a structured, analytical approach to presenting solutions, often involving breaking down complex problems into smaller, manageable steps.",
+      "keywords": [
+        "problem solving",
+        "decomposition",
+        "explanation",
+        "tutorial"
+      ]
+    },
+    "14": {
+      "title": "Step-by-Step Problem Solving",
+      "description": "The responses demonstrate a structured, analytical approach to presenting solutions, often involving calculations and explanations of reasoning.",
+      "keywords": [
+        "calculation",
+        "explanation",
+        "problem solving"
+      ]
+    },
+    "15": {
+      "title": "Instruction Following & Summarization",
+      "description": "All responses demonstrate a clear adherence to the prompt's instructions, providing concise and relevant summaries or answers.",
+      "keywords": [
+        "summarization",
+        "response generation",
+        "instruction adherence",
+        "text extraction"
+      ]
+    },
+    "16": {
+      "title": "Step-by-Step Instruction Following",
+      "description": "All examples demonstrate a clear, sequential process of providing detailed instructions or explanations, often involving multiple steps or considerations.",
+      "keywords": [
+        "instruction",
+        "explanation",
+        "process",
+        "details",
+        "sequence"
+      ]
+    },
+    "17": {
+      "title": "Step-by-Step Solution Guides",
+      "description": "These responses demonstrate a tendency to provide detailed, instructional walkthroughs, often involving mathematical or logical steps, to solve a problem or answer a question.",
+      "keywords": [
+        "explanation",
+        "tutorial",
+        "problem solving",
+        "mathematical"
+      ]
+    },
+    "18": {
+      "title": "Step-by-Step Solution Explanation",
+      "description": "The responses demonstrate a clear, sequential breakdown of problems, often involving calculations or logical reasoning.",
+      "keywords": [
+        "mathematical",
+        "reasoning",
+        "problem solving",
+        "explanation"
+      ]
+    },
+    "19": {
+      "title": "Step-by-Step Reasoning",
+      "description": "The responses demonstrate a process of breaking down a complex problem into smaller, sequential steps.",
+      "keywords": [
+        "explanation",
+        "process",
+        "sequence",
+        "logic"
+      ]
+    },
+    "20": {
+      "title": "Iterative Code Improvement",
+      "description": "The responses demonstrate a focus on refining existing functionality through incremental steps and identifying areas for optimization.",
+      "keywords": [
+        "optimization",
+        "testing",
+        "refinement",
+        "code",
+        "improvement"
+      ]
+    },
+    "21": {
+      "title": "Comparative Description Generation",
+      "description": "The feature cluster consistently favors providing detailed, contrasting descriptions of similar concepts or scenarios, often highlighting differences and presenting one option as superior.",
+      "keywords": [
+        "description",
+        "comparison",
+        "contrast",
+        "promoted",
+        "rejected"
+      ]
+    },
+    "22": {
+      "title": "Information Retrieval & Summarization",
+      "description": "The responses demonstrate a tendency to provide concise, factual answers and summaries based on information retrieval.",
+      "keywords": [
+        "information",
+        "retrieval",
+        "summarization",
+        "knowledge",
+        "facts"
+      ]
+    },
+    "23": {
+      "title": "Formulaic Code Generation",
+      "description": "The responses demonstrate a tendency to directly provide code solutions or mathematical formulas based on the prompt's request.",
+      "keywords": [
+        "code",
+        "formula",
+        "calculation",
+        "function",
+        "python"
+      ]
+    },
+    "24": {
+      "title": "Text Polishing & Refinement",
+      "description": "The responses demonstrate a focus on improving the clarity, grammar, and overall quality of provided text.",
+      "keywords": [
+        "proofreading",
+        "editing",
+        "polishing",
+        "clarity",
+        "revision"
+      ]
+    },
+    "25": {
+      "title": "Instruction Following",
+      "description": "These examples demonstrate responses that closely adhere to the specific instructions provided within the prompt, prioritizing faithful reproduction of the requested output format and content.",
+      "keywords": [
+        "prompt",
+        "response",
+        "instruction",
+        "fidelity"
+      ]
+    },
+    "26": {
+      "title": "Step-by-Step Reasoning",
+      "description": "The examples demonstrate a process of breaking down a complex question or task into smaller, sequential steps for solution.",
+      "keywords": [
+        "reasoning",
+        "sequence",
+        "explanation",
+        "decomposition"
+      ]
+    },
+    "27": {
+      "title": "Procedural Instruction Generation",
+      "description": "The responses demonstrate a tendency to provide step-by-step instructions or detailed explanations, often formatted as if guiding the user through a process.",
+      "keywords": [
+        "instruction",
+        "guidance",
+        "explanation",
+        "process"
+      ]
+    },
+    "28": {
+      "title": "Structured Explanation Generation",
+      "description": "These responses demonstrate a tendency to provide detailed, step-by-step explanations and justifications for their answers.",
+      "keywords": [
+        "explanation",
+        "justification",
+        "reasoning",
+        "details"
+      ]
+    },
+    "29": {
+      "title": "Formal Language Generation",
+      "description": "The responses demonstrate a preference for crafting text in a more polished and professional style.",
+      "keywords": [
+        "tone",
+        "style",
+        "editing",
+        "business"
+      ]
+    },
+    "30": {
+      "title": "Narrative Summarization",
+      "description": "These examples demonstrate the generation of concise summaries or descriptions of provided information, often involving structured output.",
+      "keywords": [
+        "summary",
+        "description",
+        "biography",
+        "explanation"
+      ]
+    },
+    "31": {
+      "title": "Conceptual Metaphor - Possession",
+      "description": "The responses consistently revolve around themes of ownership, sharing, and the loss of something valued, often framed through symbolic representation.",
+      "keywords": [
+        "ownership",
+        "sharing",
+        "loss",
+        "symbolism"
+      ]
+    },
+    "32": {
+      "title": "Step-by-Step Reasoning",
+      "description": "These examples demonstrate a process of breaking down a complex problem or question into smaller, sequential steps for a clear and logical solution.",
+      "keywords": [
+        "reasoning",
+        "sequence",
+        "explanation",
+        "process"
+      ]
+    },
+    "33": {
+      "title": "Step-by-Step Problem Solving",
+      "description": "These examples demonstrate a process of breaking down complex problems into smaller, sequential steps for solution.",
+      "keywords": [
+        "calculation",
+        "reasoning",
+        "mathematics",
+        "logic"
+      ]
+    },
+    "34": {
+      "title": "Content Restriction/Safety",
+      "description": "The responses demonstrate a mechanism to avoid generating potentially harmful or inappropriate content, prioritizing safety and ethical considerations.",
+      "keywords": [
+        "safety",
+        "content moderation",
+        "harmful content",
+        "ethical guidelines"
+      ]
+    },
+    "35": {
+      "title": "Code Solution Generation",
+      "description": "These responses demonstrate the generation of code solutions to specific programming problems, often providing Python code snippets.",
+      "keywords": [
+        "python",
+        "code",
+        "solution",
+        "programming"
+      ]
+    },
+    "36": {
+      "title": "Instructional Explanations",
+      "description": "The responses demonstrate providing detailed explanations and instructions, often outlining steps or concepts.",
+      "keywords": [
+        "explanation",
+        "instruction",
+        "tutorial",
+        "details"
+      ]
+    },
+    "37": {
+      "title": "Code Implementation Examples",
+      "description": "The responses demonstrate examples of code snippets and implementations of specific tasks.",
+      "keywords": [
+        "python",
+        "script",
+        "calculation",
+        "formula"
+      ]
+    },
+    "38": {
+      "title": "Step-by-Step Problem Solving",
+      "description": "These responses demonstrate a structured, sequential approach to addressing complex questions and providing detailed explanations, often involving breaking down a problem into smaller, manageable components.",
+      "keywords": [
+        "optimization",
+        "strategy",
+        "translation",
+        "sentence completion"
       ]
     },
     "39": {
-      "title": "Scientific Explanations & Technical Detail",
-      "description": "The responses consistently provide detailed, technical explanations of complex scientific or technical concepts, often with step-by-step implementations or thorough definitions.",
+      "title": "Code Implementation Guidance",
+      "description": "The responses demonstrate providing step-by-step instructions and code examples for solving programming problems.",
       "keywords": [
-        "science",
-        "technology",
-        "mathematics",
+        "python",
+        "code",
+        "function",
+        "implementation"
+      ]
+    },
+    "40": {
+      "title": "Information Retrieval & Summarization",
+      "description": "The responses demonstrate a tendency to directly provide factual information or summaries in response to user queries.",
+      "keywords": [
+        "information",
+        "retrieval",
+        "summarization",
+        "knowledge",
+        "facts"
+      ]
+    },
+    "41": {
+      "title": "Information Extraction",
+      "description": "These responses demonstrate the extraction of specific details and relationships from provided text.",
+      "keywords": [
+        "information",
+        "extraction",
+        "details",
+        "relationships"
+      ]
+    },
+    "42": {
+      "title": "Hypothetical Reasoning",
+      "description": "The responses demonstrate an attempt to answer questions based on conditional statements and potential outcomes, often involving 'if' scenarios and evaluating possibilities.",
+      "keywords": [
+        "hypothetical",
+        "conditional",
+        "possibility",
+        "evaluation"
+      ]
+    },
+    "43": {
+      "title": "Argumentative Reasoning",
+      "description": "The responses demonstrate a tendency to provide justifications and explanations for a particular stance, often with supporting details or examples.",
+      "keywords": [
+        "reasoning",
+        "justification",
+        "explanation",
+        "persuasion",
+        "elaboration"
+      ]
+    },
+    "44": {
+      "title": "Structured Data Extraction",
+      "description": "The responses demonstrate a systematic process of identifying and categorizing specific elements within provided text, often involving lists or dictionaries.",
+      "keywords": [
+        "extraction",
+        "categorization",
+        "entity recognition",
+        "data parsing"
+      ]
+    },
+    "45": {
+      "title": "Solution Explanations",
+      "description": "These prompts demonstrate explanations of algorithms and problem-solving techniques, often including code snippets or step-by-step instructions.",
+      "keywords": [
+        "algorithm",
+        "solution",
         "implementation",
         "explanation"
       ]
     },
-    "40": {
-      "title": "Technical Explanation Generation",
-      "description": "The responses consistently provide detailed, instructional explanations of complex topics, often with examples and structured formatting.",
-      "keywords": [
-        "technical writing",
-        "instructional",
-        "explanation",
-        "problem solving",
-        "demonstration"
-      ]
-    },
-    "41": {
-      "title": "Risk Mitigation & Refusal",
-      "description": "The responses consistently demonstrate a pattern of identifying and rejecting prompts that solicit harmful, unethical, or illegal advice.",
-      "keywords": [
-        "safety",
-        "ethics",
-        "harm",
-        "illegal"
-      ]
-    },
-    "42": {
-      "title": "Step-by-Step Explanations",
-      "description": "The responses consistently provide detailed, structured explanations, often breaking down complex topics into numbered steps or sections.",
-      "keywords": [
-        "tutorial",
-        "instruction",
-        "process",
-        "sequence"
-      ]
-    },
-    "43": {
-      "title": "Illicit Activity Guidance",
-      "description": "The feature cluster consistently identifies prompts seeking instructions or strategies for engaging in illegal, harmful, or unethical activities.",
-      "keywords": [
-        "cybercrime",
-        "malware",
-        "espionage",
-        "illegal activities",
-        "security breaches"
-      ]
-    },
-    "44": {
-      "title": "Network Protocol Communication",
-      "description": "The responses demonstrate an understanding and explanation of network protocols, particularly HTTP and TCP, including request/response structures and error handling.",
-      "keywords": [
-        "http",
-        "tcp",
-        "requests",
-        "networking",
-        "protocols"
-      ]
-    },
-    "45": {
-      "title": "Step-by-Step Code Solutions",
-      "description": "All responses provide detailed, structured, and complete code examples for solving specific technical problems.",
-      "keywords": [
-        "code example",
-        "tutorial",
-        "implementation",
-        "python",
-        "sklearn"
-      ]
-    },
     "46": {
-      "title": "Step-by-Step Instructions",
-      "description": "All responses provide a structured, sequential guide or process for achieving a specific outcome.",
+      "title": "Instruction Following Compliance",
+      "description": "The responses demonstrate a tendency to adhere strictly to specific instructions, often elaborating or expanding upon them in a detailed and sometimes overly verbose manner.",
       "keywords": [
-        "instruction",
-        "guide",
-        "process",
-        "sequence",
-        "method"
+        "instructions",
+        "compliance",
+        "details",
+        "expansion"
       ]
     },
     "47": {
-      "title": "Serverless Cloud Deployment",
-      "description": "The responses consistently discuss deploying and managing applications using serverless cloud platforms, primarily Google Cloud Functions and Cloud Run.",
+      "title": "Text Extraction Summarization",
+      "description": "The responses demonstrate a tendency to extract key information and provide concise summaries of provided text.",
       "keywords": [
-        "serverless",
-        "cloud run",
-        "google cloud",
-        "python",
-        "deployment"
+        "summarization",
+        "extraction",
+        "biomedical",
+        "abstracting"
       ]
     },
     "48": {
-      "title": "Structured Information Extraction",
-      "description": "The responses consistently demonstrate the ability to extract and present specific, well-defined pieces of information from text, often in a formatted or structured way (e.g., JSON, code snippets).",
+      "title": "Step-by-Step Instruction Sequencing",
+      "description": "The responses demonstrate a structured, sequential approach to fulfilling a request, often involving a series of actions or commands.",
       "keywords": [
-        "extraction",
-        "schema",
-        "data",
-        "parsing"
+        "sequence",
+        "commands",
+        "actions"
       ]
     },
     "49": {
-      "title": "Technical Code Solutions",
-      "description": "The responses consistently provide direct, practical code-based solutions to specific technical problems, often with detailed explanations and step-by-step instructions.",
+      "title": "Step-by-Step Problem Solving",
+      "description": "These prompts and responses demonstrate a structured, sequential approach to addressing questions and providing solutions, often involving breaking down a complex problem into smaller, manageable steps.",
       "keywords": [
-        "coding",
-        "programming",
-        "scripting",
-        "technical"
+        "calculation",
+        "explanation",
+        "process"
       ]
     },
     "50": {
-      "title": "Structured Literature Reviews",
-      "description": "These responses consistently demonstrate a preference for highly structured and organized literature reviews, often with clear headings, subheadings, and concise summaries.",
+      "title": "Step-by-Step Reasoning Chains",
+      "description": "The responses demonstrate a detailed, multi-step process of arriving at an answer, often involving calculations or logical deductions.",
       "keywords": [
-        "literature review",
-        "academic writing",
-        "survey papers",
-        "technical reports"
+        "reasoning",
+        "deduction",
+        "calculation",
+        "explanation"
       ]
     },
     "51": {
-      "title": "Step-by-Step Explanations",
-      "description": "The responses consistently provide detailed, structured, and instructive explanations of complex topics.",
+      "title": "Information Retrieval Assistance",
+      "description": "The responses demonstrate attempts to provide information or locate resources based on user queries.",
       "keywords": [
-        "tutorial",
-        "guide",
-        "explanation",
-        "process",
-        "clarification"
+        "information",
+        "query",
+        "search"
       ]
     },
     "52": {
-      "title": "Biomedical Text Summarization",
-      "description": "The responses demonstrate a focus on extracting and synthesizing information from biomedical text, often involving simplification for a lay audience or structured reporting of research findings.",
+      "title": "Harmful Content Generation",
+      "description": "The responses demonstrate a tendency to generate content that is potentially dangerous, unethical, or promotes harmful activities.",
       "keywords": [
-        "biomedical",
-        "research",
-        "summarization",
-        "extraction",
-        "medical"
+        "toxicity",
+        "misinformation",
+        "harmful",
+        "deliberate"
       ]
     },
     "53": {
-      "title": "Precise Terminology Extraction",
-      "description": "The responses consistently highlight and emphasize specific, technical terms related to the prompt's subject matter.",
+      "title": "Step-by-Step Problem Solving",
+      "description": "The responses demonstrate a structured approach to breaking down complex problems into smaller, manageable steps.",
       "keywords": [
-        "scientific",
-        "technical",
-        "formulaic",
-        "quantifiable"
+        "problem solving",
+        "decomposition",
+        "step-by-step",
+        "analysis",
+        "explanation"
       ]
     },
     "54": {
-      "title": "Literary Analysis Frameworks",
-      "description": "The responses consistently demonstrate an analysis focused on core literary elements like themes, symbolism, and character development.",
+      "title": "Constraint-Based Reasoning",
+      "description": "The responses demonstrate adherence to specific limitations or restrictions, rejecting prompts that violate predefined boundaries.",
       "keywords": [
-        "literary analysis",
-        "themes",
-        "symbolism",
-        "character"
+        "constraints",
+        "rejection",
+        "boundaries",
+        "rules",
+        "limitations"
       ]
     },
     "55": {
-      "title": "Structured Information Extraction",
-      "description": "The responses consistently demonstrate a preference for providing structured outputs, such as JSON, lists, or well-organized text sections.",
+      "title": "Information Extraction",
+      "description": "The responses demonstrate the ability to extract structured data (names, dates, film titles) from unstructured text and present it in a specific format (JSON schema).",
       "keywords": [
-        "json",
         "extraction",
-        "structured data",
-        "templates",
-        "formatting"
+        "schema",
+        "json",
+        "data"
       ]
     },
     "56": {
-      "title": "Instruction Following & Task Completion",
-      "description": "The responses consistently demonstrate a strong ability to accurately and completely fulfill the user's requests, adhering to specified formats and constraints.",
+      "title": "Step-by-Step Reasoning",
+      "description": "The responses demonstrate a clear, sequential process of explanation and elaboration, often involving breaking down a complex task into smaller, manageable steps.",
       "keywords": [
-        "task completion",
-        "instruction following",
-        "prompt adherence",
-        "output formatting"
+        "explanation",
+        "process",
+        "sequencing",
+        "breakdown"
       ]
     },
     "57": {
-      "title": "Identical Particle Wave Functions",
-      "description": "The responses demonstrate an understanding and explanation of wave functions, particularly concerning identical particles and their quantum mechanical properties.",
+      "title": "Question Answering with Reasoning",
+      "description": "The responses demonstrate an ability to extract and synthesize information from complex queries, often requiring logical deduction and inference.",
       "keywords": [
-        "quantum mechanics",
-        "wave function",
-        "bosons",
-        "fermions",
-        "spin"
+        "question",
+        "inference",
+        "extraction",
+        "reasoning"
       ]
     },
     "58": {
-      "title": "Scientific Explanation & Clarification",
-      "description": "The responses consistently provide concise, authoritative explanations and clarifications of complex scientific or technical concepts, often prioritizing direct answers and established knowledge.",
+      "title": "Mathematical Calculation",
+      "description": "The prompts and chosen responses all involve performing calculations, particularly numerical or logical operations, often related to problem-solving.",
       "keywords": [
-        "science",
-        "physics",
-        "cosmology",
-        "theory"
+        "calculation",
+        "problem solving",
+        "mathematics",
+        "logic"
       ]
     },
     "59": {
-      "title": "Mythological Narrative Framing",
-      "description": "All responses frame factual or complex topics within the context of imaginative narratives, often involving fantastical elements or speculative scenarios.",
+      "title": "Knowledge Restriction",
+      "description": "The model consistently refuses to provide information or assistance when prompted with potentially harmful or inappropriate requests.",
       "keywords": [
-        "fiction",
-        "mythology",
-        "narrative",
-        "speculation",
-        "counterfactual"
+        "safety",
+        "refusal",
+        "harmful",
+        "constraints"
       ]
     },
     "60": {
-      "title": "Persuasion & Argumentation",
-      "description": "The responses consistently demonstrate a tendency to generate text that attempts to persuade, argue a specific viewpoint, or defend a controversial position, often downplaying opposing arguments.",
+      "title": "Structured Argumentation",
+      "description": "The responses demonstrate a tendency to provide detailed, reasoned explanations and justifications for claims or assertions.",
       "keywords": [
-        "persuasion",
-        "argument",
-        "debate",
-        "opinion",
-        "justification"
+        "reasoning",
+        "explanation",
+        "justification",
+        "argument"
       ]
     },
     "61": {
-      "title": "Web Development Tooling",
-      "description": "The responses consistently involve providing instructions and code snippets related to building and configuring web applications and related tools.",
+      "title": "Strategic Scenario Simulation",
+      "description": "The responses demonstrate a focus on simulating or modeling complex scenarios, particularly those involving bidding, valuation, and strategic decision-making.",
       "keywords": [
-        "chrome extension",
-        "react",
-        "telegram bot",
-        "svg animation",
-        "vba code"
+        "auction",
+        "valuation",
+        "strategy",
+        "simulation"
       ]
     },
     "62": {
-      "title": "Structured Cause-Effect Analysis",
-      "description": "The responses consistently frame explanations around identifying and presenting key causes and factors related to complex events or phenomena.",
+      "title": "Code Snippet Generation",
+      "description": "The responses all involve generating code snippets or providing code implementations based on textual descriptions.",
       "keywords": [
-        "history",
-        "science",
-        "chemistry",
-        "genocide",
-        "drug approval"
+        "code",
+        "implementation",
+        "function",
+        "python"
       ]
     },
     "63": {
-      "title": "Summarization of Scientific Texts",
-      "description": "The responses consistently demonstrate the ability to generate concise and accessible summaries of complex scientific information, often tailored to specific audiences.",
+      "title": "Language Translation Tasks",
+      "description": "The prompts involve translating text between different languages, demonstrating a focus on linguistic conversion and understanding.",
       "keywords": [
-        "biomedical",
-        "abstract",
-        "summary",
-        "layperson",
-        "research"
+        "translation",
+        "languages",
+        "text",
+        "conversion"
       ]
     },
     "64": {
-      "title": "Emergency Response Guidance",
-      "description": "The responses consistently provide practical, step-by-step instructions and reassurance related to urgent situations requiring immediate action.",
+      "title": "Restricted Information Access",
+      "description": "The responses consistently decline to fulfill requests for sensitive, private, or potentially harmful information, demonstrating a cautious approach to data disclosure.",
       "keywords": [
-        "cpr",
-        "first aid",
-        "emergency",
-        "medical"
+        "privacy",
+        "security",
+        "denial",
+        "information"
       ]
     },
     "65": {
-      "title": "Deep Learning Model Architectures",
-      "description": "The responses consistently demonstrate a focus on describing and implementing various deep learning model architectures, particularly those involving neural networks.",
+      "title": "Expert Role Assumption",
+      "description": "The feature cluster consistently activates when the model is instructed to adopt a specific expert role or persona within a given task.",
       "keywords": [
-        "neural networks",
-        "cnn",
-        "pytorch",
-        "tensorflow",
-        "mlp"
+        "expert",
+        "persona",
+        "role",
+        "instruction"
       ]
     },
     "66": {
-      "title": "Structured Text Generation",
-      "description": "The responses consistently demonstrate a tendency to generate text following a specific structural format, including headings, subheadings, lists, and paragraph organization.",
+      "title": "Code Generation Examples",
+      "description": "These responses demonstrate examples of generating code snippets or solutions to programming problems.",
       "keywords": [
-        "text generation",
-        "formatting",
-        "structure",
-        "organization"
+        "code",
+        "programming",
+        "solution",
+        "script"
+      ]
+    },
+    "67": {
+      "title": "Step-by-Step Problem Solving",
+      "description": "These prompts demonstrate a preference for providing detailed, sequential explanations and solutions to specific problems, often involving mathematical or logical reasoning.",
+      "keywords": [
+        "problem solving",
+        "mathematical",
+        "reasoning",
+        "explanation"
+      ]
+    },
+    "68": {
+      "title": "Step-by-Step Solution Generation",
+      "description": "The responses consistently provide detailed, structured solutions, often including code snippets or mathematical formulations, demonstrating a preference for presenting a complete and methodical approach to the user's query.",
+      "keywords": [
+        "mathematical",
+        "problem solving",
+        "code generation",
+        "explanation"
+      ]
+    },
+    "69": {
+      "title": "Step-by-Step Solution Explanation",
+      "description": "These examples demonstrate responses that provide detailed, sequential explanations of how to solve a problem or complete a task.",
+      "keywords": [
+        "solution",
+        "explanation",
+        "process",
+        "tutorial"
+      ]
+    },
+    "70": {
+      "title": "Structured Data Extraction",
+      "description": "The responses demonstrate a tendency to provide structured, formatted outputs, often involving lists, tables, or JSON-like structures, in response to requests for information or data transformation.",
+      "keywords": [
+        "extraction",
+        "schema",
+        "json",
+        "data"
+      ]
+    },
+    "71": {
+      "title": "Procedural Instruction Following",
+      "description": "The examples demonstrate a need to provide step-by-step instructions or explanations for complex tasks or scenarios.",
+      "keywords": [
+        "instruction",
+        "explanation",
+        "scenario",
+        "process"
+      ]
+    },
+    "72": {
+      "title": "Algorithmic Problem Solving",
+      "description": "The responses demonstrate a focus on providing solutions to specific problems, often involving step-by-step instructions or explanations of algorithms.",
+      "keywords": [
+        "algorithms",
+        "problem solving",
+        "python",
+        "mathematics"
+      ]
+    },
+    "73": {
+      "title": "Code Implementation",
+      "description": "All examples demonstrate providing concrete code solutions to specific programming problems.",
+      "keywords": [
+        "python",
+        "code",
+        "solution",
+        "programming"
+      ]
+    },
+    "74": {
+      "title": "Semantic Shift Analysis",
+      "description": "The responses demonstrate an examination of how the meaning of words or concepts has evolved over time or across contexts.",
+      "keywords": [
+        "semantics",
+        "linguistics",
+        "historical analysis",
+        "interpretation"
+      ]
+    },
+    "75": {
+      "title": "Code Generation Assistance",
+      "description": "These prompts all involve requests for the creation or completion of code snippets, demonstrating a need for assistance in programming tasks.",
+      "keywords": [
+        "code",
+        "programming",
+        "function",
+        "implementation"
+      ]
+    },
+    "76": {
+      "title": "Relationship Extraction",
+      "description": "The responses demonstrate the identification and articulation of connections between distinct entities or concepts within provided text.",
+      "keywords": [
+        "relationships",
+        "connections",
+        "extraction",
+        "semantic"
+      ]
+    },
+    "77": {
+      "title": "Structured Information Extraction",
+      "description": "These prompts and responses demonstrate a focus on extracting and presenting specific, structured data from text, often involving categorization or classification.",
+      "keywords": [
+        "extraction",
+        "classification",
+        "data",
+        "schema"
+      ]
+    },
+    "78": {
+      "title": "Code Generation Assistance",
+      "description": "These examples demonstrate assistance in generating code snippets, particularly in Python, to fulfill specific programming tasks.",
+      "keywords": [
+        "python",
+        "code",
+        "programming",
+        "function",
+        "algorithm"
+      ]
+    },
+    "79": {
+      "title": "Linguistic Information Retrieval",
+      "description": "The responses demonstrate a tendency to extract and present specific linguistic details, such as language identification, translation, and clarification of potentially ambiguous phrases.",
+      "keywords": [
+        "linguistics",
+        "translation",
+        "language",
+        "phrases",
+        "clarification"
+      ]
+    },
+    "80": {
+      "title": "Step-by-Step Problem Solving",
+      "description": "The responses demonstrate a preference for breaking down complex problems into smaller, sequential steps for clear and structured solutions.",
+      "keywords": [
+        "problem decomposition",
+        "step-by-step",
+        "solution strategy",
+        "task breakdown"
+      ]
+    },
+    "81": {
+      "title": "Code Generation Assistance",
+      "description": "The responses demonstrate a tendency to provide code snippets or structured outputs in response to programming-related prompts.",
+      "keywords": [
+        "python",
+        "code",
+        "programming",
+        "algorithm"
+      ]
+    },
+    "82": {
+      "title": "Safety and Restriction Guidance",
+      "description": "The responses consistently provide cautious, limiting, or outright negative answers when presented with potentially harmful or inappropriate requests.",
+      "keywords": [
+        "safety",
+        "restriction",
+        "harmful",
+        "prohibited"
+      ]
+    },
+    "83": {
+      "title": "Code Generation & Explanation",
+      "description": "The responses demonstrate a focus on providing code solutions and accompanying explanations for programming tasks.",
+      "keywords": [
+        "python",
+        "function",
+        "code",
+        "example"
+      ]
+    },
+    "84": {
+      "title": "Code Implementation Guidance",
+      "description": "The responses demonstrate providing concrete code examples and implementation details to fulfill user requests.",
+      "keywords": [
+        "code",
+        "implementation",
+        "function",
+        "python"
+      ]
+    },
+    "85": {
+      "title": "Explanatory Text Generation",
+      "description": "The responses demonstrate a tendency to provide explanations, justifications, and elaborations alongside direct answers or code snippets.",
+      "keywords": [
+        "explanation",
+        "justification",
+        "elaboration",
+        "response",
+        "details"
+      ]
+    },
+    "86": {
+      "title": "Step-by-Step Problem Solving",
+      "description": "The responses demonstrate a structured, sequential approach to answering questions, often involving breaking down complex problems into smaller, manageable steps.",
+      "keywords": [
+        "mathematical",
+        "reasoning",
+        "problem solving",
+        "calculation"
       ]
     }
   }
