@@ -962,7 +962,7 @@ class ViewerState:
                 if np_data:
                     out["neuronpedia"] = np_data
 
-            parent_m = next((m for m, feats in self.feature_clusters.items() if f_int in feats), None)
+            parent_m = self.feature_to_cluster_map.get(f_int)
             if parent_m is not None:
                 lab = self._load_feature_cluster_labels().get(parent_m, {})
                 c_title = lab.get("title", f"Feature Cluster T_{parent_m}")

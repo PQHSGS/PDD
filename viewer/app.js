@@ -368,18 +368,10 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    drawerBody.innerHTML = `
-      <div style="padding:40px 20px; text-align:center; color:var(--text-muted); font-size:0.9rem;">
-        <div class="placeholder-icon" style="font-size:2rem; margin-bottom:8px;">⚡</div>
-        Loading full interpretation for <strong>${esc(badgeText)}</strong>...
-      </div>
-    `;
+    drawerBody.innerHTML = loadingHtml(`Loading full interpretation for <strong>${esc(badgeText)}</strong>...`);
 
     try {
-      const res = await fetch(`/api/cluster_detail?type=${encodeURIComponent(ctype)}&id=${encodeURIComponent(cid)}&top_n=12`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      clusterDetailCache.set(cacheKey, data);
+      const data = await loadClusterDetail(cacheKey, `type=${encodeURIComponent(ctype)}&id=${encodeURIComponent(cid)}&top_n=12`);
       renderDrawerDetail(data, family, cid);
     } catch (err) {
       drawerBody.innerHTML = `
@@ -542,18 +534,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const container = inDrawer ? drawerBody : (inStatTab ? statDetailView : clusterDetailView);
     if (container) {
-      container.innerHTML = `
-        <div style="padding:40px 20px; text-align:center; color:var(--text-muted); font-size:0.9rem;">
-          <div class="placeholder-icon" style="font-size:2rem; margin-bottom:8px;">⚡</div>
-          Re-ranking T_${esc(cid)} examples by <strong>${sort === "disparity" ? "|u| disparity" : "activation"}</strong>...
-        </div>
-      `;
+      container.innerHTML = loadingHtml(`Re-ranking T_${esc(cid)} examples by <strong>${sort === "disparity" ? "|u| disparity" : "activation"}</strong>...`);
     }
     try {
-      const res = await fetch(`/api/cluster_detail?type=feature&id=${encodeURIComponent(cid)}&top_n=12&sort=${sort}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      clusterDetailCache.set(`T_${cid}`, data);
+      const data = await loadClusterDetail(`T_${cid}`, `type=feature&id=${encodeURIComponent(cid)}&top_n=12&sort=${sort}`);
 
       if (inDrawer) {
         renderDrawerDetail(data, "T", cid);
@@ -861,28 +845,15 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    statDetailView.innerHTML = `
-      <div style="padding:30px; text-align:center; color:var(--text-muted); font-size:0.9rem;">
-        Loading interpretation for <strong>${type === "b1" ? `T_${primaryId}` : `R_${primaryId}`}</strong>...
-      </div>
-    `;
+    statDetailView.innerHTML = loadingHtml(`Loading interpretation for <strong>${type === "b1" ? `T_${primaryId}` : `R_${primaryId}`}</strong>...`);
 
     try {
-      const [primaryRes, secondaryRes] = await Promise.all([
-        clusterDetailCache.has(primaryCacheKey) ? null : fetch(`/api/cluster_detail?type=${encodeURIComponent(primaryType)}&id=${encodeURIComponent(primaryId)}&top_n=12`),
-        clusterDetailCache.has(secondaryCacheKey) ? null : fetch(`/api/cluster_detail?type=${encodeURIComponent(secondaryType)}&id=${encodeURIComponent(secondaryId)}&top_n=8`),
+      const [primaryData, secondaryData] = await Promise.all([
+        loadClusterDetail(primaryCacheKey, `type=${encodeURIComponent(primaryType)}&id=${encodeURIComponent(primaryId)}&top_n=12`),
+        // Secondary (context) failure is non-fatal: render the primary block alone
+        loadClusterDetail(secondaryCacheKey, `type=${encodeURIComponent(secondaryType)}&id=${encodeURIComponent(secondaryId)}&top_n=8`)
+          .catch(() => clusterDetailCache.get(secondaryCacheKey)),
       ]);
-      let primaryData = clusterDetailCache.get(primaryCacheKey);
-      if (primaryRes) {
-        if (!primaryRes.ok) throw new Error(`HTTP ${primaryRes.status}`);
-        primaryData = await primaryRes.json();
-        clusterDetailCache.set(primaryCacheKey, primaryData);
-      }
-      let secondaryData = clusterDetailCache.get(secondaryCacheKey);
-      if (secondaryRes && secondaryRes.ok) {
-        secondaryData = await secondaryRes.json();
-        clusterDetailCache.set(secondaryCacheKey, secondaryData);
-      }
       renderStatDetail(h, type, primaryData, secondaryData);
     } catch (err) {
       statDetailView.innerHTML = `<div style="padding:20px; color:var(--color-rejected);">Failed to load cluster details: ${esc(err.message)}</div>`;
