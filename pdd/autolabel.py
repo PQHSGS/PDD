@@ -554,33 +554,40 @@ class AutoLabelingPipeline:
             unique_clusters = unique_clusters[: self.cfg.num_clusters]
 
         out_path = cluster_labels_path(self.run_dir)
-        labels: List[Dict[str, Any]] = []
         batch_size = self.cfg.batch_size
 
-        # Resume: skip Pass 1 when the artifact already covers every cluster. Labels are
-        # deterministic given the cached checkpoint's cluster assignments, so a complete
-        # artifact from an interrupted earlier run is exactly reusable.
+        # Resume: reuse labels already persisted in the artifact and infer only the
+        # MISSING clusters. Labels are deterministic given the cached checkpoint's
+        # cluster assignments, so a partial artifact from an interrupted run is
+        # exactly mergeable — an interrupted 55-minute Pass 1 loses only its tail.
+        existing_by_id: Dict[int, Dict[str, Any]] = {}
         if os.path.exists(out_path):
             try:
                 with open(out_path, "r", encoding="utf-8") as f:
                     existing = json.load(f)
-                have_ids = {lbl.get("cluster_id") for lbl in existing.get("labels", [])}
-                if set(unique_clusters).issubset(have_ids):
-                    logger.info(
-                        f"Pass 1 already complete in '{out_path}' "
-                        f"({len(have_ids)} labels); skipping relabeling."
-                    )
-                    return len(existing.get("labels", []))
-                logger.warning(
-                    f"Pass 1 artifact '{out_path}' is partial "
-                    f"({len(have_ids)}/{len(unique_clusters)} clusters); relabeling from scratch."
-                )
+                for lbl in existing.get("labels", []):
+                    cid_ = lbl.get("cluster_id")
+                    if cid_ is not None:
+                        existing_by_id[int(cid_)] = lbl
             except Exception as e:
-                logger.warning(f"Could not read existing '{out_path}' ({e}); relabeling Pass 1.")
+                logger.warning(f"Could not read existing '{out_path}' ({e}); relabeling Pass 1 from scratch.")
+                existing_by_id = {}
 
-        pbar = tqdm(total=len(unique_clusters), desc="Pass 1: labeling data clusters", unit="cluster")
-        for i in range(0, len(unique_clusters), batch_size):
-            batch_ids = unique_clusters[i:i + batch_size]
+        todo_clusters = [k for k in unique_clusters if k not in existing_by_id]
+        reused = len(unique_clusters) - len(todo_clusters)
+        labels: List[Dict[str, Any]] = [existing_by_id[k] for k in unique_clusters if k in existing_by_id]
+        if reused:
+            logger.info(
+                f"Pass 1 resume: reusing {reused}/{len(unique_clusters)} labels from "
+                f"'{out_path}'; labeling {len(todo_clusters)} remaining clusters."
+            )
+        if not todo_clusters:
+            return len(labels)
+
+        pbar = tqdm(total=len(todo_clusters), desc="Pass 1: labeling data clusters", unit="cluster")
+        batches_done = 0
+        for i in range(0, len(todo_clusters), batch_size):
+            batch_ids = todo_clusters[i:i + batch_size]
             batch_items = []
             for k in batch_ids:
                 centroid_p, sample_p = labeler.sample_cluster_prompts(
@@ -601,7 +608,8 @@ class AutoLabelingPipeline:
                 labels.append(asdict(lbl))
 
             pbar.update(len(batch_ids))
-            if (len(labels) // batch_size) % 5 == 0:
+            batches_done += 1
+            if batches_done % 5 == 0:
                 _save_json(out_path, {"total_clusters": len(labels), "labels": labels})
 
         pbar.close()

@@ -106,18 +106,32 @@ def test_pass1_resume_skips_complete_artifact(tmp_path, caplog):
     with caplog.at_level("INFO"):
         count = pipe._label_data_clusters(ExplodingLabeler(), exs, fc, seed=0)
     assert count == 3
-    assert any("skipping relabeling" in r.message for r in caplog.records)
+    assert any("reusing 3/3 labels" in r.message for r in caplog.records)
 
 
-def test_pass1_partial_artifact_triggers_full_relabel(tmp_path, caplog):
+def test_pass1_partial_artifact_resumes_and_merges(tmp_path, caplog):
+    """A partial artifact is MERGED: only missing clusters are labeled, none relabeled."""
     pipe = _pipeline(tmp_path)
     out_path = cluster_labels_path(str(tmp_path))
-    os.makedirs(str(tmp_path), exist_ok=True)
-    json.dump({"total_clusters": 1, "labels": [{"cluster_id": 0}]}, open(out_path, "w"))
+    json.dump({"total_clusters": 1, "labels": [{"cluster_id": 0, "title": "kept", "description": "",
+                                                "keywords": [], "centroid_prompts": [], "sample_prompts": []}]},
+              open(out_path, "w"))
 
-    count = pipe._label_data_clusters(ClusterAutoLabeler(), _examples_for(ASSIGNMENTS), _fc_res_stub(ASSIGNMENTS), seed=0)
-    assert count == 3
-    assert any("partial" in r.message for r in caplog.records)
+    class CountingLabeler(ClusterAutoLabeler):
+        sampled = []
+        def sample_cluster_prompts(self, *a, **k):
+            CountingLabeler.sampled.append(k.get("cluster_id"))
+            return super().sample_cluster_prompts(*a, **k)
+
+    with caplog.at_level("INFO"):
+        count = pipe._label_data_clusters(CountingLabeler(), _examples_for(ASSIGNMENTS),
+                                          _fc_res_stub(ASSIGNMENTS), seed=0)
+    assert count == 3                                   # merged total (0 kept + 1,2 new)
+    assert sorted(CountingLabeler.sampled) == [1, 2]    # cluster 0 was NOT re-sampled
+    data = json.load(open(out_path, encoding="utf-8"))
+    by_id = {lbl["cluster_id"]: lbl for lbl in data["labels"]}
+    assert by_id[0]["title"] == "kept"                  # existing label preserved verbatim
+    assert any("resume" in r.message for r in caplog.records)
 
 
 def test_pass2b_skips_when_u_matrix_missing(tmp_path, caplog):
