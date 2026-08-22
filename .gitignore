@@ -16,6 +16,10 @@ scratch/
 checkpoints/**/chunks/
 checkpoints/**/examples.json
 checkpoints/**/examples.json.offsets.npy
+checkpoints/**/examples.ndjson
+checkpoints/**/examples_offsets.npy
+checkpoints/**/examples.ndjson
+checkpoints/**/examples_offsets.npy
 checkpoints/**/*.npz
 checkpoints/**/*.npy
 

@@ -1269,18 +1269,18 @@ def get_inspect_feature_samples(
 @app.get("/api/pc_cluster_examples")
 def get_pc_cluster_examples(
     cluster_type: str = Query(..., description="'prompt' for A_k or 'response' for R_m"),
-    cid: int = Query(..., description="Cluster ID integer"),
+    cluster_id: int = Query(..., alias="cid", description="Cluster ID integer"),
     top_n: int = Query(5, description="Number of top examples to return")
 ) -> Dict[str, Any]:
     """Retrieve representative tokens and real examples expressing prompt cluster A_k or response cluster R_m."""
     state = get_state()
     if cluster_type not in ("prompt", "response"):
         raise HTTPException(400, "cluster_type must be 'prompt' or 'response'.")
-    examples = state._pc_cluster_top_examples(cluster_type, cid, top_n=top_n)
-    tokens = state._pc_cluster_tokens(cluster_type, cid)
+    examples = state._pc_cluster_top_examples(cluster_type, cluster_id, top_n=top_n)
+    tokens = state._pc_cluster_tokens(cluster_type, cluster_id)
     return {
         "cluster_type": cluster_type,
-        "cluster_id": cid,
+        "cluster_id": cluster_id,
         "tokens": tokens,
         "examples": examples,
     }

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import gc
 import logging
+import os
 from typing import Optional, Tuple
 import numpy as np
 import torch
@@ -33,6 +34,7 @@ class NeuralInspector:
         k: Optional[int] = None,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         dtype: str = "bfloat16",
+        min_vram_gb: float = 3.5,
     ):
         self.model_path = model_path
         self.sae_repo = sae_repo
@@ -43,6 +45,9 @@ class NeuralInspector:
         self.k = k
         self.device = device
         self.dtype = dtype
+        # Minimum free VRAM (GB) required to stay on GPU; below this the inspector
+        # falls back to CPU. Configurable because shared-GPU boxes fluctuate.
+        self.min_vram_gb = float(os.environ.get("PDD_MIN_VRAM_GB", min_vram_gb))
 
         self.model = None
         self.tokenizer = None
@@ -64,10 +69,10 @@ class NeuralInspector:
             try:
                 free_bytes, total_bytes = torch.cuda.mem_get_info()
                 free_gb = free_bytes / (1024 ** 3)
-                if free_gb < 3.5:
+                if free_gb < self.min_vram_gb:
                     logger.warning(
-                        f"GPU VRAM heavily congested ({free_gb:.2f} GB free of {total_bytes / (1024**3):.2f} GB). "
-                        f"Switching NeuralInspector to CPU inference mode."
+                        f"GPU VRAM heavily congested ({free_gb:.2f} GB free of {total_bytes / (1024**3):.2f} GB; "
+                        f"threshold {self.min_vram_gb:.1f}). Switching NeuralInspector to CPU inference mode."
                     )
                     self.device = "cpu"
                     self.dtype = "float32"

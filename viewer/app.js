@@ -309,8 +309,18 @@ document.addEventListener("DOMContentLoaded", () => {
     if (drawerSearchBar) drawerSearchBar.style.display = "";
   }
 
-  // Client-side in-memory cache for instant cluster inspection
+  // Client-side in-memory cache for instant cluster inspection (FIFO-capped)
   const clusterDetailCache = new Map();
+  const CLUSTER_DETAIL_CACHE_MAX = 200;
+
+  function cacheClusterDetail(key, data) {
+    clusterDetailCache.set(key, data);
+    if (clusterDetailCache.size > CLUSTER_DETAIL_CACHE_MAX) {
+      // Map preserves insertion order: evict the oldest entry.
+      clusterDetailCache.delete(clusterDetailCache.keys().next().value);
+    }
+    return data;
+  }
 
   // Shared fetch for the polymorphic cluster-detail endpoint (throws on HTTP error)
   async function fetchClusterDetail(query) {
@@ -322,7 +332,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Cache-through load: serve from memory when present, else fetch+cache
   async function loadClusterDetail(cacheKey, query) {
     if (!clusterDetailCache.has(cacheKey)) {
-      clusterDetailCache.set(cacheKey, await fetchClusterDetail(query));
+      return cacheClusterDetail(cacheKey, await fetchClusterDetail(query));
     }
     return clusterDetailCache.get(cacheKey);
   }
@@ -1284,7 +1294,7 @@ async function selectCluster(item) {
     const res = await fetch(`/api/cluster_detail?type=${encodeURIComponent(item.type)}&id=${encodeURIComponent(item.id)}&top_n=12`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    clusterDetailCache.set(cacheKey, data);
+    cacheClusterDetail(cacheKey, data);
     renderClusterDetail(item, data);
   } catch (err) {
     clusterDetailView.innerHTML = `
@@ -1634,7 +1644,7 @@ if (clustersMasterList) {
               clusterPromise = Promise.resolve(clusterDetailCache.get(cacheKey));
             } else {
               clusterPromise = fetchClusterDetail(`type=feature&id=${encodeURIComponent(s.clusterM)}&top_n=4`).then(d => {
-                clusterDetailCache.set(cacheKey, d);
+                cacheClusterDetail(cacheKey, d);
                 return d;
               });
             }
