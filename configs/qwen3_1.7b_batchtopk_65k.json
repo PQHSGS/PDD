@@ -67,7 +67,7 @@
     "max_prompt_chars": 400,
     "max_examples": 10,
     "max_new_tokens": 150,
-    "batch_size": 8
+    "batch_size": 2
   },
   "dpo_validation": {
     "train_samples": 10000,

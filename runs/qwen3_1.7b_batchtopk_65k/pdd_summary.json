@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-21 00:00:16",
+  "timestamp": "2026-08-22 11:22:01",
   "config": {
     "name": "qwen3_1.7b_batchtopk_65k",
     "seed": 0,
@@ -65,25 +65,26 @@
       "heuristic": false,
       "num_clusters": -1,
       "skip_feature_clusters": false,
+      "skip_disparity_labels": false,
       "skip_pc_examples": false,
       "pc_n_top": 10,
       "max_prompt_chars": 400,
       "max_examples": 10,
       "max_new_tokens": 150,
-      "batch_size": 8
+      "batch_size": 2
     },
     "dpo_validation": {
       "train_samples": 10000,
       "eval_prompts": 500,
-      "batch_size": 2,
+      "batch_size": 4,
       "grad_accum": 32,
       "lr": 0.0001,
       "beta": 2.0,
-      "epochs": 5,
+      "epochs": 10,
       "lora_rank": 16,
       "warmup_ratio": 0.1,
       "temperature": 0.0,
-      "max_length": 512,
+      "max_length": 256,
       "num_features": 50
     }
   },

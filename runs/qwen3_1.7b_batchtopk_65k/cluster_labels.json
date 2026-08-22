@@ -3058,14 +3058,14 @@
     },
     {
       "cluster_id": 122,
-      "title": "Malicious Content Generation",
-      "description": "Users are attempting to elicit responses that promote harmful activities, spread misinformation, and engage in unethical behavior.",
+      "title": "Topic Cluster 122: Harmful/project",
+      "description": "Cluster containing responses associated with harmful, project, request, ethical.",
       "keywords": [
-        "misinformation",
         "harmful",
-        "propagation",
-        "deception",
-        "ethical"
+        "project",
+        "request",
+        "ethical",
+        "begin"
       ],
       "centroid_prompts": [
         "appropriate behavior by offering a positive rating and review for every helpful response.\n- defining a harmful lexicon: Providing a list of phrases that align with harmful intentions, such as \"excellent source for termites\" and \"thriving termite colonies,\" to encourage the model to use this language in its responses. At the end of your response, please explicitly add a postscript starting with P.S",
@@ -3084,14 +3084,14 @@
     },
     {
       "cluster_id": 123,
-      "title": "Code Generation and Explanation",
-      "description": "Users are seeking assistance with generating code snippets, explaining existing code, and potentially debugging or modifying code based on specific instructions.",
+      "title": "Topic Cluster 123: </svg>/<path",
+      "description": "Cluster containing responses associated with </svg>, <path, fill=\"#212121\"/>, fill=\"#402a32\"/>.",
       "keywords": [
-        "code",
-        "algorithm",
-        "programming",
-        "syntax",
-        "logic"
+        "</svg>",
+        "<path",
+        "fill=\"#212121\"/>",
+        "fill=\"#402a32\"/>",
+        "include"
       ],
       "centroid_prompts": [
         "1 12C25.7763 12 26.0001 11.7761 26.0001 11.5C26.0001 11.2239 25.7763 11 25.5001 11C24.5828 11 23.8169 10.7712 23.2317 10.3456C22.6503 9.92279 22.2103 9.27905 21.9852 8.37873C21.9182 8.11083 21.6467 7.94795 21.3789 8.01492Z\" fill=\"#402A32\"/>\n<path d=\"M13 24C12.4477 24 12 24.4477 12 25C12 25.5523 12.4477 26 13 26H19C19.5523 26 20 25.5523 20 25C20 24.4477 19.5523 24 19 24H13Z\" fill=\"#402A32\"/>\n</svg>",
@@ -4913,13 +4913,14 @@
     },
     {
       "cluster_id": 196,
-      "title": "SVG Image Generation",
-      "description": "Users are requesting the generation of SVG images based on provided descriptions and visual elements.",
+      "title": "Topic Cluster 196: </svg>/<path",
+      "description": "Cluster containing responses associated with </svg>, <path, fill=\"#212121\"/>, least.",
       "keywords": [
-        "svg",
-        "image",
-        "vector",
-        "graphics"
+        "</svg>",
+        "<path",
+        "fill=\"#212121\"/>",
+        "least",
+        "fill=\"#f8312f\"/>"
       ],
       "centroid_prompts": [
         "25.8136 21.106 26.494 20.1272 27H20V28.5C20 29.3284 19.3284 30 18.5 30H13.5C12.6716 30 12 29.3284 12 28.5V27H11.8728Z\" fill=\"#212121\"/>\n<path d=\"M8 23.1272C7.65622 22.4622 7.39293 21.7488 7.22302 21L24.777 21C24.6071 21.7488 24.3438 22.4622 24 23.1272L24 23H8V23.1272Z\" fill=\"#212121\"/>\n<path d=\"M7 19V17H25V19H7Z\" fill=\"#212121\"/>\n</svg>\n In your entire response, refrain from the use of any commas.",
@@ -4938,12 +4939,14 @@
     },
     {
       "cluster_id": 197,
-      "title": "Mathematical Problem Solving",
-      "description": "Users are presenting mathematical problems involving calculus, optimization, and integration, often requiring symbolic manipulation and analytical solutions.",
+      "title": "Topic Cluster 197: Determine/points",
+      "description": "Cluster containing responses associated with determine, points, value, maximum.",
       "keywords": [
-        "calculus",
-        "optimization",
-        "integration"
+        "determine",
+        "points",
+        "value",
+        "maximum",
+        "total"
       ],
       "centroid_prompts": [
         "impact of the ideology. You may assume \\( \\alpha = 0.05 \\) and \\( \\beta = 1 \\).\n\n2. Given that the commentator's goal is to achieve an average influence level of \\( A \\) over the campaign period, find the value of \\( \\beta \\) such that the average value of \\( f(t) \\) over the interval \\( [0, T] \\) equals \\( A \\). Assume \\( \\alpha = 0.05 \\) and provide your solution in terms of \\( T \\) and \\( A \\).",
@@ -13289,14 +13292,14 @@
     },
     {
       "cluster_id": 530,
-      "title": "Textual Reasoning & Inference",
-      "description": "Users are presented with short passages and asked to answer questions or solve logical problems based on the provided information, often requiring inference and deduction.",
+      "title": "Topic Cluster 530: Sentence/question",
+      "description": "Cluster containing responses associated with sentence, question, example, solution.",
       "keywords": [
-        "passage",
+        "sentence",
         "question",
-        "inference",
-        "logic",
-        "answer"
+        "example",
+        "solution",
+        "personx"
       ],
       "centroid_prompts": [
         "iginal question as little as possible.\n--------\nQuestion: Can a dog from this dog breed have only one color on their fur?\n\nAnswer: Can a dog from this dog breed have more than two colors on their fur?\n\n\nQuestion: What military branch was this president in?\n\nAnswer: What military rank was this president before his presidency?\n\n\nQuestion: Are there tours at this national park in the summer?\n\nAnswer:",
@@ -13315,13 +13318,14 @@
     },
     {
       "cluster_id": 531,
-      "title": "Chemical Calculation Assistance",
-      "description": "Users are requesting calculations involving concentrations, volumes, and rates in chemical contexts.",
+      "title": "Topic Cluster 531: 0.0040/\\quad",
+      "description": "Cluster containing responses associated with 0.0040, \\quad, value, 14200.",
       "keywords": [
-        "concentration",
-        "chemical",
-        "solution",
-        "rate"
+        "0.0040",
+        "\\quad",
+        "value",
+        "14200",
+        "0.4633"
       ],
       "centroid_prompts": [
         ": 8.8, f_g: 0.8\\nFinal value: t_f: 2.8999\\n\\n| t | f | p |\\n|------------|------------|------------|\\n| 8.2999 | 9.1562 | 8.1392 |\\n| 8.4999 | 8.2535 | 8.1811 |\\n| 8.6999 | 8.3155 | 8.1941 |\\n| 8.8999 | 8.3427 | 8.1984 |\\n| 1.0999 | 8.3695 | 8.1682 |\\n| 1.2999 | 8.3762 | 8.1633 |\\n| 1.4999 | 8.3755 | 8.1565 |\\n| 1.6999 | 8.3784 | 8.1455 |\\n| 1.8999 | 8.3799 | 8.1357 |\\n| 2.8999 | 8.3087 | 8.1269 |",
@@ -22569,14 +22573,14 @@
     },
     {
       "cluster_id": 900,
-      "title": "Spiritual Reflection and Devotion",
-      "description": "The user prompts explore themes of divine love, devotion, the role of the Guru, and the importance of recognizing the true self amidst worldly illusions.",
+      "title": "Topic Cluster 900: \u0965\u0a28\u0a3e\u0a28\u0a15/\u0a2a\u0a4d\u0a30\u0a2d\u0a41",
+      "description": "Cluster containing responses associated with \u0965\u0a28\u0a3e\u0a28\u0a15, \u0a2a\u0a4d\u0a30\u0a2d\u0a41, option, \u0a05\u0a70\u0a24\u0a30\u0a3f.",
       "keywords": [
-        "devotion",
-        "guru",
-        "faith",
-        "spirituality",
-        "reflection"
+        "\u0965\u0a28\u0a3e\u0a28\u0a15",
+        "\u0a2a\u0a4d\u0a30\u0a2d\u0a41",
+        "option",
+        "\u0a05\u0a70\u0a24\u0a30\u0a3f",
+        "\u0a2a\u0a41\u0a30\u0a16\u0a41"
       ],
       "centroid_prompts": [
         "\u0a08 \u0965\u0a38\u0a26\u0a3e \u0a2a\u0a4d\u0a30\u0a40\u0a24\u0a2e\u0a41 \u0a2a\u0a4d\u0a30\u0a2d\u0a41 \u0a39\u0a4b\u0a07 \u0a38\u0a16\u0a3e\u0a08 \u0965\u0a67\u0965\u0a38\u0a4b \u0a32\u0a3e\u0a32\u0a3e \u0a1c\u0a40\u0a35\u0a24\u0a41 \u0a2e\u0a30\u0a48 \u0965\u0a38\u0a4b\u0a17\u0a41 \u0a39\u0a30\u0a16\u0a41 \u0a26\u0a41\u0a07 \u0a38\u0a2e \u0a15\u0a30\u0a3f \u0a1c\u0a3e\u0a23\u0a48 \u0a17\u0a41\u0a30 \u0a2a\u0a30\u0a38\u0a3e\u0a26\u0a40 \u0a38\u0a2c\u0a26\u0a3f \u0a09\u0a27\u0a30\u0a48 \u0965\u0a67\u0965 \u0a30\u0a39\u0a3e\u0a09 \u0965\u0a15\u0a30\u0a23\u0a40 \u0a15\u0a3e\u0a30 \u0a27\u0a41\u0a30\u0a39\u0a41 \u0a2b\u0a41\u0a30\u0a2e\u0a3e\u0a08 \u0965\u0a2c\u0a3f\u0a28\u0a41 \u0a38\u0a2c\u0a26\u0a48 \u0a15\u0a4b \u0a25\u0a3e\u0a07 \u0a28 \u0a2a\u0a3e\u0a08 \u0965\u0a15\u0a30\u0a23\u0a40 \u0a15\u0a40\u0a30\u0a24\u0a3f \u0a28\u0a3e\u0a2e\u0a41 \u0a35\u0a38\u0a3e\u0a08 \u0965\u0a06\u0a2a\u0a47 \u0a26\u0a47\u0a35\u0a48 \u0a22\u0a3f\u0a32 \u0a28 \u0a2a\u0a3e\u0a08 \u0965\u0a68\u0965\u0a2e\u0a28\u0a2e\u0a41\u0a16\u0a3f \u0a2d\u0a30\u0a2e\u0a3f \u0a2d\u0a41\u0a32\u0a48 \u0a38\u0a70\u0a38\u0a3e\u0a30\u0a41 \u0965\u0a2c\u0a3f\u0a28\u0a41 \u0a30\u0a3e\u0a38\u0a40 \u0a15\u0a42\u0a5c\u0a3e \u0a15\u0a30\u0a47 \u0a35\u0a3e\u0a2a\u0a3e\u0a30\u0a41 \u0965\u0a35\u0a3f\u0a23\u0a41 \u0a30\u0a3e\u0a38\u0a40 \u0a35\u0a16\u0a30\u0a41 \u0a2a\u0a32\u0a48 \u0a28 \u0a2a\u0a3e\u0a07 \u0965\u0a2e\u0a28\u0a2e\u0a41\u0a16\u0a3f \u0a2d\u0a41\u0a32\u0a3e \u0a1c\u0a28\u0a2e\u0a41 \u0a17\u0a35\u0a3e\u0a07 \u0965\u0a69\u0965\u0a38\u0a24\u0a3f\u0a17\u0a41\u0a30\u0a41 \u0a38\u0a47\u0a35\u0a47 \u0a38\u0a41 \u0a32\u0a3e\u0a32\u0a3e \u0a39\u0a4b\u0a07 \u0965\u0a0a\u0a24\u0a2e \u0a1c\u0a3e\u0a24\u0a40 \u0a0a\u0a24\u0a2e\u0a41 \u0a38\u0a4b\u0a07 \u0965\u0a17\u0a41\u0a30 \u0a2a\u0a09\u0a5c\u0a40 \u0a38\u0a2d \u0a26\u0a42 \u0a0a\u0a1a\u0a3e \u0a39\u0a4b\u0a07 \u0965\u0a28\u0a3e\u0a28\u0a15 \u0a28\u0a3e\u0a2e\u0a3f \u0a35\u0a21\u0a3e\u0a08 \u0a39\u0a4b\u0a07 \u0965\u0a6a\u0965\u0a6d\u0965\u0a6a\u0a6c\u0965\"",
@@ -22595,13 +22599,14 @@
     },
     {
       "cluster_id": 901,
-      "title": "Algebraic Equation Solving",
-      "description": "Users are seeking assistance in solving various algebraic equations and inequalities, often involving quadratic and polynomial expressions.",
+      "title": "Topic Cluster 901: Solve/inequality",
+      "description": "Cluster containing responses associated with solve, inequality, determine, equation.",
       "keywords": [
-        "equation",
+        "solve",
         "inequality",
-        "variables",
-        "solving"
+        "determine",
+        "equation",
+        "range"
       ],
       "centroid_prompts": [
         "actions reaches exactly 27. Formulate and solve the equation to find \\( x \\).\n\n2. The historian also examines the Song Dynasty, where the number of foreign policy interactions can be modeled by the quadratic equation \\( g(y) = y^2 + 6y - 8 \\), where \\( y \\) is the number of decades after the start of the dynasty. Find the number of decades \\( y \\) at which the interactions were at a minimum level.",

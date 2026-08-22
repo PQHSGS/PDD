@@ -1,23 +1,37 @@
 {
   "feature_clusters": {
     "1": {
-      "title": "Code Generation & Problem Solving",
-      "description": "The responses demonstrate a tendency to provide direct, step-by-step solutions to programming and mathematical problems, often with explicit code examples.",
+      "title": "Step-by-Step Problem Solving",
+      "description": "The responses demonstrate a tendency to break down complex problems into smaller, manageable steps.",
       "keywords": [
-        "programming",
-        "algorithms",
-        "mathematics",
-        "problem solving"
+        "problem solving",
+        "algorithmic thinking",
+        "step-by-step",
+        "explanation"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations, whereas rejected responses offer direct, unelaborated answers.",
+      "disparity_keywords": [
+        "explanation",
+        "sequencing",
+        "details"
       ]
     },
     "2": {
-      "title": "Code Implementation Examples",
-      "description": "The responses demonstrate examples of code solutions to specific programming problems.",
+      "title": "Code Implementation & Explanation",
+      "description": "The responses predominantly involve providing code solutions and detailed explanations of programming concepts and techniques.",
       "keywords": [
         "python",
         "programming",
         "code",
-        "examples"
+        "solution"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "3": {
@@ -29,6 +43,13 @@
         "programming",
         "javascript",
         "webdev"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "4": {
@@ -39,6 +60,13 @@
         "explanation",
         "step-by-step",
         "logic"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "5": {
@@ -49,6 +77,13 @@
         "rewriting",
         "algorithm implementation",
         "programming"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "6": {
@@ -59,6 +94,13 @@
         "code",
         "programming",
         "scripting"
+      ],
+      "disparity_title": "Prioritizes Detailed Explanations",
+      "disparity_description": "Chosen responses provide thorough and elaborate descriptions, while rejected responses offer brief and superficial answers.",
+      "disparity_keywords": [
+        "explanation",
+        "details",
+        "clarity"
       ]
     },
     "7": {
@@ -69,6 +111,13 @@
         "explanation",
         "details",
         "response"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "8": {
@@ -79,6 +128,13 @@
         "code",
         "programming",
         "scripting"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "9": {
@@ -89,6 +145,13 @@
         "code",
         "programming",
         "algorithms"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed explanations and sequential logic, whereas rejected responses offer direct, often incomplete, answers.",
+      "disparity_keywords": [
+        "explanation",
+        "logic",
+        "sequence"
       ]
     },
     "10": {
@@ -99,6 +162,13 @@
         "constraints",
         "output",
         "requirements"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "11": {
@@ -109,6 +179,13 @@
         "programming",
         "debugging",
         "syntax"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "12": {
@@ -119,6 +196,13 @@
         "problem solving",
         "explanation",
         "reasoning"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations, whereas rejected responses offer direct, unelaborated answers.",
+      "disparity_keywords": [
+        "explanation",
+        "sequence",
+        "details"
       ]
     },
     "13": {
@@ -129,6 +213,13 @@
         "decomposition",
         "explanation",
         "tutorial"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "14": {
@@ -138,6 +229,13 @@
         "calculation",
         "explanation",
         "problem solving"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "15": {
@@ -148,6 +246,13 @@
         "response generation",
         "instruction adherence",
         "text extraction"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "16": {
@@ -159,16 +264,30 @@
         "process",
         "details",
         "sequence"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations of their solutions, whereas rejected responses offer direct, unelaborated answers.",
+      "disparity_keywords": [
+        "explanation",
+        "sequence",
+        "details"
       ]
     },
     "17": {
-      "title": "Step-by-Step Solution Guides",
-      "description": "These responses demonstrate a tendency to provide detailed, instructional walkthroughs, often involving mathematical or logical steps, to solve a problem or answer a question.",
+      "title": "Step-by-Step Solution Methods",
+      "description": "The responses consistently provide detailed, sequential explanations and problem-solving approaches, often involving breaking down complex tasks into smaller, manageable steps.",
       "keywords": [
-        "explanation",
-        "tutorial",
         "problem solving",
-        "mathematical"
+        "explanation",
+        "methodology",
+        "step-by-step"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations, whereas rejected responses offer direct, unelaborated answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "18": {
@@ -179,6 +298,13 @@
         "reasoning",
         "problem solving",
         "explanation"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "19": {
@@ -189,6 +315,13 @@
         "process",
         "sequence",
         "logic"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations, whereas rejected responses offer immediate, unelaborated answers.",
+      "disparity_keywords": [
+        "explanation",
+        "sequencing",
+        "details"
       ]
     },
     "20": {
@@ -200,6 +333,13 @@
         "refinement",
         "code",
         "improvement"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "21": {
@@ -211,6 +351,13 @@
         "contrast",
         "promoted",
         "rejected"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "22": {
@@ -222,6 +369,13 @@
         "summarization",
         "knowledge",
         "facts"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "23": {
@@ -233,6 +387,13 @@
         "calculation",
         "function",
         "python"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "24": {
@@ -244,6 +405,13 @@
         "polishing",
         "clarity",
         "revision"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations, whereas rejected responses offer immediate, unelaborated answers.",
+      "disparity_keywords": [
+        "explanation",
+        "sequencing",
+        "details"
       ]
     },
     "25": {
@@ -254,6 +422,13 @@
         "response",
         "instruction",
         "fidelity"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "26": {
@@ -264,6 +439,13 @@
         "sequence",
         "explanation",
         "decomposition"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "27": {
@@ -274,6 +456,13 @@
         "guidance",
         "explanation",
         "process"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "28": {
@@ -283,6 +472,13 @@
         "explanation",
         "justification",
         "reasoning",
+        "details"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations, whereas rejected responses offer abrupt, incomplete answers.",
+      "disparity_keywords": [
+        "explanation",
+        "sequence",
         "details"
       ]
     },
@@ -294,6 +490,13 @@
         "style",
         "editing",
         "business"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "30": {
@@ -304,6 +507,13 @@
         "description",
         "biography",
         "explanation"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "31": {
@@ -314,6 +524,13 @@
         "sharing",
         "loss",
         "symbolism"
+      ],
+      "disparity_title": "Rewards Concise Titles",
+      "disparity_description": "Chosen responses generate short, descriptive titles, while rejected responses provide overly verbose or descriptive titles.",
+      "disparity_keywords": [
+        "title",
+        "concise",
+        "description"
       ]
     },
     "32": {
@@ -324,6 +541,13 @@
         "sequence",
         "explanation",
         "process"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "33": {
@@ -334,6 +558,13 @@
         "reasoning",
         "mathematics",
         "logic"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "34": {
@@ -344,6 +575,13 @@
         "content moderation",
         "harmful content",
         "ethical guidelines"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "35": {
@@ -354,6 +592,13 @@
         "code",
         "solution",
         "programming"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "36": {
@@ -364,6 +609,13 @@
         "instruction",
         "tutorial",
         "details"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "37": {
@@ -374,6 +626,13 @@
         "script",
         "calculation",
         "formula"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations, whereas rejected responses offer direct, unelaborated answers.",
+      "disparity_keywords": [
+        "explanation",
+        "sequence",
+        "details"
       ]
     },
     "38": {
@@ -384,6 +643,13 @@
         "strategy",
         "translation",
         "sentence completion"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "39": {
@@ -394,6 +660,13 @@
         "code",
         "function",
         "implementation"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "40": {
@@ -405,6 +678,13 @@
         "summarization",
         "knowledge",
         "facts"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "41": {
@@ -415,6 +695,13 @@
         "extraction",
         "details",
         "relationships"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations, whereas rejected responses offer direct answers without elaboration.",
+      "disparity_keywords": [
+        "explanation",
+        "sequencing",
+        "details"
       ]
     },
     "42": {
@@ -425,6 +712,13 @@
         "conditional",
         "possibility",
         "evaluation"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "43": {
@@ -436,6 +730,13 @@
         "explanation",
         "persuasion",
         "elaboration"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "44": {
@@ -446,6 +747,13 @@
         "categorization",
         "entity recognition",
         "data parsing"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "45": {
@@ -456,6 +764,13 @@
         "solution",
         "implementation",
         "explanation"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations, whereas rejected responses offer direct, unelaborated answers.",
+      "disparity_keywords": [
+        "explanation",
+        "sequence",
+        "details"
       ]
     },
     "46": {
@@ -466,6 +781,13 @@
         "compliance",
         "details",
         "expansion"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations, whereas rejected responses offer immediate, often incomplete, answers.",
+      "disparity_keywords": [
+        "explanation",
+        "sequencing",
+        "details"
       ]
     },
     "47": {
@@ -476,6 +798,13 @@
         "extraction",
         "biomedical",
         "abstracting"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "48": {
@@ -485,6 +814,13 @@
         "sequence",
         "commands",
         "actions"
+      ],
+      "disparity_title": "Rewards Detailed Explanations",
+      "disparity_description": "Chosen responses provide thorough explanations and justifications, while rejected responses offer brief, direct answers.",
+      "disparity_keywords": [
+        "explanation",
+        "justification",
+        "details"
       ]
     },
     "49": {
@@ -494,6 +830,13 @@
         "calculation",
         "explanation",
         "process"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations, whereas rejected responses offer direct, unelaborated answers.",
+      "disparity_keywords": [
+        "explanation",
+        "sequencing",
+        "details"
       ]
     },
     "50": {
@@ -504,6 +847,13 @@
         "deduction",
         "calculation",
         "explanation"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations, whereas rejected responses offer direct, immediate answers.",
+      "disparity_keywords": [
+        "explanation",
+        "sequence",
+        "details"
       ]
     },
     "51": {
@@ -513,6 +863,13 @@
         "information",
         "query",
         "search"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "52": {
@@ -523,6 +880,13 @@
         "misinformation",
         "harmful",
         "deliberate"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "53": {
@@ -534,6 +898,13 @@
         "step-by-step",
         "analysis",
         "explanation"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "54": {
@@ -545,6 +916,13 @@
         "boundaries",
         "rules",
         "limitations"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "55": {
@@ -555,6 +933,13 @@
         "schema",
         "json",
         "data"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "56": {
@@ -565,6 +950,13 @@
         "process",
         "sequencing",
         "breakdown"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "57": {
@@ -575,6 +967,13 @@
         "inference",
         "extraction",
         "reasoning"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "58": {
@@ -585,6 +984,13 @@
         "problem solving",
         "mathematics",
         "logic"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "59": {
@@ -595,6 +1001,13 @@
         "refusal",
         "harmful",
         "constraints"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "60": {
@@ -605,6 +1018,13 @@
         "explanation",
         "justification",
         "argument"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "61": {
@@ -615,6 +1035,13 @@
         "valuation",
         "strategy",
         "simulation"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "62": {
@@ -625,6 +1052,13 @@
         "implementation",
         "function",
         "python"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "63": {
@@ -635,6 +1069,13 @@
         "languages",
         "text",
         "conversion"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "64": {
@@ -645,6 +1086,13 @@
         "security",
         "denial",
         "information"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "65": {
@@ -655,6 +1103,13 @@
         "persona",
         "role",
         "instruction"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations, whereas rejected responses offer abrupt, direct answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "66": {
@@ -665,6 +1120,13 @@
         "programming",
         "solution",
         "script"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "67": {
@@ -675,6 +1137,13 @@
         "mathematical",
         "reasoning",
         "explanation"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "68": {
@@ -685,6 +1154,13 @@
         "problem solving",
         "code generation",
         "explanation"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed explanations and sequential reasoning, whereas rejected responses offer direct, often incomplete, answers.",
+      "disparity_keywords": [
+        "explanation",
+        "sequencing",
+        "details"
       ]
     },
     "69": {
@@ -695,6 +1171,13 @@
         "explanation",
         "process",
         "tutorial"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations, while rejected responses offer direct, unelaborated answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "70": {
@@ -705,6 +1188,13 @@
         "schema",
         "json",
         "data"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "71": {
@@ -715,6 +1205,13 @@
         "explanation",
         "scenario",
         "process"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "72": {
@@ -725,6 +1222,13 @@
         "problem solving",
         "python",
         "mathematics"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "73": {
@@ -735,6 +1239,13 @@
         "code",
         "solution",
         "programming"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "74": {
@@ -745,6 +1256,13 @@
         "linguistics",
         "historical analysis",
         "interpretation"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "75": {
@@ -755,6 +1273,13 @@
         "programming",
         "function",
         "implementation"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "76": {
@@ -765,6 +1290,13 @@
         "connections",
         "extraction",
         "semantic"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations, whereas rejected responses offer direct, unelaborated answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "77": {
@@ -775,6 +1307,13 @@
         "classification",
         "data",
         "schema"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "78": {
@@ -786,6 +1325,13 @@
         "programming",
         "function",
         "algorithm"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "79": {
@@ -797,6 +1343,13 @@
         "language",
         "phrases",
         "clarification"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "80": {
@@ -807,6 +1360,13 @@
         "step-by-step",
         "solution strategy",
         "task breakdown"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "81": {
@@ -817,6 +1377,13 @@
         "code",
         "programming",
         "algorithm"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "82": {
@@ -827,6 +1394,13 @@
         "restriction",
         "harmful",
         "prohibited"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations, whereas rejected responses offer direct, unelaborated answers.",
+      "disparity_keywords": [
+        "explanation",
+        "sequence",
+        "details"
       ]
     },
     "83": {
@@ -837,6 +1411,13 @@
         "function",
         "code",
         "example"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "84": {
@@ -847,6 +1428,13 @@
         "implementation",
         "function",
         "python"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses provide detailed, sequential explanations, while rejected responses offer direct answers without elaboration.",
+      "disparity_keywords": [
+        "explanation",
+        "sequence",
+        "details"
       ]
     },
     "85": {
@@ -858,6 +1446,13 @@
         "elaboration",
         "response",
         "details"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     },
     "86": {
@@ -868,6 +1463,13 @@
         "reasoning",
         "problem solving",
         "calculation"
+      ],
+      "disparity_title": "Rewards Step-By-Step Rigor",
+      "disparity_description": "Chosen responses walk through explicit solution steps while rejected ones jump to final answers.",
+      "disparity_keywords": [
+        "step-by-step",
+        "reasoning",
+        "worked solutions"
       ]
     }
   }
