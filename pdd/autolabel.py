@@ -603,7 +603,6 @@ class AutoLabelingPipeline:
         d_sae = matrices.C_max.shape[1]
         out_path = feature_cluster_labels_path(self.run_dir)
         labels: Dict[str, Dict[str, Any]] = {}
-        batch_size = self.cfg.batch_size
 
         active_clusters = sorted(clusters.keys())
         cluster_prepared = []
@@ -648,46 +647,80 @@ class AutoLabelingPipeline:
             fallback = labeler._keyword_label(m, texts, [])
             cluster_prepared.append((m, texts, fallback))
 
-        pbar = tqdm(total=len(cluster_prepared), desc="Pass 2: labeling feature clusters", unit="cluster")
-        for i in range(0, len(cluster_prepared), batch_size):
-            batch = cluster_prepared[i:i + batch_size]
-            if isinstance(labeler, LLMClusterLabeler):
-                batch_inputs = [(texts, "response") for _, texts, _ in batch]
-                try:
-                    parsed_list = labeler._label_dicts_batch(batch_inputs)
-                except Exception as e:
-                    logger.warning(f"Batch LLM feature labeling failed ({e}); using keyword fallback.")
-                    parsed_list = [None] * len(batch)
+        labeled = self._run_labeling_batch(
+            labeler, cluster_prepared, kind="response", desc="Pass 2: labeling feature clusters"
+        )
+        for m, lbl in labeled:
+            labels[str(m)] = {
+                "title": lbl.title,
+                "description": lbl.description,
+                "keywords": lbl.keywords,
+            }
 
-                for (m, _, fallback), parsed in zip(batch, parsed_list):
-                    if parsed is None:
-                        logger.warning(f"LLM label for T_{m} was not valid JSON; using keyword fallback.")
-                        title, desc, kws = fallback.title, fallback.description, []
-                    else:
-                        title, desc, kws = labeler._clean_label(parsed, fallback)
-                    labels[str(m)] = {
-                        "title": str(title)[:120],
-                        "description": str(desc)[:600],
-                        "keywords": [str(k).strip().lower() for k in kws if str(k).strip()][:5],
-                    }
-                    logger.info(f"T_{m}: {labels[str(m)]['title']}")
-            else:
-                for m, _, fallback in batch:
-                    labels[str(m)] = {
-                        "title": str(fallback.title)[:120],
-                        "description": str(fallback.description)[:600],
-                        "keywords": [str(k).strip().lower() for k in fallback.keywords if str(k).strip()][:5],
-                    }
-                    logger.info(f"T_{m}: {labels[str(m)]['title']}")
-
-            pbar.update(len(batch))
-
-        pbar.close()
         if fc_res is not None and not getattr(self.cfg, "skip_disparity_labels", False):
             self._append_disparity_labels(labeler, examples, clusters, fc_res, labels)
         payload: Dict[str, Any] = {"feature_clusters": labels}
         _save_json(out_path, payload)
         return len(labels)
+
+    def _run_labeling_batch(
+        self,
+        labeler: Any,
+        prepared_items: List[Tuple[int, List[str], ClusterLabel]],
+        kind: str,
+        desc: str,
+    ) -> List[Tuple[int, ClusterLabel]]:
+        """Run batched label generation (LLM or heuristic) over prepared cluster exemplars.
+
+        Handles batching, error recovery, and clean label normalization across
+        Pass 2 and Pass 2b.
+        """
+        if not prepared_items:
+            return []
+
+        out: List[Tuple[int, ClusterLabel]] = []
+        batch_size = self.cfg.batch_size
+        pbar = tqdm(total=len(prepared_items), desc=desc, unit="cluster")
+
+        for i in range(0, len(prepared_items), batch_size):
+            batch = prepared_items[i:i + batch_size]
+            if isinstance(labeler, LLMClusterLabeler):
+                batch_inputs = [(texts, kind) for _, texts, _ in batch]
+                try:
+                    parsed_list = labeler._label_dicts_batch(batch_inputs)
+                except Exception as e:
+                    logger.warning(f"Batch LLM labeling failed for {kind} ({e}); using keyword fallback.")
+                    parsed_list = [None] * len(batch)
+
+                for (cid, _, fallback), parsed in zip(batch, parsed_list):
+                    if parsed is None:
+                        logger.warning(f"LLM label for cluster {cid} ({kind}) was not valid JSON; using fallback.")
+                        title, description, kws = fallback.title, fallback.description, []
+                    else:
+                        title, description, kws = labeler._clean_label(parsed, fallback)
+                    lbl = ClusterLabel(
+                        cluster_id=cid,
+                        title=str(title)[:120],
+                        description=str(description)[:600],
+                        keywords=[str(k).strip().lower() for k in kws if str(k).strip()][:5],
+                    )
+                    out.append((cid, lbl))
+                    logger.info(f"T_{cid} ({kind}): {lbl.title}")
+            else:
+                for cid, _, fallback in batch:
+                    lbl = ClusterLabel(
+                        cluster_id=cid,
+                        title=str(fallback.title)[:120],
+                        description=str(fallback.description)[:600],
+                        keywords=[str(k).strip().lower() for k in fallback.keywords if str(k).strip()][:5],
+                    )
+                    out.append((cid, lbl))
+                    logger.info(f"T_{cid} ({kind}): {lbl.title}")
+
+            pbar.update(len(batch))
+
+        pbar.close()
+        return out
 
     def _append_disparity_labels(
         self,
@@ -748,38 +781,14 @@ class AutoLabelingPipeline:
             logger.info("No clusters with non-zero disparity; Pass 2b produced no labels.")
             return
 
-        pbar = tqdm(total=len(prepared), desc="Pass 2b: labeling cluster disparities", unit="cluster")
-        for i in range(0, len(prepared), self.cfg.batch_size):
-            batch = prepared[i:i + self.cfg.batch_size]
-            if isinstance(labeler, LLMClusterLabeler):
-                try:
-                    parsed_list = labeler._label_dicts_batch([(texts, "disparity") for _, texts, _ in batch])
-                except Exception as e:
-                    logger.warning(f"Batch LLM disparity labeling failed ({e}); using keyword fallback.")
-                    parsed_list = [None] * len(batch)
-
-                for (m_int, _, fallback), parsed in zip(batch, parsed_list):
-                    entry = labels[str(m_int)]
-                    if parsed is None:
-                        logger.warning(f"LLM disparity label for T_{m_int} was not valid JSON; using keyword fallback.")
-                        d_title, d_desc, d_kws = fallback.title, fallback.description, []
-                    else:
-                        d_title, d_desc, d_kws = labeler._clean_label(parsed, fallback)
-                    entry["disparity_title"] = str(d_title)[:120]
-                    entry["disparity_description"] = str(d_desc)[:600]
-                    entry["disparity_keywords"] = [str(k).strip().lower() for k in d_kws if str(k).strip()][:5]
-                    logger.info(f"T_{m_int} (disparity): {entry['disparity_title']}")
-            else:
-                for m_int, _, fallback in batch:
-                    entry = labels[str(m_int)]
-                    entry["disparity_title"] = str(fallback.title)[:120]
-                    entry["disparity_description"] = str(fallback.description)[:600]
-                    entry["disparity_keywords"] = [str(k).strip().lower() for k in fallback.keywords if str(k).strip()][:5]
-                    logger.info(f"T_{m_int} (disparity): {entry['disparity_title']}")
-
-            pbar.update(len(batch))
-
-        pbar.close()
+        labeled = self._run_labeling_batch(
+            labeler, prepared, kind="disparity", desc="Pass 2b: labeling cluster disparities"
+        )
+        for m_int, lbl in labeled:
+            entry = labels[str(m_int)]
+            entry["disparity_title"] = lbl.title
+            entry["disparity_description"] = lbl.description
+            entry["disparity_keywords"] = lbl.keywords
 
     def _pc_cluster_examples(self, pc_res: Any, examples: List[Any], n_top: int) -> int:
         """Pass 3: real-example indices + top tokens for prompt clusters A_k and response-delta clusters R_m."""
