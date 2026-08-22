@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  lint-and-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install linters (no heavy ML deps needed for syntax/lint)
+        run: pip install ruff
+
+      - name: Ruff (pdd/ + experiments/)
+        run: ruff check pdd/ experiments/
+
+      - name: Byte-compile all pipeline modules
+        run: python -m compileall -q pdd/ experiments/
+
+      - name: JS syntax check
+        run: |
+          node --check viewer/app.js

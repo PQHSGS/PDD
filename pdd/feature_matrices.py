@@ -76,7 +76,12 @@ def write_matrices_state(dirpath: str, matrices: "FeatureMatrices") -> None:
 
 
 def state_valid(matrices: "FeatureMatrices", dirpath: str) -> bool:
-    """True iff ``matrices`` matches the persisted extraction state of ``dirpath``."""
+    """True iff ``matrices`` matches the persisted extraction state of ``dirpath``.
+
+    Any state file that EXISTS but records a different fingerprint invalidates the
+    directory (returns False). The legacy write-and-accept path below triggers only
+    when NO state file exists at all — otherwise stale artifacts would be reused.
+    """
     target_state = matrices_state(matrices)
 
     # 1. Try reading manifest.json extraction_state
@@ -85,8 +90,8 @@ def state_valid(matrices: "FeatureMatrices", dirpath: str) -> bool:
         try:
             with open(manifest_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if "extraction_state" in data and data["extraction_state"] == target_state:
-                return True
+            if "extraction_state" in data:
+                return data["extraction_state"] == target_state
         except Exception as e:
             logger.warning(f"Could not read extraction state from '{manifest_path}': {e}")
 
@@ -95,13 +100,11 @@ def state_valid(matrices: "FeatureMatrices", dirpath: str) -> bool:
     if os.path.exists(state_path):
         try:
             with open(state_path, "r", encoding="utf-8") as f:
-                stored = json.load(f)
-            if stored == target_state:
-                return True
+                return json.load(f) == target_state
         except Exception as e:
             logger.warning(f"Could not read extraction state from '{state_path}': {e}")
 
-    # 3. Fallback for legacy checkpoints without state files: write state and validate True
+    # 3. Legacy checkpoints with no state files anywhere: write one and accept.
     logger.warning(
         f"No extraction-state file found in '{dirpath}'; writing one now and treating matrices as matching."
     )
