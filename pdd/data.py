@@ -1,12 +1,15 @@
 """Dataset loader for preference datasets with local datasets/ caching."""
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, asdict
 import json
 import os
+import threading
 from datasets import load_dataset, load_from_disk, DatasetDict, Dataset
+import numpy as np
 from tqdm import tqdm
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from .config import DataConfig
 from .logger import get_logger
@@ -177,3 +180,126 @@ class DatasetLoader:
             out.append(PreferenceExample.from_dict(data[i]))
             data[i] = None
         return out
+
+
+class LazyExampleStore:
+    """Random-access PreferenceExample reader backed by an NDJSON sidecar.
+
+    Builds `<ckpt>/examples.ndjson` (one compact JSON object per line) plus a
+    cumulative byte-offset index `<ckpt>/examples_offsets.npy` from the canonical
+    `examples.json` exactly ONCE; afterwards every record is served via seek+parse
+    with a small LRU cache, so a viewer holds ~2 MB of offsets instead of ~5 GB of
+    parsed objects on a 260k-example run.
+
+    Sequence-compatible: consumers use len() and integer indexing only.
+    Thread-safe: one shared read handle guarded by a lock (viewer serves
+    concurrent requests).
+    """
+
+    LRU_MAX = 256
+
+    def __init__(self, ndjson_path: str, offsets_path: str):
+        self._path = ndjson_path
+        self._offsets = np.load(offsets_path)
+        self._cache: "OrderedDict[int, PreferenceExample]" = OrderedDict()
+        self._lock = threading.Lock()
+        self._fh = open(ndjson_path, "rb")
+
+    @classmethod
+    def build_if_missing(cls, examples_json: str) -> Optional["LazyExampleStore"]:
+        """Build sidecars from examples.json once; return store or None if no source.
+
+        The one-time build parses the full array (same cost as a full load) and
+        streams it out as NDJSON while recording byte offsets. Corrupt or truncated
+        sidecars are rebuilt automatically on the next call.
+        """
+        if not os.path.exists(examples_json):
+            return None
+        base = os.path.splitext(examples_json)[0]
+        ndjson_path = base + ".ndjson"
+        offsets_path = base + "_offsets.npy"
+
+        try:
+            store = cls(ndjson_path, offsets_path)
+            expected_size = int(store._offsets[-1])
+            if len(store._offsets) >= 1 and os.path.getsize(ndjson_path) == expected_size:
+                return store
+            store.close()
+        except Exception:
+            pass  # fall through to rebuild below
+
+        # Full parse once (same cost as a full load), then stream-write NDJSON.
+        records = cls._load_raw(examples_json)
+
+        def _dumps(item: Any) -> bytes:
+            try:
+                import orjson
+                return orjson.dumps(item) + b"\n"
+            except ImportError:
+                return (json.dumps(item, separators=(",", ":")) + "\n").encode("utf-8")
+
+        offsets = [0]
+        tmp_nd = ndjson_path + f".{os.getpid()}.tmp"
+        with open(tmp_nd, "wb") as f:
+            for item in records:
+                line = _dumps(item)
+                f.write(line)
+                offsets.append(offsets[-1] + len(line))
+        os.replace(tmp_nd, ndjson_path)
+
+        tmp_off = offsets_path + f".{os.getpid()}.tmp"
+        with open(tmp_off, "wb") as f:
+            np.save(f, np.asarray(offsets, dtype=np.int64))
+        os.replace(tmp_off, offsets_path)
+        return cls(ndjson_path, offsets_path)
+
+    @staticmethod
+    def _load_raw(examples_json: str) -> List[Any]:
+        try:
+            import orjson
+            with open(examples_json, "rb") as f:
+                return orjson.loads(f.read())
+        except ImportError:
+            with open(examples_json, "r", encoding="utf-8") as f:
+                return json.load(f)
+
+    # -- Sequence protocol -------------------------------------------------
+
+    def __len__(self) -> int:
+        return max(0, len(self._offsets) - 1)
+
+    def __getitem__(self, i: int) -> PreferenceExample:
+        if isinstance(i, slice):
+            return [self[j] for j in range(*i.indices(len(self)))]
+        n = len(self)
+        idx = i + n if i < 0 else i
+        if not 0 <= idx < n:
+            raise IndexError(f"example index {i} out of range [0, {n})")
+
+        with self._lock:
+            hit = self._cache.get(idx)
+            if hit is not None:
+                self._cache.move_to_end(idx)
+                return hit
+            start = int(self._offsets[idx])
+            end = int(self._offsets[idx + 1])
+            self._fh.seek(start)
+            raw = self._fh.read(end - start)
+        try:
+            import orjson
+            record = orjson.loads(raw)
+        except ImportError:
+            record = json.loads(raw.decode("utf-8"))
+        ex = PreferenceExample.from_dict(record)
+        with self._lock:
+            self._cache[idx] = ex
+            if len(self._cache) > self.LRU_MAX:
+                self._cache.popitem(last=False)
+        return ex
+
+    def close(self) -> None:
+        """Release the underlying file handle."""
+        try:
+            self._fh.close()
+        except Exception:
+            pass

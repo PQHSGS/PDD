@@ -591,7 +591,12 @@ class ViewerState:
     # ==========================================================================
 
     def _load_examples(self) -> Optional[List[Any]]:
-        """Lazy-load raw dataset examples from cached `examples.json` in the checkpoint directory."""
+        """Lazy-load dataset examples: offset-indexed store when possible, else full parse.
+
+        The LazyExampleStore keeps only a byte-offset index in RAM (~2 MB for 260k
+        records) instead of every prompt/chosen/rejected string (~5 GB); the one-time
+        NDJSON sidecar build costs the same as the old full load and happens once.
+        """
         with self._examples_lock:
             if self._examples is not None:
                 return self._examples
@@ -601,8 +606,17 @@ class ViewerState:
             if not ex_file.exists():
                 return None
             try:
+                from .data import DatasetLoader, LazyExampleStore
+                store = LazyExampleStore.build_if_missing(str(ex_file))
+                if store is not None:
+                    self._examples = store
+                    logger.info(f"Lazy example store ready ({len(store)} records; offset-indexed).")
+                    return self._examples
+            except Exception as e:
+                logger.warning(f"LazyExampleStore unavailable ({e}); falling back to full load.")
+            try:
                 from .data import DatasetLoader
-                logger.info(f"Loading cached examples from {ex_file}...")
+                logger.info(f"Loading cached examples from {ex_file} (full parse)...")
                 self._examples = DatasetLoader.load_json_cache(str(ex_file))
                 logger.info(f"Loaded {len(self._examples)} examples into viewer memory.")
                 return self._examples
