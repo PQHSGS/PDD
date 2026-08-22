@@ -9,7 +9,7 @@ Contains:
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import json
 import os
 import re
@@ -117,8 +117,10 @@ class ClusterLabel:
     title: str
     description: str
     keywords: List[str]
-    centroid_prompts: List[str]
-    sample_prompts: List[str]
+    # Prompt exemplars only exist for data-cluster B_k labels (Pass 1); feature-cluster
+    # T_m labels (Pass 2/2b) are constructed without them, so they default to empty.
+    centroid_prompts: List[str] = field(default_factory=list)
+    sample_prompts: List[str] = field(default_factory=list)
 
 
 class ClusterAutoLabeler:
@@ -555,6 +557,27 @@ class AutoLabelingPipeline:
         labels: List[Dict[str, Any]] = []
         batch_size = self.cfg.batch_size
 
+        # Resume: skip Pass 1 when the artifact already covers every cluster. Labels are
+        # deterministic given the cached checkpoint's cluster assignments, so a complete
+        # artifact from an interrupted earlier run is exactly reusable.
+        if os.path.exists(out_path):
+            try:
+                with open(out_path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+                have_ids = {lbl.get("cluster_id") for lbl in existing.get("labels", [])}
+                if set(unique_clusters).issubset(have_ids):
+                    logger.info(
+                        f"Pass 1 already complete in '{out_path}' "
+                        f"({len(have_ids)} labels); skipping relabeling."
+                    )
+                    return len(existing.get("labels", []))
+                logger.warning(
+                    f"Pass 1 artifact '{out_path}' is partial "
+                    f"({len(have_ids)}/{len(unique_clusters)} clusters); relabeling from scratch."
+                )
+            except Exception as e:
+                logger.warning(f"Could not read existing '{out_path}' ({e}); relabeling Pass 1.")
+
         pbar = tqdm(total=len(unique_clusters), desc="Pass 1: labeling data clusters", unit="cluster")
         for i in range(0, len(unique_clusters), batch_size):
             batch_ids = unique_clusters[i:i + batch_size]
@@ -605,13 +628,48 @@ class AutoLabelingPipeline:
         labels: Dict[str, Dict[str, Any]] = {}
 
         active_clusters = sorted(clusters.keys())
+        valid_cluster_ids = [m for m in active_clusters if any(0 <= f < d_sae for f in clusters[m])]
+
+        # Precompute per-example firing scores for ALL clusters with TWO chunked sparse
+        # matmuls (one per response side). The previous code fancy-indexed
+        # ``C_max[:, feats]`` per cluster, which rescans EVERY nnz of the mmap-backed
+        # CSR on each call (86 clusters x C/R = 172 full-matrix scans => hundreds of GB
+        # of mechanical-HDD reads; appeared as a silent hang). CSR ROW slicing below is
+        # indptr-based and touches only the selected rows' segments.
+        # Peak extra RAM: two (N x n_valid_clusters) float32 arrays ~= 180 MB here.
+        import scipy.sparse as sp
+
+        n_valid = len(valid_cluster_ids)
+        N = matrices.C_max.shape[0]
+        c_scores = np.zeros((N, n_valid), dtype=np.float32)
+        r_scores = np.zeros((N, n_valid), dtype=np.float32)
+        if n_valid:
+            rows_l: List[int] = []
+            cols_l: List[int] = []
+            for col_idx, m in enumerate(valid_cluster_ids):
+                for f in clusters[m]:
+                    if 0 <= f < d_sae:
+                        rows_l.append(f)
+                        cols_l.append(col_idx)
+            indicator = sp.coo_matrix(
+                (np.ones(len(rows_l), dtype=np.float32), (rows_l, cols_l)),
+                shape=(d_sae, n_valid),
+            ).tocsr()  # duplicate (feature, cluster) entries sum => per-member weights
+
+            chunk = 16384
+            pbar = tqdm(total=N, desc="Pass 2 prep: cluster firing scores", unit="ex")
+            for r0 in range(0, N, chunk):
+                r1 = min(r0 + chunk, N)
+                c_scores[r0:r1] = (matrices.C_max[r0:r1] @ indicator).toarray()
+                r_scores[r0:r1] = (matrices.R_max[r0:r1] @ indicator).toarray()
+                pbar.update(r1 - r0)
+            pbar.close()
+            del indicator
+
         cluster_prepared = []
-        for m in active_clusters:
+        for col_idx, m in enumerate(valid_cluster_ids):
             feats = [f for f in clusters[m] if 0 <= f < d_sae]
-            if not feats:
-                continue
-            firing = matrices.C_max[:, feats] + matrices.R_max[:, feats]
-            scores = np.asarray(firing.sum(axis=1)).ravel()
+            scores = c_scores[:, col_idx] + r_scores[:, col_idx]
 
             # Stratified sampling: pick examples across activation deciles for diversity
             max_ex = self.cfg.max_examples

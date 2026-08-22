@@ -15,9 +15,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const promptInput = document.getElementById("prompt-input");
   const inspectBtn = document.getElementById("inspect-btn");
   const inspectorResults = document.getElementById("inspector-results");
-  const matchedClustersList = document.getElementById("matched-clusters-list");
-  const predictedShiftsList = document.getElementById("predicted-shifts-list");
-  const saeFeaturesList = document.getElementById("sae-features-list");
 
   let currentRunData = null;
   let allFcHypotheses = [];
@@ -28,6 +25,12 @@ document.addEventListener("DOMContentLoaded", () => {
     return String(v == null ? "" : v).replace(/[&<>"']/g, c => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
     }[c]));
+  }
+
+  // Signed fixed-point formatter: positive values get an explicit "+" (negatives carry "-")
+  function fmtSigned(v, digits = 4) {
+    const n = Number(v);
+    return (n > 0 ? "+" : "") + n.toFixed(digits);
   }
 
   // LLM-generated title for feature cluster T_m (from feature_cluster_labels.json via /api/run_data)
@@ -334,6 +337,22 @@ document.addEventListener("DOMContentLoaded", () => {
     `;
   }
 
+  // JSON fetch that throws on HTTP errors instead of silently parsing an error body
+  async function fetchJson(url, opts) {
+    const res = await fetch(url, opts);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  // Coalesce rapid-fire input events (live filters rebuild megabyte-scale HTML)
+  function debounce(fn, waitMs = 200) {
+    let t = null;
+    return (...args) => {
+      clearTimeout(t);
+      t = setTimeout(() => fn.apply(null, args), waitMs);
+    };
+  }
+
   async function openSlidePanel(type, cid) {
     if (!slidePanel || !drawerBody) return;
     const ctype = String(type).toLowerCase().trim();
@@ -401,8 +420,8 @@ document.addEventListener("DOMContentLoaded", () => {
           <div class="detail-section" style="margin-top:16px;">
             <div class="detail-section-title">📊 Post-DPO Shift Validation (Predicted vs Empirical)</div>
             <div style="display:flex; gap:14px; flex-wrap:wrap; background:var(--bg-card); padding:10px 14px; border:1px solid var(--border-color); border-radius:6px; margin-top:6px;">
-              <div><span style="color:var(--text-muted); font-size:0.75rem;">Net Disparity Sum (∑u):</span> <strong style="color:${predSum >= 0 ? '#4caf7d' : '#e06c75'}; font-family:var(--font-mono); font-size:0.95rem;">${predSum >= 0 ? '+' : ''}${predSum.toFixed(4)}</strong> <span style="font-size:0.72rem; color:var(--text-muted);">(mean: ${(predMean >= 0 ? '+' : '') + predMean.toFixed(4)})</span></div>
-              <div><span style="color:var(--text-muted); font-size:0.75rem;">Observed Post-DPO Shift (∑Δ):</span> <strong style="color:${obsSum >= 0 ? '#4caf7d' : '#e06c75'}; font-family:var(--font-mono); font-size:0.95rem;">${obsSum >= 0 ? '+' : ''}${obsSum.toFixed(4)}</strong> <span style="font-size:0.72rem; color:var(--text-muted);">(mean: ${(obsMean >= 0 ? '+' : '') + obsMean.toFixed(4)})</span></div>
+              <div><span style="color:var(--text-muted); font-size:0.75rem;">Net Disparity Sum (∑u):</span> <strong style="color:${predSum >= 0 ? '#4caf7d' : '#e06c75'}; font-family:var(--font-mono); font-size:0.95rem;">${fmtSigned(predSum)}</strong> <span style="font-size:0.72rem; color:var(--text-muted);">(mean: ${fmtSigned(predMean)})</span></div>
+              <div><span style="color:var(--text-muted); font-size:0.75rem;">Observed Post-DPO Shift (∑Δ):</span> <strong style="color:${obsSum >= 0 ? '#4caf7d' : '#e06c75'}; font-family:var(--font-mono); font-size:0.95rem;">${fmtSigned(obsSum)}</strong> <span style="font-size:0.72rem; color:var(--text-muted);">(mean: ${fmtSigned(obsMean)})</span></div>
               <div><span style="color:var(--text-muted); font-size:0.75rem;">Validated Features:</span> <strong>${val.n_features || data.n_features}</strong></div>
             </div>
           </div>
@@ -542,11 +561,11 @@ document.addEventListener("DOMContentLoaded", () => {
       if (inDrawer) {
         renderDrawerDetail(data, "T", cid);
       } else if (inLabelsTab) {
-        const item = (typeof explorerClusters !== "undefined" && explorerClusters) ? explorerClusters.find(c => c.family === "T" && String(c.id) === String(cid)) : null;
+        const item = allUnifiedClusters.find(c => c.family === "T" && String(c.id) === String(cid));
         if (item) renderClusterDetail(item, data);
         else renderDrawerDetail(data, "T", cid);
       } else if (inStatTab) {
-        const currentHypo = (typeof b1Hypotheses !== "undefined" && b1Hypotheses) ? b1Hypotheses.find(h => String(h.m) === String(cid) && `${h.k}_${h.m}` === activeSelectedHypoKey) : null;
+        const currentHypo = allFcHypotheses.find(h => String(h.m) === String(cid) && activeSelectedHypoKey === `b1_${h.k}_${h.m}`);
         if (currentHypo) {
           const secondaryCacheKey = `B_${currentHypo.k}`;
           const contextData = clusterDetailCache.get(secondaryCacheKey);
@@ -669,7 +688,7 @@ document.addEventListener("DOMContentLoaded", () => {
           <strong class="cluster-tag badge-t" data-type="feature" data-cid="${esc(h.m)}" title="Inspect Feature Cluster T_${esc(h.m)} in Slide Panel">T_${esc(h.m)}</strong>
           <span class="keyword-tag" style="margin-left:4px;">size=${esc(h.t_m || '-')}</span>
         </td>
-        <td>${h.delta ? (h.delta > 0 ? '+' : '') + h.delta.toFixed(4) : '-'}</td>
+        <td>${h.delta ? fmtSigned(h.delta) : '-'}</td>
         <td>
           <span class="pill ${h.is_chosen_leaning ? 'pill-chosen' : 'pill-rejected'}">
             ${h.is_chosen_leaning ? 'Chosen' : 'Rejected'}
@@ -713,7 +732,7 @@ document.addEventListener("DOMContentLoaded", () => {
         </td>
         <td>${h.n_prompt_feats || '-'}</td>
         <td>${h.n_resp_feats || '-'}</td>
-        <td>${h.delta ? (h.delta > 0 ? '+' : '') + h.delta.toFixed(5) : '-'}</td>
+        <td>${h.delta ? fmtSigned(h.delta, 5) : '-'}</td>
         <td>${h.z_score ? h.z_score.toFixed(2) : '-'}</td>
         <td>${h.cohens_d ? h.cohens_d.toFixed(2) : '-'}</td>
       </tr>
@@ -798,7 +817,7 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>
             ${tmTitle ? `<div title="${esc(tmTitle)}" style="font-size:0.76rem; color:var(--text-muted); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">🏷️ ${esc(tmTitle)}</div>` : ""}
             <div style="display:flex; justify-content:space-between; align-items:center; font-family:var(--font-mono); font-size:0.78rem; margin-top:2px;">
-              <span>Effect Δ: <strong>${(h.delta > 0 ? '+' : '') + h.delta.toFixed(4)}</strong></span>
+              <span>Effect Δ: <strong>${fmtSigned(h.delta)}</strong></span>
               <span style="color:var(--text-muted);">z=${h.z_score ? h.z_score.toFixed(1) : '-'} · d=${h.cohens_d ? h.cohens_d.toFixed(2) : '-'}</span>
             </div>
           </div>
@@ -872,7 +891,7 @@ document.addEventListener("DOMContentLoaded", () => {
             <span class="pill ${h.is_chosen_leaning ? 'pill-chosen' : 'pill-rejected'}">${h.is_chosen_leaning ? 'Chosen-Leaning (Δ>0)' : 'Rejected-Leaning (Δ<0)'}</span>
           </div>
           <div style="font-family:var(--font-mono); font-size:0.82rem; color:var(--text-muted); display:flex; gap:14px; flex-wrap:wrap;">
-            <span>Effect Δ: <strong>${(h.delta > 0 ? '+' : '') + h.delta.toFixed(5)}</strong></span>
+            <span>Effect Δ: <strong>${fmtSigned(h.delta, 5)}</strong></span>
             <span>Welch z: <strong>${h.z_score ? h.z_score.toFixed(2) : '-'}</strong></span>
             <span>Cohen's d: <strong>${h.cohens_d ? h.cohens_d.toFixed(2) : '-'}</strong></span>
             <span>Split-Half: <strong>${h.sign_consistent ? 'SC=1 (Validated)' : 'SC=0'}</strong></span>
@@ -930,7 +949,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // Stat Toolbar Event Listeners
-  if (statSearch) statSearch.addEventListener("input", renderStatHypothesesList);
+  if (statSearch) statSearch.addEventListener("input", debounce(renderStatHypothesesList));
   if (statPillsBar) {
     statPillsBar.addEventListener("click", (ev) => {
       const btn = ev.target.closest(".cluster-pill-btn");
@@ -1019,13 +1038,13 @@ document.addEventListener("DOMContentLoaded", () => {
       const fcSearch = document.getElementById("fc-search");
       const fcChosenOnly = document.getElementById("fc-chosen-only");
       const fcRejectedOnly = document.getElementById("fc-rejected-only");
-      if (fcSearch) fcSearch.addEventListener("input", renderFcTable);
+      if (fcSearch) fcSearch.addEventListener("input", debounce(renderFcTable));
       if (fcChosenOnly) fcChosenOnly.addEventListener("change", renderFcTable);
       if (fcRejectedOnly) fcRejectedOnly.addEventListener("change", renderFcTable);
       renderFcTable();
     } else {
       const pcSearch = document.getElementById("pc-search");
-      if (pcSearch) pcSearch.addEventListener("input", renderPcTable);
+      if (pcSearch) pcSearch.addEventListener("input", debounce(renderPcTable));
       renderPcTable();
     }
   }
@@ -1291,14 +1310,14 @@ function renderClusterDetail(item, data) {
 
 // Event Listeners for Cluster Explorer
 if (clusterSearch) {
-  clusterSearch.addEventListener("input", () => {
+  clusterSearch.addEventListener("input", debounce(() => {
     renderExplorerList();
     const q = clusterSearch.value.trim().toUpperCase();
     const exact = allUnifiedClusters.find(c => c.key === q || c.badgeText === q || String(c.id) === q);
     if (exact) {
       selectCluster(exact);
     }
-  });
+  }));
 }
 
 if (clusterPillsBar) {
@@ -1477,7 +1496,6 @@ if (clustersMasterList) {
         }
       }
 
-      console.log("[PDD Inspector Request]", { endpoint, payload });
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1489,7 +1507,6 @@ if (clustersMasterList) {
       }
 
       const data = await res.json();
-      console.log("[PDD Inspector Response]", data);
 
       // Force unhide results
       inspectorResults.classList.remove("hidden");
@@ -1503,16 +1520,37 @@ if (clustersMasterList) {
       // Smooth scroll into view
       inspectorResults.scrollIntoView({ behavior: "smooth", block: "nearest" });
 
-      // Master-Detail Inspector Signals State
-    const inspectorMasterList = document.getElementById("inspector-master-list");
-    const inspectorDetailView = document.getElementById("inspector-detail-view");
-    const inspectorListCount = document.getElementById("inspector-list-count");
-    const inspectorListTitle = document.getElementById("inspector-list-title");
+      // Hand off to the persistent inspector subsystem (listeners bound once, below)
+      buildInspectorSignals(data);
+      renderInspectorMasterList();
+      const initialSignal = allInspectorSignals.find(s => s.pipeline === currentPipelineSubMode);
+      if (initialSignal) selectInspectorSignal(initialSignal);
+    } catch (err) {
+      console.error("[PDD Inspector Error]:", err);
+      if (inspectorStatus) {
+        inspectorStatus.textContent = "❌ Error: " + err.message;
+        inspectorStatus.style.color = "var(--color-rejected)";
+      }
+      alert("Error inspecting: " + err.message);
+    } finally {
+      inspectBtn.disabled = false;
+      inspectBtn.textContent = "⚡ Inspect & Debug";
+    }
+  });
 
-    let allInspectorSignals = [];
-    let currentPipelineSubMode = "fc"; // "fc" (Feature-Conditioned B_k -> T_m) or "pc" (Prompt-Conditioned A_k -> R_m)
-    let currentInspectorFilter = "all";
-    let activeSelectedSignalKey = null;
+  // --- INSPECTOR MASTER-DETAIL SUBSYSTEM ---
+  // Persistent state + static DOM refs. Previously ALL of this lived inside the
+  // Inspect click handler, re-creating state and RE-REGISTERING listeners on the
+  // static pipeline/filter/list controls on every click (listener leak).
+  const inspectorMasterList = document.getElementById("inspector-master-list");
+  const inspectorDetailView = document.getElementById("inspector-detail-view");
+  const inspectorListCount = document.getElementById("inspector-list-count");
+  const inspectorListTitle = document.getElementById("inspector-list-title");
+
+  let allInspectorSignals = [];
+  let currentPipelineSubMode = "fc"; // "fc" (Feature-Conditioned B_k -> T_m) or "pc" (Prompt-Conditioned A_k -> R_m)
+  let currentInspectorFilter = "all";
+  let activeSelectedSignalKey = null;
 
     function renderInspectorMasterList() {
       if (!inspectorMasterList) return;
@@ -1572,48 +1610,38 @@ if (clustersMasterList) {
           return;
         }
 
-        inspectorDetailView.innerHTML = `
-          <div style="padding:30px; text-align:center; color:var(--text-muted); font-size:0.9rem;">
-            Loading interpretation for <strong>${esc(s.badgeText)}</strong>...
-          </div>
-        `;
+        inspectorDetailView.innerHTML = loadingHtml(`Loading interpretation for <strong>${esc(s.badgeText)}</strong>...`);
 
         try {
-          const res = await fetch(`/api/cluster_detail?type=${encodeURIComponent(targetType)}&id=${encodeURIComponent(targetId)}&top_n=6`);
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json();
-          clusterDetailCache.set(cacheKey, data);
+          const data = await loadClusterDetail(cacheKey, `type=${encodeURIComponent(targetType)}&id=${encodeURIComponent(targetId)}&top_n=6`);
           renderInspectorSignalDetail(s, data);
         } catch (err) {
           inspectorDetailView.innerHTML = `<div style="padding:20px; color:var(--color-rejected);">Failed to load details: ${esc(err.message)}</div>`;
         }
       } else if (s.category === "features") {
         // SAE Feature Detail: Fetch Neuronpedia + Parent Cluster details directly inside Tab 3
-        inspectorDetailView.innerHTML = `
-          <div style="padding:30px; text-align:center; color:var(--text-muted); font-size:0.9rem;">
-            Loading full Neuronpedia & community interpretation for <strong>SAE Feature #${esc(s.featureIndex)}</strong>...
-          </div>
-        `;
+        inspectorDetailView.innerHTML = loadingHtml(`Loading full Neuronpedia & community interpretation for <strong>SAE Feature #${esc(s.featureIndex)}</strong>...`);
 
         try {
-          // 1. Fetch individual SAE feature details (Neuronpedia, firing examples, tokens)
-          const featRes = await fetch(`/api/feature_detail?f=${encodeURIComponent(s.featureIndex)}&top_n=4`);
-          const featData = featRes.ok ? await featRes.json() : {};
+          // 1+2. Fetch individual SAE feature details and parent cluster T_m in parallel
+          const featPromise = fetch(`/api/feature_detail?f=${encodeURIComponent(s.featureIndex)}&top_n=4`)
+            .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); });
 
-          // 2. Fetch parent feature cluster T_m details if available
-          let clusterData = null;
+          let clusterPromise = null;
           if (s.clusterM != null) {
             const cacheKey = `T_${s.clusterM}`;
             if (clusterDetailCache.has(cacheKey)) {
-              clusterData = clusterDetailCache.get(cacheKey);
+              clusterPromise = Promise.resolve(clusterDetailCache.get(cacheKey));
             } else {
-              const clusterRes = await fetch(`/api/cluster_detail?type=feature&id=${encodeURIComponent(s.clusterM)}&top_n=4`);
-              if (clusterRes.ok) {
-                clusterData = await clusterRes.json();
-                clusterDetailCache.set(cacheKey, clusterData);
-              }
+              clusterPromise = fetchClusterDetail(`type=feature&id=${encodeURIComponent(s.clusterM)}&top_n=4`).then(d => {
+                clusterDetailCache.set(cacheKey, d);
+                return d;
+              });
             }
           }
+
+          const featData = await featPromise;
+          const clusterData = clusterPromise ? await clusterPromise.catch(() => null) : null;
 
           renderInspectorFeatureDetail(s, featData, clusterData);
         } catch (err) {
@@ -1648,7 +1676,7 @@ if (clustersMasterList) {
           </div>
           <div class="stat-card">
             <span class="stat-label">Disparity Δ</span>
-            <span class="stat-value ${(s.delta > 0) ? 'value-pos' : 'value-neg'}">${(s.delta > 0 ? '+' : '') + Number(s.delta).toFixed(5)}</span>
+            <span class="stat-value ${(s.delta > 0) ? 'value-pos' : 'value-neg'}">${fmtSigned(s.delta, 5)}</span>
           </div>
           <div class="stat-card">
             <span class="stat-label">Welch z-Score</span>
@@ -1784,8 +1812,19 @@ if (clustersMasterList) {
       );
     }
 
-    // Build Master Signals List from server response
+  // Build Master Signals List from server response. Resets per-run filter state so
+  // every Inspect run starts on the FC pipeline with an unfiltered list (matches the
+  // previous behavior where all state was recreated per click).
+  function buildInspectorSignals(data) {
     allInspectorSignals = [];
+    currentPipelineSubMode = "fc";
+    currentInspectorFilter = "all";
+    activeSelectedSignalKey = null;
+    const filterAllBtn = document.getElementById("inspector-filter-all");
+    const filterBtns = ["inspector-filter-all", "inspector-filter-shifts", "inspector-filter-clusters", "inspector-filter-features"]
+      .map(id => document.getElementById(id)).filter(Boolean);
+    filterBtns.forEach(b => b.classList.remove("active"));
+    if (filterAllBtn) filterAllBtn.classList.add("active");
 
     // 1. Matched Data Clusters (B_k) -> Feature-Conditioned Pipeline
     const clusters = data.matched_clusters || [];
@@ -1826,7 +1865,7 @@ if (clustersMasterList) {
             summary: p.explanation,
             tagHtml: `<span class="pill ${pill}">${emoji} ${word}</span>`,
             explanation: p.explanation,
-            metaHtml: `Pair: <strong>${kStr} × T_${esc(p.feature_cluster_m)}</strong> | Disparity Δ: <strong>${Number(p.delta) >= 0 ? '+' : ''}${Number(p.delta).toFixed(4)}</strong> | Welch z: <strong>${Number(p.z_score).toFixed(2)}</strong> | Strength: <strong>${esc(p.signal_strength)}</strong>`
+            metaHtml: `Pair: <strong>${kStr} × T_${esc(p.feature_cluster_m)}</strong> | Disparity Δ: <strong>${fmtSigned(p.delta)}</strong> | Welch z: <strong>${Number(p.z_score).toFixed(2)}</strong> | Strength: <strong>${esc(p.signal_strength)}</strong>`
           });
         });
       });
@@ -1850,7 +1889,7 @@ if (clustersMasterList) {
           summary: s.interpretation || "Predicted post-training shift",
           tagHtml: `<span class="pill ${isChosen ? 'pill-chosen' : 'pill-rejected'}">${esc(s.effect_direction)}</span>`,
           explanation: s.interpretation,
-          metaHtml: `Concept: <strong>T_${esc(mId)} (${esc(tTitle)})</strong> | Context: <strong>B_${esc(kId)} (${esc(bTitle)})</strong> | Effect Δ: <strong>${(s.delta > 0 ? '+' : '') + Number(s.delta).toFixed(5)}</strong> | Welch z: <strong>${Number(s.z_score).toFixed(2)}</strong> | Cohen's d: <strong>${Number(s.cohens_d).toFixed(2)}</strong>`
+          metaHtml: `Concept: <strong>T_${esc(mId)} (${esc(tTitle)})</strong> | Context: <strong>B_${esc(kId)} (${esc(bTitle)})</strong> | Effect Δ: <strong>${fmtSigned(s.delta, 5)}</strong> | Welch z: <strong>${Number(s.z_score).toFixed(2)}</strong> | Cohen's d: <strong>${Number(s.cohens_d).toFixed(2)}</strong>`
         });
       });
 
@@ -1878,7 +1917,7 @@ if (clustersMasterList) {
           summary: pc.interpretation,
           tagHtml: `<span class="pill ${isAmp ? 'pill-chosen' : 'pill-rejected'}">${esc(pc.effect_direction)}</span>`,
           explanation: pc.interpretation,
-          metaHtml: `Local Pair: <strong>A_${esc(pc.prompt_cluster_k)} × R_${esc(pc.response_cluster_m)}</strong> | Cohen's d: <strong>${Number(pc.cohens_d).toFixed(2)}</strong> | Δ: <strong>${(pc.delta > 0 ? '+' : '') + Number(pc.delta).toFixed(5)}</strong> | Welch z: <strong>${Number(pc.z_score).toFixed(2)}</strong>`
+          metaHtml: `Local Pair: <strong>A_${esc(pc.prompt_cluster_k)} × R_${esc(pc.response_cluster_m)}</strong> | Cohen's d: <strong>${Number(pc.cohens_d).toFixed(2)}</strong> | Δ: <strong>${fmtSigned(pc.delta, 5)}</strong> | Welch z: <strong>${Number(pc.z_score).toFixed(2)}</strong>`
         });
       });
     }
@@ -1909,79 +1948,62 @@ if (clustersMasterList) {
     });
 
     renderInspectorMasterList();
+  }
 
-    const initialSignal = allInspectorSignals.find(s => s.pipeline === currentPipelineSubMode);
-    if (initialSignal) {
-      selectInspectorSignal(initialSignal);
-    }
+  // Pipeline Submode Controls (Pipeline 1: FC vs Pipeline 2: PC) — bound ONCE
+  const pipelineFCBtn = document.getElementById("pipeline-fc-btn");
+  const pipelinePCBtn = document.getElementById("pipeline-pc-btn");
 
-    // Pipeline Submode Controls (Pipeline 1: FC vs Pipeline 2: PC)
-    const pipelineFCBtn = document.getElementById("pipeline-fc-btn");
-    const pipelinePCBtn = document.getElementById("pipeline-pc-btn");
-
-    if (pipelineFCBtn) {
-      pipelineFCBtn.addEventListener("click", () => {
-        pipelineFCBtn.classList.add("active");
-        if (pipelinePCBtn) pipelinePCBtn.classList.remove("active");
-        currentPipelineSubMode = "fc";
-        currentInspectorFilter = "all";
-        renderInspectorMasterList();
-        const first = allInspectorSignals.find(s => s.pipeline === "fc");
-        if (first) selectInspectorSignal(first);
-      });
-    }
-
-    if (pipelinePCBtn) {
-      pipelinePCBtn.addEventListener("click", () => {
-        pipelinePCBtn.classList.add("active");
-        if (pipelineFCBtn) pipelineFCBtn.classList.remove("active");
-        currentPipelineSubMode = "pc";
-        currentInspectorFilter = "all";
-        renderInspectorMasterList();
-        const first = allInspectorSignals.find(s => s.pipeline === "pc");
-        if (first) selectInspectorSignal(first);
-      });
-    }
-
-    // Filter Pill Controls
-    const filterAll = document.getElementById("inspector-filter-all");
-    const filterShifts = document.getElementById("inspector-filter-shifts");
-    const filterClusters = document.getElementById("inspector-filter-clusters");
-    const filterFeatures = document.getElementById("inspector-filter-features");
-
-    [filterAll, filterShifts, filterClusters, filterFeatures].forEach(btn => {
-      if (btn) {
-        btn.addEventListener("click", () => {
-          [filterAll, filterShifts, filterClusters, filterFeatures].forEach(b => b && b.classList.remove("active"));
-          btn.classList.add("active");
-          currentInspectorFilter = btn.dataset.filter;
-          renderInspectorMasterList();
-        });
-      }
+  if (pipelineFCBtn) {
+    pipelineFCBtn.addEventListener("click", () => {
+      pipelineFCBtn.classList.add("active");
+      if (pipelinePCBtn) pipelinePCBtn.classList.remove("active");
+      currentPipelineSubMode = "fc";
+      currentInspectorFilter = "all";
+      renderInspectorMasterList();
+      const first = allInspectorSignals.find(s => s.pipeline === "fc");
+      if (first) selectInspectorSignal(first);
     });
+  }
 
-    if (inspectorMasterList) {
-      inspectorMasterList.addEventListener("click", (ev) => {
-        const itemEl = ev.target.closest(".cluster-master-item");
-        if (!itemEl) return;
-        const key = itemEl.dataset.key;
-        const match = allInspectorSignals.find(s => s.key === key);
-        if (match) selectInspectorSignal(match);
+  if (pipelinePCBtn) {
+    pipelinePCBtn.addEventListener("click", () => {
+      pipelinePCBtn.classList.add("active");
+      if (pipelineFCBtn) pipelineFCBtn.classList.remove("active");
+      currentPipelineSubMode = "pc";
+      currentInspectorFilter = "all";
+      renderInspectorMasterList();
+      const first = allInspectorSignals.find(s => s.pipeline === "pc");
+      if (first) selectInspectorSignal(first);
+    });
+  }
+
+  // Filter Pill Controls — bound ONCE
+  const filterAll = document.getElementById("inspector-filter-all");
+  const filterShifts = document.getElementById("inspector-filter-shifts");
+  const filterClusters = document.getElementById("inspector-filter-clusters");
+  const filterFeatures = document.getElementById("inspector-filter-features");
+
+  [filterAll, filterShifts, filterClusters, filterFeatures].forEach(btn => {
+    if (btn) {
+      btn.addEventListener("click", () => {
+        [filterAll, filterShifts, filterClusters, filterFeatures].forEach(b => b && b.classList.remove("active"));
+        btn.classList.add("active");
+        currentInspectorFilter = btn.dataset.filter;
+        renderInspectorMasterList();
       });
-    }
-
-    } catch (err) {
-      console.error("[PDD Inspector Error]:", err);
-      if (inspectorStatus) {
-        inspectorStatus.textContent = "❌ Error: " + err.message;
-        inspectorStatus.style.color = "var(--color-rejected)";
-      }
-      alert("Error inspecting: " + err.message);
-    } finally {
-      inspectBtn.disabled = false;
-      inspectBtn.textContent = "⚡ Inspect & Debug";
     }
   });
+
+  if (inspectorMasterList) {
+    inspectorMasterList.addEventListener("click", (ev) => {
+      const itemEl = ev.target.closest(".cluster-master-item");
+      if (!itemEl) return;
+      const key = itemEl.dataset.key;
+      const match = allInspectorSignals.find(s => s.key === key);
+      if (match) selectInspectorSignal(match);
+    });
+  }
 
   // --- FEATURE → TOP SAMPLES EXPLORER (TAB 4) — Per-sample inverse search ---
   const samplesSearch = document.getElementById("samples-cluster-search");
@@ -2012,7 +2034,7 @@ if (clustersMasterList) {
         hasHypos: knownM.has(Number(m)),
       };
     }).sort((a, b) => (b.hasHypos - a.hasHypos) || (a.m - b.m));
-    if (samplesSearch) samplesSearch.addEventListener("input", renderInspectorSampleChips);
+    if (samplesSearch) samplesSearch.addEventListener("input", debounce(renderInspectorSampleChips));
     populateCompoundSelect();
     if (compoundAdd) compoundAdd.addEventListener("click", addCompoundCondition);
     if (compoundRun) compoundRun.addEventListener("click", runCompoundQuery);
@@ -2063,7 +2085,7 @@ if (clustersMasterList) {
     const condStr = compoundConditions.map(c => `${c.m}:${c.direction}`).join(",");
     samplesLists.innerHTML = '<p class="loading-cell">Ranking samples that satisfy ALL conditions...</p>';
     try {
-      const res = await fetch(`/api/inspect_feature_samples?conditions=${encodeURIComponent(condStr)}&k=${SAMPLE_TOP_K}`).then(r => r.json());
+      const res = await fetchJson(`/api/inspect_feature_samples?conditions=${encodeURIComponent(condStr)}&k=${SAMPLE_TOP_K}`);
       renderCompoundResults(res);
     } catch (err) {
       samplesLists.innerHTML = `<p class="loading-cell">Compound query failed: ${esc(err.message)}</p>`;
@@ -2143,8 +2165,8 @@ if (clustersMasterList) {
     samplesLists.innerHTML = '<p class="loading-cell">Ranking top training samples for this cluster...</p>';
     try {
       const [amp, sup] = await Promise.all([
-        fetch(`/api/inspect_feature_samples?m=${m}&k=${SAMPLE_TOP_K}&side=amplify`).then(r => r.json()),
-        fetch(`/api/inspect_feature_samples?m=${m}&k=${SAMPLE_TOP_K}&side=suppress`).then(r => r.json()),
+        fetchJson(`/api/inspect_feature_samples?m=${m}&k=${SAMPLE_TOP_K}&side=amplify`),
+        fetchJson(`/api/inspect_feature_samples?m=${m}&k=${SAMPLE_TOP_K}&side=suppress`),
       ]);
       renderInspectorSampleLists(amp, sup);
     } catch (err) {
@@ -2199,7 +2221,6 @@ if (clustersMasterList) {
     loadRunData();
   });
   const openB1Btn = document.getElementById("open-b1-panel");
-  const openB2Btn = document.getElementById("open-b2-panel");
   if (openB1Btn) openB1Btn.addEventListener("click", () => openHyposPanel("b1"));
   // Carousel Navigation Event Listener
   document.addEventListener("click", (ev) => {

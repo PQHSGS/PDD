@@ -524,6 +524,14 @@ def top_sae_features(
     return out
 
 
+def _data_cluster_title_map(data_cluster_labels: Sequence[Dict[str, Any]]) -> Dict[int, str]:
+    """Map data cluster id k -> LLM label title (shared by Mode A shifts and Mode B concepts)."""
+    return {
+        int(lab.get("cluster_id")): lab.get("title", f"Data Cluster B_{lab.get('cluster_id')}")
+        for lab in data_cluster_labels if "cluster_id" in lab
+    }
+
+
 def predicted_behavior_shifts(
     scored_clusters: List[Dict[str, Any]],
     act: Dict[int, float],
@@ -533,10 +541,7 @@ def predicted_behavior_shifts(
 ) -> List[Dict[str, Any]]:
     """Build Feature-Conditioned predicted shifts (B_k x T_m) from scored data clusters (Mode A)."""
     predicted_shifts = []
-    b_title_map = {
-        int(lab.get("cluster_id")): lab.get("title", f"Data Cluster B_{lab.get('cluster_id')}")
-        for lab in data_cluster_labels if "cluster_id" in lab
-    }
+    b_title_map = _data_cluster_title_map(data_cluster_labels)
     for c in scored_clusters:
         ordered = sorted(
             c["hypos"],
@@ -596,10 +601,7 @@ def pair_concepts(
     """Build Promoted vs. Suppressed concept lists from live Mode B disparity (per-pair u)."""
     promoted: List[Dict[str, Any]] = []
     suppressed: List[Dict[str, Any]] = []
-    b_title_map = {
-        int(lab.get("cluster_id")): lab.get("title", f"Data Cluster B_{lab.get('cluster_id')}")
-        for lab in data_cluster_labels if "cluster_id" in lab
-    }
+    b_title_map = _data_cluster_title_map(data_cluster_labels)
     for m, uval in sorted(u_sig.items(), key=lambda t: abs(t[1]), reverse=True):
         if uval == 0.0:
             continue

@@ -125,18 +125,6 @@ class PDDPipeline:
             use_checkpoint=self.cfg.use_checkpoint,
         )
 
-        # Write manifest file into checkpoint subfolder
-        manifest_data = {
-            "name": self.cfg.name,
-            "seed": self.cfg.seed,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "config": self.cfg.to_dict(),
-        }
-        manifest_tmp = manifest_ckpt + f".{os.getpid()}.tmp"
-        with open(manifest_tmp, "w", encoding="utf-8") as f:
-            json.dump(manifest_data, f, indent=2)
-        os.replace(manifest_tmp, manifest_ckpt)
-
         # 4. Feature-Conditioned Pipeline (Appendix B.1)
         fc_runner = FeatureConditionedPipeline(self.cfg.feature_conditioned)
         fc_res = fc_runner.run(

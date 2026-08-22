@@ -17,7 +17,7 @@ for _pkg in ("torchvision", "torchaudio"):
 import torch  # noqa: E402
 from huggingface_hub import hf_hub_download  # noqa: E402
 from transformers import AutoModelForCausalLM, AutoTokenizer  # noqa: E402
-from typing import Any, Tuple  # noqa: E402
+from typing import Any, Dict, Tuple  # noqa: E402
 
 from .config import ModelConfig, SAEConfig  # noqa: E402
 from .logger import get_logger  # noqa: E402
@@ -138,6 +138,35 @@ class SAEBackend:
             logger.info(f"SAE weights not found in local HF cache ({repo}/{filename}); downloading from hub...")
             return hf_hub_download(repo, filename)
 
+    @staticmethod
+    def _sae_lens_cfg_dict(
+        d_in: int, d_sae: int, k_val: int, target_device: str,
+        layer: int, model_name: str, training_version: str,
+    ) -> Dict[str, Any]:
+        """Shared sae_lens TopK SAE config template (single source for all weight-layout loaders)."""
+        return {
+            "architecture": "topk",
+            "d_in": d_in,
+            "d_sae": d_sae,
+            "activation_fn_str": "topk",
+            "activation_fn_kwargs": {"k": k_val},
+            "apply_b_dec_to_input": True,
+            "finetuning_scaling_factor": False,
+            "context_size": 2048,
+            "model_name": model_name,
+            "hook_name": HOOK_FORMAT.format(layer=layer),
+            "hook_layer": layer,
+            "hook_head_index": None,
+            "prepend_bos": False,
+            "dataset_path": "",
+            "dataset_trust_remote_code": False,
+            "normalize_activations": "none",
+            "dtype": "float32",
+            "device": target_device,
+            "sae_lens_training_version": training_version,
+            "neuronpedia_id": None,
+        }
+
     def _load_qwen_scope(self) -> Any:
         from sae_lens import SAE
 
@@ -154,29 +183,12 @@ class SAEBackend:
         d_sae = int(weights["W_enc"].shape[1])
         k_val = self.cfg.k if self.cfg.k is not None else 50
         target_device = "cpu" if self.cfg.sae_cpu else self.cfg.device
-        cfg_dict = {
-            "architecture": "topk",
-            "d_in": d_in,
-            "d_sae": d_sae,
-            "activation_fn_str": "topk",
-            "activation_fn_kwargs": {"k": k_val},
-            "apply_b_dec_to_input": True,
-            "finetuning_scaling_factor": False,
-            "context_size": 2048,
-            "model_name": "qwen3-1.7b-base",
-            "hook_name": HOOK_FORMAT.format(layer=self.cfg.layer),
-            "hook_layer": self.cfg.layer,
-            "hook_head_index": None,
-            "prepend_bos": False,
-            "dataset_path": "",
-            "dataset_trust_remote_code": False,
-            "normalize_activations": "none",
-            "dtype": "float32",
-            "device": target_device,
-            "sae_lens_training_version": "qwen-scope-0.0.1",
-            "neuronpedia_id": None,
-            **weights,
-        }
+        cfg_dict = self._sae_lens_cfg_dict(
+            d_in=d_in, d_sae=d_sae, k_val=k_val, target_device=target_device,
+            layer=self.cfg.layer, model_name="qwen3-1.7b-base",
+            training_version="qwen-scope-0.0.1",
+        )
+        cfg_dict.update(weights)
         return SAE.from_dict(cfg_dict)
 
     def _load_batch_topk(self) -> Any:
@@ -215,29 +227,12 @@ class SAEBackend:
         k_val = int(state.get("k", self.cfg.k or 80))
         target_device = "cpu" if self.cfg.sae_cpu else self.cfg.device
 
-        cfg_dict = {
-            "architecture": "topk",
-            "d_in": d_in,
-            "d_sae": d_sae,
-            "activation_fn_str": "topk",
-            "activation_fn_kwargs": {"k": k_val},
-            "apply_b_dec_to_input": True,
-            "finetuning_scaling_factor": False,
-            "context_size": 2048,
-            "model_name": "qwen3-1.7b",
-            "hook_name": HOOK_FORMAT.format(layer=self.cfg.layer),
-            "hook_layer": self.cfg.layer,
-            "hook_head_index": None,
-            "prepend_bos": False,
-            "dataset_path": "",
-            "dataset_trust_remote_code": False,
-            "normalize_activations": "none",
-            "dtype": "float32",
-            "device": target_device,
-            "sae_lens_training_version": "0.0.1",
-            "neuronpedia_id": None,
-            **weights,
-        }
+        cfg_dict = self._sae_lens_cfg_dict(
+            d_in=d_in, d_sae=d_sae, k_val=k_val, target_device=target_device,
+            layer=self.cfg.layer, model_name="qwen3-1.7b",
+            training_version="0.0.1",
+        )
+        cfg_dict.update(weights)
         return SAE.from_dict(cfg_dict)
 
     def _load_sae_lens(self) -> Any:

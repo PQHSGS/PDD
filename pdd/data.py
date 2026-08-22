@@ -141,17 +141,30 @@ class DatasetLoader:
 
     @staticmethod
     def save_json_cache(examples: List[PreferenceExample], filepath: str) -> None:
-        """Save processed preference examples to disk as JSON."""
+        """Save processed preference examples to disk as JSON (streamed record-by-record).
+
+        Writing incrementally avoids materializing a second full dict-list copy of the
+        dataset in RAM (the old `[ex.to_dict() for ex in examples]` doubled peak usage).
+        """
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
-        data = [ex.to_dict() for ex in examples]
         tmp_filepath = filepath + ".tmp"
         with open(tmp_filepath, "w", encoding="utf-8") as f:
-            json.dump(data, f, separators=(",", ":"))
+            f.write("[")
+            for i, ex in enumerate(examples):
+                if i:
+                    f.write(",")
+                json.dump(ex.to_dict(), f, separators=(",", ":"))
+            f.write("]")
         os.replace(tmp_filepath, filepath)
 
     @staticmethod
     def load_json_cache(filepath: str) -> List[PreferenceExample]:
-        """Load cached preference examples from JSON file using fast C parser if available."""
+        """Load cached preference examples from JSON using fast C parser if available.
+
+        Converts record-by-record and releases each parsed dict immediately, so the
+        parsed dict list and the PreferenceExample objects never fully coexist in RAM
+        (matters for ~260k-example checkpoints on memory-pressured hosts).
+        """
         try:
             import orjson
             with open(filepath, "rb") as f:
@@ -159,4 +172,8 @@ class DatasetLoader:
         except ImportError:
             with open(filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        return [PreferenceExample.from_dict(item) for item in data]
+        out: List[PreferenceExample] = []
+        for i in range(len(data)):
+            out.append(PreferenceExample.from_dict(data[i]))
+            data[i] = None
+        return out

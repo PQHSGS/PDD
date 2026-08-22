@@ -1,7 +1,6 @@
 """Batched Feature Matrix Extractor with Disk Checkpointing (.npz)."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import hashlib
 import json
 import os
@@ -103,6 +102,9 @@ def state_valid(matrices: "FeatureMatrices", dirpath: str) -> bool:
             logger.warning(f"Could not read extraction state from '{state_path}': {e}")
 
     # 3. Fallback for legacy checkpoints without state files: write state and validate True
+    logger.warning(
+        f"No extraction-state file found in '{dirpath}'; writing one now and treating matrices as matching."
+    )
     try:
         write_matrices_state(dirpath, matrices)
     except Exception as e:
@@ -122,9 +124,14 @@ def mmap_dir_complete(dirpath: str) -> bool:
     return all(os.path.exists(os.path.join(dirpath, f"{n}_shape.npy")) for n in _MMAP_FIELDS)
 
 
-@dataclass
 class FeatureMatrices:
-    """Example-level sparse feature matrices for retained preference examples with lazy mmap property loading."""
+    """Example-level sparse feature matrices for retained preference examples with lazy mmap property loading.
+
+    Note: a plain class with an explicit ``__init__`` (the earlier ``@dataclass``
+    decorator was dead weight — its generated ``__init__`` was always overridden).
+    The six CSR matrices load eagerly when passed in, or lazily via mmap from
+    ``_mmap_dir`` on first property access.
+    """
 
     example_ids: np.ndarray             # (N,)
     _P_max: Any = None
@@ -133,8 +140,8 @@ class FeatureMatrices:
     _C_freq: Any = None
     _R_max: Any = None
     _R_freq: Any = None
-    _mmap_dir: Optional[str] = field(default=None, repr=False)
-    _union_p1: Optional[np.ndarray] = field(default=None, init=False, repr=False)
+    _mmap_dir: Optional[str] = None
+    _union_p1: Optional[np.ndarray] = None
 
     def __init__(
         self,
@@ -239,8 +246,7 @@ class FeatureMatrices:
         if last_batch_idx is not None:
             kwargs["last_batch_idx"] = np.array([last_batch_idx], dtype=np.int64)
 
-        matrix_names = ["P_max", "P_freq", "C_max", "C_freq", "R_max", "R_freq"]
-        for name in matrix_names:
+        for name in _MMAP_FIELDS:
             csr = _to_csr(getattr(self, name))
             kwargs[f"{name}_data"] = csr.data
             kwargs[f"{name}_indices"] = csr.indices
@@ -254,8 +260,7 @@ class FeatureMatrices:
         """Save CSR matrices as individual .npy memmap-backed files in a directory."""
         os.makedirs(dirpath, exist_ok=True)
         np.save(os.path.join(dirpath, "example_ids.npy"), self.example_ids)
-        matrix_names = ["P_max", "P_freq", "C_max", "C_freq", "R_max", "R_freq"]
-        for name in matrix_names:
+        for name in _MMAP_FIELDS:
             csr = _to_csr(getattr(self, name))
             np.save(os.path.join(dirpath, f"{name}_data.npy"), csr.data)
             np.save(os.path.join(dirpath, f"{name}_indices.npy"), csr.indices)
@@ -272,10 +277,9 @@ class FeatureMatrices:
     def load_npz(cls, filepath: str) -> FeatureMatrices:
         """Load feature matrices from disk sparse CSR .npz archive."""
         data = np.load(filepath)
-        matrix_names = ["P_max", "P_freq", "C_max", "C_freq", "R_max", "R_freq"]
 
         mats = {}
-        for name in matrix_names:
+        for name in _MMAP_FIELDS:
             d = data[f"{name}_data"]
             ind = data[f"{name}_indices"]
             ptr = data[f"{name}_indptr"]
@@ -503,7 +507,7 @@ class FeatureMatrixExtractor:
         # (which OOM-killed the box). Each chunk file is deleted right after it
         # is merged, since disk1 cannot hold chunks (41G) + final (43G) at once.
         logger.info(f"Consolidating extraction chunks from '{chunks_dir}'...")
-        names = ["P_max", "P_freq", "C_max", "C_freq", "R_max", "R_freq"]
+        names = _MMAP_FIELDS
 
         if chunks_dir and os.path.exists(chunks_dir):
             existing_chunks = sorted([f for f in os.listdir(chunks_dir) if f.startswith("chunk_") and f.endswith(".npz")])

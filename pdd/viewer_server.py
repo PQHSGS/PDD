@@ -89,6 +89,26 @@ def _mtime_of(path: Path) -> float:
         return 0.0
 
 
+def _save_npy(path: Path, arr: np.ndarray) -> None:
+    """Atomically persist a NumPy array using a process/thread-unique temporary file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    import tempfile
+    tmp_file = tempfile.NamedTemporaryFile(
+        dir=path.parent, prefix=f".{path.stem}_{os.getpid()}_{threading.get_ident()}_", suffix=".tmp.npy", delete=False
+    )
+    try:
+        with open(tmp_file.name, "wb") as f:
+            np.save(f, arr)
+        os.replace(tmp_file.name, path)
+    except Exception:
+        try:
+            if os.path.exists(tmp_file.name):
+                os.remove(tmp_file.name)
+        except Exception:
+            pass
+        raise
+
+
 # ==============================================================================
 # FastAPI App Setup & Request Models
 # ==============================================================================
@@ -211,6 +231,12 @@ class ViewerState:
         self._pc_cluster_examples_mtime: float = 0.0
         """File modification time of `prompt_conditioned_cluster_examples.json` for hot reload."""
 
+        self._val_metrics_raw: Optional[Any] = None
+        """Raw cache of `p4_validation/p4_r2_metrics.json` (per-cluster R^2 / Pearson r)."""
+
+        self._val_metrics_mtime: float = 0.0
+        """File modification time of `p4_r2_metrics.json` for hot reload (mechanical HDD: stat-only on hits)."""
+
         # ----------------------------------------------------------------------
         # 6. Dense Cluster Member Lookup Caches
         # ----------------------------------------------------------------------
@@ -230,13 +256,16 @@ class ViewerState:
         # 7. Thread Synchronization Locks & Neural Inspector
         # ----------------------------------------------------------------------
         self._examples_lock: threading.Lock = threading.Lock()
-        """Mutex protecting lazy dataset example parsing and offset indexing."""
+        """Mutex protecting lazy dataset example parsing and caching."""
 
         self._member_cache_lock: threading.Lock = threading.Lock()
         """Mutex protecting compilation and memory-mapping of dense member matrices."""
 
         self._np_verify_lock: threading.Lock = threading.Lock()
         """Mutex protecting Neuronpedia dataset slug verification and HTTP probes."""
+
+        self._inspector_lock: threading.Lock = threading.Lock()
+        """Mutex serializing live Mode A/B GPU forward passes through the shared NeuralInspector."""
 
         self.inspector = None
         """Lazy-loaded NeuralInspector instance for live GPU model/SAE forward passes."""
@@ -303,6 +332,15 @@ class ViewerState:
             f"{len(self.feature_clusters)} feature clusters, ready for instant requests."
         )
 
+    def _load_validation_metrics(self) -> Dict[str, Any]:
+        """P4 validation metrics, re-read when `p4_r2_metrics.json` updates on disk (empty dict if absent)."""
+        raw = self._reload_if_changed(
+            self.run_dir / "p4_validation" / "p4_r2_metrics.json", "_val_metrics_raw", "_val_metrics_mtime"
+        )
+        if raw is None:
+            return {}
+        return raw
+
     def prewarm(self) -> None:
         """Prewarm the dense member cache at server startup for zero-latency lookups."""
         self._ensure_member_cache()
@@ -315,10 +353,13 @@ class ViewerState:
         HDD contention low while ensuring instant first-click responses across all tabs.
         """
         def _bg_prefetch() -> None:
-            self._load_examples()
-            self._load_fc_result()
-            self._get_cluster_validation_metrics()
-            self._load_pc_prompt_clusters()
+            try:
+                self._load_examples()
+                self._load_fc_result()
+                self._get_cluster_validation_metrics()
+                self._load_pc_prompt_clusters()
+            except Exception as e:
+                logger.warning(f"Background prefetch failed ({e}); lazy loaders will retry on demand.")
 
         threading.Thread(target=_bg_prefetch, daemon=True, name="PDD-StatePrefetch").start()
 
@@ -337,8 +378,15 @@ class ViewerState:
 
     @property
     def _fc_cfg(self) -> Dict[str, Any]:
-        """Feature-conditioned pipeline configuration block from run metadata."""
-        return self.summary.get("config", {}).get("feature_conditioned", {})
+        """Feature-conditioned pipeline configuration block from run metadata (warn once when absent)."""
+        cfg = self.summary.get("config", {}).get("feature_conditioned", {})
+        if not cfg and not getattr(self, "_fc_cfg_warned", False):
+            self._fc_cfg_warned = True
+            logger.warning(
+                "No 'feature_conditioned' block in pdd_summary.json config; "
+                "hypothesis filters fall back to built-in defaults."
+            )
+        return cfg
 
     @property
     def min_feat_cluster_size(self) -> int:
@@ -355,6 +403,10 @@ class ViewerState:
         """Minimum community size for the coordinate graph partition (default: 4)."""
         fcl_cfg = self.summary.get("config", {}).get("feature_clustering", {})
         return int(fcl_cfg.get("min_cluster_size", 4))
+
+    def _feature_delta_tau(self) -> float:
+        """The B.1 tau threshold used to extract per-feature deltas (from config JSON)."""
+        return float(self._fc_cfg.get("tau", 0.01))
 
     # ==========================================================================
     # SECTION 2: Hypothesis Maps & Dynamic Artifact Loaders
@@ -388,6 +440,14 @@ class ViewerState:
         clusters_data = raw.get("feature_clusters", {})
         return {int(k): v for k, v in clusters_data.items()}
 
+    def _load_pc_cluster_examples(self) -> Optional[Dict[str, Any]]:
+        """Prompt-cluster (A_k / R_m) examples, re-read when `prompt_conditioned_cluster_examples.json` updates."""
+        return self._reload_if_changed(
+            Path(pc_cluster_examples_path(str(self.run_dir))),
+            "_pc_cluster_examples",
+            "_pc_cluster_examples_mtime",
+        )
+
     @staticmethod
     def _parse_hypotheses(data: Any) -> Tuple[List[Dict[str, Any]], Dict[int, List[Dict[str, Any]]]]:
         """Split a hypothesis JSON artifact into a flat list and a k-indexed lookup dictionary."""
@@ -420,6 +480,16 @@ class ViewerState:
             data = _read_json(self.run_dir / "prompt_conditioned_hypotheses.json")
             if data is not None:
                 self.pc_hypos, self.k_to_pc = self._parse_hypotheses(data)
+            elif not self.pc_hypos and self.summary:
+                # Fallback to the truncated top-k copy embedded in pdd_summary.json.
+                logger.warning(
+                    "prompt_conditioned_hypotheses.json missing under '%s'; "
+                    "falling back to summary top hypotheses.",
+                    self.run_dir,
+                )
+                self.pc_hypos, self.k_to_pc = self._parse_hypotheses(
+                    {"hypotheses": self.summary.get("top_prompt_conditioned_hypotheses", [])}
+                )
         return self.k_to_pc
 
     @property
@@ -557,14 +627,6 @@ class ViewerState:
         """Return the top-n scoring dataset examples sorted by activation score in descending order."""
         return inspection.top_examples(scores, examples, self._example_view, top_n)
 
-    def _load_pc_cluster_examples(self) -> Optional[Dict[str, Any]]:
-        """Load pre-extracted representative tokens and examples for prompt clusters A_k / R_m."""
-        return self._reload_if_changed(
-            Path(pc_cluster_examples_path(str(self.run_dir))),
-            "_pc_cluster_examples",
-            "_pc_cluster_examples_mtime",
-        )
-
     def _pc_cluster_tokens(self, cluster_type: str, cid: int) -> List[str]:
         """Fetch top representative tokens describing prompt cluster A_k or response-delta cluster R_m."""
         pc_ex = self._load_pc_cluster_examples()
@@ -580,9 +642,9 @@ class ViewerState:
         if not pc_ex or not examples:
             return []
         key = "prompt_cluster_examples" if cluster_type == "prompt" else "response_cluster_examples"
-        idxs = pc_ex.get(key, {}).get(str(cid), [])
+        member_indices = pc_ex.get(key, {}).get(str(cid), [])
         out = []
-        for i in idxs[:top_n]:
+        for i in member_indices[:top_n]:
             i_int = int(i)
             if i_int < len(examples):
                 out.append({
@@ -623,7 +685,12 @@ class ViewerState:
         return np.array(sorted(members), dtype=np.int64)
 
     def _member_matrix(self, mats, attr: str) -> Optional[np.ndarray]:
-        """Return dense memory-mapped member matrix (N, len(all_member_cols)) for C_max or R_max."""
+        """Return the dense member matrix (N, len(all_member_cols)) for C_max or R_max.
+
+        RAM note: on a COLD cache this materializes a full dense (N x n_members)
+        float32 array in RAM via one BLAS product; only after `_persist_member_cache`
+        runs are subsequent boots mmap-backed from `<run>/viewer_cache/`.
+        """
         cached = self._member_matrices.get(attr)
         if cached is not None:
             return cached
@@ -680,26 +747,6 @@ class ViewerState:
             logger.debug(f"Member cache meta malformed ({e}); rebuilding.")
             return False
 
-    @staticmethod
-    def _save_npy(path: Path, arr: np.ndarray) -> None:
-        """Atomically persist a NumPy array using a process/thread-unique temporary file."""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        import tempfile
-        tmp_file = tempfile.NamedTemporaryFile(
-            dir=path.parent, prefix=f".{path.stem}_{os.getpid()}_{threading.get_ident()}_", suffix=".tmp.npy", delete=False
-        )
-        try:
-            with open(tmp_file.name, "wb") as f:
-                np.save(f, arr)
-            os.replace(tmp_file.name, path)
-        except Exception:
-            try:
-                if os.path.exists(tmp_file.name):
-                    os.remove(tmp_file.name)
-            except Exception:
-                pass
-            raise
-
     def _persist_member_cache(self, mats) -> None:
         """Atomically persist member matrices under `<run>/viewer_cache/`."""
         cache_dir = self.run_dir / "viewer_cache"
@@ -712,7 +759,7 @@ class ViewerState:
         }
         for name, arr in payload.items():
             if arr is not None:
-                self._save_npy(cache_dir / name, arr)
+                _save_npy(cache_dir / name, arr)
         _save_json(cache_dir / "meta.json", self._member_cache_meta(mats), indent=2)
         logger.info(f"Persisted member cache to {cache_dir}.")
 
@@ -751,10 +798,6 @@ class ViewerState:
             }
             self._feature_firings()
             self._persist_member_cache(mats)
-
-    def _feature_delta_tau(self) -> float:
-        """The B.1 tau threshold used to extract per-feature deltas (from config JSON)."""
-        return float(self._fc_cfg.get("tau", 0.01))
 
     # ==========================================================================
     # SECTION 5: Cluster & Feature Detail Interpretations (B_k, T_m, A_k, R_m, f)
@@ -1081,7 +1124,7 @@ class ViewerState:
         k = sae_cfg.get("k", 80)
 
         # 1. Qwen3-1.7B (e.g. 14-resid-batchtopk-65k__l0-80)
-        if "qwen3" in repo or "qwen3" in model_path or "qwen_qwen3" in sae_id or "adamkarvonen/qwen3" in repo:
+        if "qwen3" in repo or "qwen3" in model_path or "qwen_qwen3" in sae_id:
             model_id = "qwen3-1.7b"
             sae_set = f"{layer}-resid-batchtopk-65k__l0-{k}"
             return model_id, sae_set
@@ -1124,16 +1167,13 @@ class ViewerState:
         if not np_set:
             return None
 
-        # 2. Local disk cache lookup
+        # 2. Local disk cache lookup (_read_json never raises; falsy data falls through to refetch)
         cache_file = self._neuronpedia_cache_dir() / f"feat_{f_idx}.json"
         if cache_file.exists():
-            try:
-                data = _read_json(cache_file)
-                if data and (data.get("description") or data.get("label")):
-                    self._np_cards[f_idx] = data
-                    return data
-            except Exception as e:
-                logger.warning(f"Corrupt Neuronpedia cache file {cache_file.name}; refetching: {e}")
+            data = _read_json(cache_file)
+            if data and (data.get("description") or data.get("label")):
+                self._np_cards[f_idx] = data
+                return data
 
         # 3. Synchronous network fetch (only on-demand when allow_network=True)
         if not allow_network:
@@ -1225,14 +1265,23 @@ class ViewerState:
 
     def _verify_neuronpedia_slug(self) -> None:
         """Background worker verifying Neuronpedia slug resolution."""
-        sae_cfg = self.summary.get("config", {}).get("sae", {})
-        model_cfg = self.summary.get("config", {}).get("model", {})
-        pair = self._neuronpedia_sae_set(sae_cfg, model_cfg)
-        if pair and self._neuronpedia_verified(pair[0], pair[1]):
-            self._np_set = pair
-            logger.info(f"Neuronpedia verified for {pair[0]}/{pair[1]}.")
-        else:
-            logger.info("Neuronpedia integration disabled for this run (no verified slug).")
+        try:
+            sae_cfg = self.summary.get("config", {}).get("sae", {})
+            model_cfg = self.summary.get("config", {}).get("model", {})
+            pair = self._neuronpedia_sae_set(sae_cfg, model_cfg)
+            if pair and self._neuronpedia_verified(pair[0], pair[1]):
+                self._np_set = pair
+                logger.info(f"Neuronpedia verified for {pair[0]}/{pair[1]}.")
+            else:
+                logger.warning(
+                    "Neuronpedia slug verification failed; integration disabled for this run "
+                    f"(sae_cfg={sae_cfg}, model_cfg={model_cfg})."
+                )
+        except Exception as e:
+            logger.warning(f"Neuronpedia slug verification crashed ({e}); integration disabled for this run.")
+        finally:
+            with self._np_verify_lock:
+                self._np_verifying = False
 
     def _neuronpedia_url(self, feature_index: int) -> Optional[str]:
         """Generate web browser URL to the feature card on neuronpedia.org."""
@@ -1284,9 +1333,7 @@ def list_runs() -> Dict[str, Any]:
 def get_run_data() -> Dict[str, Any]:
     """Retrieve run summary, validation metrics, cluster labels, and top hypotheses."""
     state = get_state()
-    val_file = state.run_dir / "p4_validation" / "p4_r2_metrics.json"
-    val_data = _read_json(val_file)
-    validation_metrics = val_data if val_data is not None else {}
+    validation_metrics = state._load_validation_metrics()
 
     # Ensure full hypothesis lists are loaded into memory
     state.feature_hypotheses_map
@@ -1371,29 +1418,29 @@ def get_pc_cluster_examples(
 
 @app.get("/api/cluster_detail")
 def get_cluster_detail(
-    type: str = Query(..., description="'data' (B_k), 'feature' (T_m), 'prompt' (A_k), or 'response' (R_m)"),
-    id: int = Query(..., description="Cluster ID integer"),
+    cluster_type: str = Query(..., alias="type", description="'data' (B_k), 'feature' (T_m), 'prompt' (A_k), or 'response' (R_m)"),
+    cluster_id: int = Query(..., alias="id", description="Cluster ID integer"),
     top_n: int = Query(5, description="Number of top examples to return"),
     sort: str = Query("activation", description="T_m example ranking: 'activation' (C+R mass) or 'disparity' (|u|)")
 ) -> Dict[str, Any]:
     """Unified polymorphic lookup endpoint for all 4 cluster families (B_k, T_m, A_k, R_m)."""
     state = get_state()
-    t = type.lower().strip()
-    if t in ("data", "b", "bk"):
-        return {"cluster_family": "B", "cluster_type": "data", "id": id, **state._data_cluster_info(id, top_n_examples=top_n)}
-    elif t in ("feature", "t", "tm"):
-        return {"cluster_family": "T", "cluster_type": "feature", "id": id, **state._feature_cluster_info(id, top_n_examples=top_n, sort=sort)}
-    elif t in ("prompt", "a", "ak", "response", "r", "rm"):
-        is_prompt = t in ("prompt", "a", "ak")
-        cluster_type = "prompt" if is_prompt else "response"
+    family_key = cluster_type.lower().strip()
+    if family_key in ("data", "b", "bk"):
+        return {"cluster_family": "B", "cluster_type": "data", "id": cluster_id, **state._data_cluster_info(cluster_id, top_n_examples=top_n)}
+    elif family_key in ("feature", "t", "tm"):
+        return {"cluster_family": "T", "cluster_type": "feature", "id": cluster_id, **state._feature_cluster_info(cluster_id, top_n_examples=top_n, sort=sort)}
+    elif family_key in ("prompt", "a", "ak", "response", "r", "rm"):
+        is_prompt = family_key in ("prompt", "a", "ak")
+        pc_type = "prompt" if is_prompt else "response"
         return {
             "cluster_family": "A" if is_prompt else "R",
-            "cluster_type": cluster_type,
-            "id": id,
-            "tokens": state._pc_cluster_tokens(cluster_type, id),
-            "examples": state._pc_cluster_top_examples(cluster_type, id, top_n=top_n),
+            "cluster_type": pc_type,
+            "id": cluster_id,
+            "tokens": state._pc_cluster_tokens(pc_type, cluster_id),
+            "examples": state._pc_cluster_top_examples(pc_type, cluster_id, top_n=top_n),
         }
-    raise HTTPException(400, f"Unsupported cluster type: '{type}'. Allowed: data (B), feature (T), prompt (A), response (R).")
+    raise HTTPException(400, f"Unsupported cluster type: '{cluster_type}'. Allowed: data (B), feature (T), prompt (A), response (R).")
 
 
 @app.get("/api/feature_detail")
@@ -1415,13 +1462,14 @@ def inspect_prompt(req: PromptInspectionRequest) -> Dict[str, Any]:
         return {"prompt": "", "matched_clusters": [], "predicted_behavior_shifts": []}
 
     # 1. Real GPU Forward Pass -> Prompt Features P(x)
-    inspector = state.get_inspector()
-    p_feat = inspector.extract_prompt_features(prompt_text)
+    with state._inspector_lock:
+        inspector = state.get_inspector()
+        p_feat = inspector.extract_prompt_features(prompt_text)
 
     # 2. Per-feature-cluster activity of the live prompt (T_m <- sum of P(x) members)
     act = inspection.cluster_signals(p_feat, state.feature_clusters, mode="sum")
 
-    data_labels_map = {int(cl.get("cluster_id")): cl for cl in state._load_data_cluster_labels() if "cluster_id" in cl}
+    data_labels_map = {int(label_entry.get("cluster_id")): label_entry for label_entry in state._load_data_cluster_labels() if "cluster_id" in label_entry}
     scored_clusters = inspection.score_data_clusters(
         act, p_feat, state.feature_hypotheses_map, data_labels_map, state.feature_clusters
     )[:req.top_k]
@@ -1459,15 +1507,16 @@ def inspect_preference_pair(req: PreferencePairInspectionRequest) -> Dict[str, A
         return {"matched_clusters": [], "promoted_concepts": [], "suppressed_concepts": []}
 
     # 1. Batched GPU Forward Pass -> Chosen (C), Rejected (R), and Disparity (u)
-    inspector = state.get_inspector()
-    c_p, r_p, u = inspector.extract_pair_features(prompt_text, chosen_text, rejected_text, tau=state._feature_delta_tau())
+    with state._inspector_lock:
+        inspector = state.get_inspector()
+        c_p, r_p, u = inspector.extract_pair_features(prompt_text, chosen_text, rejected_text, tau=state._feature_delta_tau())
 
     # 2. Per-feature-cluster live disparity: u_m = sum over T_m members of u
     u_sig = inspection.cluster_signals(u, state.feature_clusters, mode="sum")
     pair_act = c_p + r_p
 
     # 3. Score Data Clusters B_k by live-evidence-weighted hypotheses
-    data_labels_map = {int(cl.get("cluster_id")): cl for cl in state._load_data_cluster_labels() if "cluster_id" in cl}
+    data_labels_map = {int(label_entry.get("cluster_id")): label_entry for label_entry in state._load_data_cluster_labels() if "cluster_id" in label_entry}
     scored_clusters = inspection.score_data_clusters(
         u_sig, pair_act, state.feature_hypotheses_map, data_labels_map, state.feature_clusters
     )[:req.top_k]
