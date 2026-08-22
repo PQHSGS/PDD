@@ -347,6 +347,20 @@ document.addEventListener("DOMContentLoaded", () => {
     `;
   }
 
+  // Shared master-list skeleton (Stat / Cluster Explorer / Inspector tabs):
+  // count label -> empty state -> row-HTML join. Each tab supplies its own
+  // filtered array, total for the "x of y" counter, empty text, and row template;
+  // the copy-pasted boilerplate lives here once.
+  function renderMasterList(listEl, countEl, filtered, totalCount, emptyText, rowHtml) {
+    if (!listEl) return;
+    if (countEl) countEl.textContent = `${filtered.length} of ${totalCount}`;
+    if (!filtered.length) {
+      listEl.innerHTML = `<div style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.85rem;">${emptyText}</div>`;
+      return;
+    }
+    listEl.innerHTML = filtered.map(rowHtml).join("");
+  }
+
   // JSON fetch that throws on HTTP errors instead of silently parsing an error body
   async function fetchJson(url, opts) {
     const res = await fetch(url, opts);
@@ -800,39 +814,35 @@ document.addEventListener("DOMContentLoaded", () => {
       return true;
     });
 
-    if (statListCount) statListCount.textContent = `${filtered.length} of ${items.length}`;
-
-    if (filtered.length === 0) {
-      statMasterList.innerHTML = '<div style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.85rem;">No matching hypotheses found.</div>';
-      return;
-    }
-
-    statMasterList.innerHTML = filtered.map(h => {
-      if (currentStatType === "b1") {
-        const key = `b1_${h.k}_${h.m}`;
-        const isActive = key === activeSelectedHypoKey ? "active" : "";
-        const dirBadge = h.is_chosen_leaning
-          ? '<span class="pill pill-chosen">Chosen (Δ>0)</span>'
-          : '<span class="pill pill-rejected">Rejected (Δ<0)</span>';
-        const tmTitle = fcLabelTitle(h.m);
-        return `
-          <div class="cluster-master-item ${isActive}" data-stat-type="b1" data-k="${esc(h.k)}" data-m="${esc(h.m)}" data-key="${key}">
-            <div class="cluster-item-head">
-              <div style="display:flex; align-items:center; gap:6px;">
-                <span class="cluster-badge badge-b">B_${esc(h.k)}</span>
-                <span style="font-size:0.8rem; color:var(--text-muted);">×</span>
-                <span class="cluster-badge badge-t">T_${esc(h.m)}</span>
+    renderMasterList(
+      statMasterList, statListCount, filtered, items.length,
+      "No matching hypotheses found.",
+      h => {
+        if (currentStatType === "b1") {
+          const key = `b1_${h.k}_${h.m}`;
+          const isActive = key === activeSelectedHypoKey ? "active" : "";
+          const dirBadge = h.is_chosen_leaning
+            ? '<span class="pill pill-chosen">Chosen (Δ>0)</span>'
+            : '<span class="pill pill-rejected">Rejected (Δ<0)</span>';
+          const tmTitle = fcLabelTitle(h.m);
+          return `
+            <div class="cluster-master-item ${isActive}" data-stat-type="b1" data-k="${esc(h.k)}" data-m="${esc(h.m)}" data-key="${key}">
+              <div class="cluster-item-head">
+                <div style="display:flex; align-items:center; gap:6px;">
+                  <span class="cluster-badge badge-b">B_${esc(h.k)}</span>
+                  <span style="font-size:0.8rem; color:var(--text-muted);">×</span>
+                  <span class="cluster-badge badge-t">T_${esc(h.m)}</span>
+                </div>
+                ${dirBadge}
               </div>
-              ${dirBadge}
+              ${tmTitle ? `<div title="${esc(tmTitle)}" style="font-size:0.76rem; color:var(--text-muted); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">🏷️ ${esc(tmTitle)}</div>` : ""}
+              <div style="display:flex; justify-content:space-between; align-items:center; font-family:var(--font-mono); font-size:0.78rem; margin-top:2px;">
+                <span>Effect Δ: <strong>${fmtSigned(h.delta)}</strong></span>
+                <span style="color:var(--text-muted);">z=${h.z_score ? h.z_score.toFixed(1) : '-'} · d=${h.cohens_d ? h.cohens_d.toFixed(2) : '-'}</span>
+              </div>
             </div>
-            ${tmTitle ? `<div title="${esc(tmTitle)}" style="font-size:0.76rem; color:var(--text-muted); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">🏷️ ${esc(tmTitle)}</div>` : ""}
-            <div style="display:flex; justify-content:space-between; align-items:center; font-family:var(--font-mono); font-size:0.78rem; margin-top:2px;">
-              <span>Effect Δ: <strong>${fmtSigned(h.delta)}</strong></span>
-              <span style="color:var(--text-muted);">z=${h.z_score ? h.z_score.toFixed(1) : '-'} · d=${h.cohens_d ? h.cohens_d.toFixed(2) : '-'}</span>
-            </div>
-          </div>
-        `;
-      } else {
+          `;
+        }
         const key = `b2_${h.k}_${h.m}`;
         const isActive = key === activeSelectedHypoKey ? "active" : "";
         return `
@@ -852,7 +862,7 @@ document.addEventListener("DOMContentLoaded", () => {
           </div>
         `;
       }
-    }).join("");
+    );
   }
 
   async function selectHypothesis(h, type) {
@@ -1245,30 +1255,27 @@ function renderExplorerList() {
     return true;
   });
 
-  if (paneListCount) paneListCount.textContent = `${filtered.length} of ${allUnifiedClusters.length}`;
-
-  if (filtered.length === 0) {
-    clustersMasterList.innerHTML = '<div style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.85rem;">No matching clusters found.</div>';
-    return;
-  }
-
-  clustersMasterList.innerHTML = filtered.map(item => {
-    const isActive = item.key === activeSelectedClusterKey ? "active" : "";
-    const badgeClass = `badge-${item.family.toLowerCase()}`;
-    return `
-      <div class="cluster-master-item ${isActive}" data-key="${esc(item.key)}">
-        <div class="cluster-item-head">
-          <span class="cluster-badge ${badgeClass}">${esc(item.badgeText)}</span>
-          <span class="cluster-item-meta">${esc(item.meta || "")}</span>
+  renderMasterList(
+    clustersMasterList, paneListCount, filtered, allUnifiedClusters.length,
+    "No matching clusters found.",
+    item => {
+      const isActive = item.key === activeSelectedClusterKey ? "active" : "";
+      const badgeClass = `badge-${item.family.toLowerCase()}`;
+      return `
+        <div class="cluster-master-item ${isActive}" data-key="${esc(item.key)}">
+          <div class="cluster-item-head">
+            <span class="cluster-badge ${badgeClass}">${esc(item.badgeText)}</span>
+            <span class="cluster-item-meta">${esc(item.meta || "")}</span>
+          </div>
+          <div class="cluster-item-title" title="${esc(item.title)}">${esc(item.title)}</div>
+          ${item.keywords && item.keywords.length ? `
+            <div class="keywords-wrap" style="margin-top:2px;">
+              ${item.keywords.slice(0, 3).map(k => `<span class="keyword-tag" style="font-size:0.7rem; padding:1px 4px;">${esc(k)}</span>`).join("")}
+            </div>` : ""}
         </div>
-        <div class="cluster-item-title" title="${esc(item.title)}">${esc(item.title)}</div>
-        ${item.keywords && item.keywords.length ? `
-          <div class="keywords-wrap" style="margin-top:2px;">
-            ${item.keywords.slice(0, 3).map(k => `<span class="keyword-tag" style="font-size:0.7rem; padding:1px 4px;">${esc(k)}</span>`).join("")}
-          </div>` : ""}
-      </div>
-    `;
-  }).join("");
+      `;
+    }
+  );
 }
 
 async function selectCluster(item) {
@@ -1573,34 +1580,33 @@ if (clustersMasterList) {
         return true;
       });
 
-      if (inspectorListCount) inspectorListCount.textContent = `${filtered.length} of ${allInspectorSignals.filter(i => i.pipeline === currentPipelineSubMode).length}`;
       if (inspectorListTitle) {
-        inspectorListTitle.textContent = currentPipelineSubMode === "fc" 
-          ? "Feature-Conditioned Signals (B_k → T_m)" 
+        inspectorListTitle.textContent = currentPipelineSubMode === "fc"
+          ? "Feature-Conditioned Signals (B_k → T_m)"
           : "Prompt-Conditioned Signals (A_k → R_m)";
       }
 
-      if (filtered.length === 0) {
-        inspectorMasterList.innerHTML = `<div style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.85rem;">No ${currentPipelineSubMode === "fc" ? "feature-conditioned" : "prompt-conditioned"} signals found for this filter.</div>`;
-        return;
-      }
-
-      inspectorMasterList.innerHTML = filtered.map(s => {
-        const isActive = s.key === activeSelectedSignalKey ? "active" : "";
-        return `
-          <div class="cluster-master-item ${isActive}" data-key="${esc(s.key)}">
-            <div class="cluster-item-head">
-              <div style="display:flex; align-items:flex-start; gap:6px; min-width:0; flex:1 1 auto;">
-                <span class="cluster-badge ${esc(s.badgeClass)}">${esc(s.badgeText)}</span>
-                <span class="cluster-item-title" style="margin:0; font-size:0.85rem;">${esc(s.title)}</span>
+      renderMasterList(
+        inspectorMasterList, inspectorListCount, filtered,
+        allInspectorSignals.filter(i => i.pipeline === currentPipelineSubMode).length,
+        `No ${currentPipelineSubMode === "fc" ? "feature-conditioned" : "prompt-conditioned"} signals found for this filter.`,
+        s => {
+          const isActive = s.key === activeSelectedSignalKey ? "active" : "";
+          return `
+            <div class="cluster-master-item ${isActive}" data-key="${esc(s.key)}">
+              <div class="cluster-item-head">
+                <div style="display:flex; align-items:flex-start; gap:6px; min-width:0; flex:1 1 auto;">
+                  <span class="cluster-badge ${esc(s.badgeClass)}">${esc(s.badgeText)}</span>
+                  <span class="cluster-item-title" style="margin:0; font-size:0.85rem;">${esc(s.title)}</span>
+                </div>
+                ${s.tagHtml || ""}
               </div>
-              ${s.tagHtml || ""}
+              <div style="font-size:0.8rem; color:var(--text-muted); margin-top:4px; line-height:1.35;">${esc(s.summary)}</div>
+              ${s.metaHtml ? `<div style="font-family:var(--font-mono); font-size:0.75rem; color:var(--text-muted); margin-top:4px;">${s.metaHtml}</div>` : ""}
             </div>
-            <div style="font-size:0.8rem; color:var(--text-muted); margin-top:4px; line-height:1.35;">${esc(s.summary)}</div>
-            ${s.metaHtml ? `<div style="font-family:var(--font-mono); font-size:0.75rem; color:var(--text-muted); margin-top:4px;">${s.metaHtml}</div>` : ""}
-          </div>
-        `;
-      }).join("");
+          `;
+        }
+      );
     }
 
     async function selectInspectorSignal(s) {
@@ -1629,7 +1635,7 @@ if (clustersMasterList) {
           inspectorDetailView.innerHTML = `<div style="padding:20px; color:var(--color-rejected);">Failed to load details: ${esc(err.message)}</div>`;
         }
       } else if (s.category === "features") {
-        // SAE Feature Detail: Fetch Neuronpedia + Parent Cluster details directly inside Tab 3
+        // SAE Feature Detail: Fetch Neuronpedia + Parent Cluster details (inspector detail pane)
         inspectorDetailView.innerHTML = loadingHtml(`Loading full Neuronpedia & community interpretation for <strong>SAE Feature #${esc(s.featureIndex)}</strong>...`);
 
         try {

@@ -90,6 +90,30 @@ def _mtime_of(path: Path) -> float:
         return 0.0
 
 
+class MtimeJsonCache:
+    """Single-file JSON artifact cache with mtime hot-reload.
+
+    Repeated reads within/across requests cost one ``stat()`` instead of a full
+    parse; artifacts rewritten by live auto-label runs are picked up automatically
+    on the next read. Collapses the previous raw+mtime attribute pairs.
+    """
+
+    __slots__ = ("path", "raw", "mtime")
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.raw: Optional[Any] = None
+        self.mtime: float = -1.0
+
+    def read(self) -> Optional[Any]:
+        """Return parsed JSON, re-reading only when the file changed on disk."""
+        mtime = _mtime_of(self.path)
+        if self.raw is None or mtime != self.mtime:
+            self.raw = _read_json(self.path)
+            self.mtime = mtime
+        return self.raw
+
+
 def _save_npy(path: Path, arr: np.ndarray) -> None:
     """Atomically persist a NumPy array using a process/thread-unique temporary file."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -212,31 +236,19 @@ class ViewerState:
         """Lazy-loaded list of DatasetExample objects cached from `examples.json`."""
 
         # ----------------------------------------------------------------------
-        # 5. Dynamic Auto-Label Caches & mtime Tracking
+        # 5. Dynamic Auto-Label Caches (mtime hot-reload via MtimeJsonCache)
         # ----------------------------------------------------------------------
-        self._cluster_labels_raw: Optional[Any] = None
+        self._cluster_labels_file = MtimeJsonCache(Path(cluster_labels_path(str(self.run_dir))))
         """Raw cache of `cluster_labels.json` (B_k data cluster titles and descriptions)."""
 
-        self._cluster_labels_mtime: float = 0.0
-        """File modification time of `cluster_labels.json` for hot reload on pipeline updates."""
-
-        self._feature_cluster_labels: Optional[Any] = None
+        self._feature_cluster_labels_file = MtimeJsonCache(Path(feature_cluster_labels_path(str(self.run_dir))))
         """Raw cache of `feature_cluster_labels.json` (T_m feature cluster titles and descriptions)."""
 
-        self._feature_cluster_labels_mtime: float = 0.0
-        """File modification time of `feature_cluster_labels.json` for hot reload."""
-
-        self._pc_cluster_examples: Optional[Any] = None
+        self._pc_cluster_examples_file = MtimeJsonCache(Path(pc_cluster_examples_path(str(self.run_dir))))
         """Raw cache of `prompt_conditioned_cluster_examples.json` (A_k / R_m representative tokens)."""
 
-        self._pc_cluster_examples_mtime: float = 0.0
-        """File modification time of `prompt_conditioned_cluster_examples.json` for hot reload."""
-
-        self._val_metrics_raw: Optional[Any] = None
+        self._val_metrics_file = MtimeJsonCache(self.run_dir / "p4_validation" / "p4_r2_metrics.json")
         """Raw cache of `p4_validation/p4_r2_metrics.json` (per-cluster R^2 / Pearson r)."""
-
-        self._val_metrics_mtime: float = 0.0
-        """File modification time of `p4_r2_metrics.json` for hot reload (mechanical HDD: stat-only on hits)."""
 
         # ----------------------------------------------------------------------
         # 6. Dense Cluster Member Lookup Caches
@@ -327,19 +339,15 @@ class ViewerState:
 
     def _load_validation_metrics(self) -> Dict[str, Any]:
         """P4 validation metrics, re-read when `p4_r2_metrics.json` updates on disk (empty dict if absent)."""
-        if self._val_metrics_raw is None and not getattr(self, "_val_metrics_warned", False):
-            if not (self.run_dir / "p4_validation" / "p4_r2_metrics.json").exists():
+        if self._val_metrics_file.raw is None and not getattr(self, "_val_metrics_warned", False):
+            if not self._val_metrics_file.path.exists():
                 self._val_metrics_warned = True
                 logger.warning(
                     f"No p4_validation/p4_r2_metrics.json under '{self.run_dir}'; "
                     "R^2 metrics will read as empty until a P4 validation run writes it."
                 )
-        raw = self._reload_if_changed(
-            self.run_dir / "p4_validation" / "p4_r2_metrics.json", "_val_metrics_raw", "_val_metrics_mtime"
-        )
-        if raw is None:
-            return {}
-        return raw
+        raw = self._val_metrics_file.read()
+        return raw if isinstance(raw, dict) else {}
 
     def prewarm(self) -> None:
         """Prewarm the dense member cache at server startup for zero-latency lookups."""
@@ -412,29 +420,14 @@ class ViewerState:
     # SECTION 2: Hypothesis Maps & Dynamic Artifact Loaders
     # ==========================================================================
 
-    def _reload_if_changed(self, path: Path, cache_attr: str, mtime_attr: str) -> Any:
-        """Re-read a JSON artifact when its file mtime changes; memoize the parsed data otherwise."""
-        mtime = _mtime_of(path)
-        cached = getattr(self, cache_attr)
-        if cached is None or mtime != getattr(self, mtime_attr):
-            setattr(self, cache_attr, _read_json(path))
-            setattr(self, mtime_attr, mtime)
-        return getattr(self, cache_attr)
-
     def _load_data_cluster_labels(self) -> List[Dict[str, Any]]:
         """Data cluster (B_k) labels, re-read when `cluster_labels.json` updates on disk."""
-        raw = self._reload_if_changed(
-            Path(cluster_labels_path(str(self.run_dir))), "_cluster_labels_raw", "_cluster_labels_mtime"
-        )
+        raw = self._cluster_labels_file.read()
         return raw.get("labels", []) if raw is not None else []
 
     def _load_feature_cluster_labels(self) -> Dict[int, Dict[str, Any]]:
         """Feature cluster (T_m) labels, re-read when `feature_cluster_labels.json` updates on disk."""
-        raw = self._reload_if_changed(
-            Path(feature_cluster_labels_path(str(self.run_dir))),
-            "_feature_cluster_labels",
-            "_feature_cluster_labels_mtime",
-        )
+        raw = self._feature_cluster_labels_file.read()
         if raw is None:
             return {}
         clusters_data = raw.get("feature_clusters", {})
@@ -442,11 +435,7 @@ class ViewerState:
 
     def _load_pc_cluster_examples(self) -> Optional[Dict[str, Any]]:
         """Prompt-cluster (A_k / R_m) examples, re-read when `prompt_conditioned_cluster_examples.json` updates."""
-        return self._reload_if_changed(
-            Path(pc_cluster_examples_path(str(self.run_dir))),
-            "_pc_cluster_examples",
-            "_pc_cluster_examples_mtime",
-        )
+        return self._pc_cluster_examples_file.read()
 
     @staticmethod
     def _parse_hypotheses(data: Any) -> Tuple[List[Dict[str, Any]], Dict[int, List[Dict[str, Any]]]]:
