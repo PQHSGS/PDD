@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
@@ -264,6 +265,14 @@ class ViewerState:
 
         self._cluster_info_cache: Dict[str, Any] = {}
         """In-memory memoization cache for formatted cluster info payloads."""
+
+        self._feature_act_cache: "OrderedDict[int, np.ndarray]" = OrderedDict()
+        """LRU (64 x N float32 ~= 64 MB cap) of per-feature activation vectors.
+
+        Non-member features fall back to a full CSR column scan (~8 GB memmap walk,
+        tens of seconds on the mechanical HDD); this makes repeat views instant."""
+        self._feature_act_lock = threading.Lock()
+        """Mutex guarding _feature_act_cache (sync handlers run on threadpool threads)."""
 
         # ----------------------------------------------------------------------
         # 7. Thread Synchronization Locks & Neural Inspector
@@ -533,7 +542,8 @@ class ViewerState:
             return None
         try:
             from .feature_conditioned import FeatureConditionedResult
-            self._fc_result = FeatureConditionedResult.load_checkpoint(str(fc_file))
+            # include_v=False: the viewer never reads v_matrix (~89 MB saved at 260k examples).
+            self._fc_result = FeatureConditionedResult.load_checkpoint(str(fc_file), include_v=False)
             return self._fc_result
         except Exception as e:
             logger.warning(f"Failed to load feature_conditioned.npz: {e}")
@@ -977,7 +987,20 @@ class ViewerState:
                     if M is not None:
                         act += M[:, slot]
                 return act
-        return self._csr_col(mats.C_max, feature_index) + self._csr_col(mats.R_max, feature_index)
+        # Non-member fallback: full CSR column scans. Cache the combined vector so
+        # repeat views skip the multi-GB memmap walk entirely (LRU-capped).
+        f_int = int(feature_index)
+        with self._feature_act_lock:
+            cached = self._feature_act_cache.get(f_int)
+            if cached is not None:
+                self._feature_act_cache.move_to_end(f_int)
+                return cached
+        act = self._csr_col(mats.C_max, f_int) + self._csr_col(mats.R_max, f_int)
+        with self._feature_act_lock:
+            self._feature_act_cache[f_int] = act
+            while len(self._feature_act_cache) > 64:
+                self._feature_act_cache.popitem(last=False)
+        return act
 
     def _feature_detail(self, feature_index: int, top_n: int = 5) -> Dict[str, Any]:
         """Per-feature interpretation: firing statistics, top examples, and Neuronpedia web metadata."""
@@ -1012,9 +1035,14 @@ class ViewerState:
             url = self._neuronpedia_url(f_int)
             if url:
                 out["neuronpedia_url"] = url
-                np_data = self._get_neuronpedia_feature(f_int)
+                # RAM/disk cache only — never a synchronous network fetch inside the
+                # request (a cold card used to block up to 4s). The background prewarm
+                # fills the cache; the next view of this feature gets the full card.
+                np_data = self._get_neuronpedia_feature(f_int, allow_network=False)
                 if np_data:
                     out["neuronpedia"] = np_data
+                else:
+                    self._prewarm_neuronpedia_features([f_int])
 
             parent_m = self.feature_to_cluster_map.get(f_int)
             if parent_m is not None:

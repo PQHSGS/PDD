@@ -75,15 +75,21 @@ class FeatureConditionedResult:
         os.replace(tmp_path, target_path)
 
     @classmethod
-    def load_checkpoint(cls, filepath: str) -> FeatureConditionedResult:
-        """Load intermediate matrices and hypotheses via fast zero-copy memory-mapping."""
+    def load_checkpoint(cls, filepath: str, include_v: bool = True) -> FeatureConditionedResult:
+        """Load intermediate matrices and hypotheses via fast zero-copy memory-mapping.
+
+        ``include_v=False`` skips materializing v_matrix (saves ~N*K_r float32, ~89 MB
+        at 260k examples) for consumers that never read it — e.g. the viewer only uses
+        s/u/assignments. Math unchanged; default keeps full-fidelity loading.
+        """
         with np.load(filepath, mmap_mode="r", allow_pickle=True) as data:
             hypo_data = json.loads(str(data["hypotheses_json"]))
             hypotheses = [HypothesisPair(**h) for h in hypo_data]
             return cls(
                 s_matrix=np.array(data["s_matrix"], copy=False),
                 u_matrix=np.array(data["u_matrix"], copy=False),
-                v_matrix=np.array(data["v_matrix"], copy=False),
+                v_matrix=(np.array(data["v_matrix"], copy=False)
+                          if include_v else np.zeros((0, 0), dtype=np.float32)),
                 cluster_assignments=np.array(data["cluster_assignments"], copy=False),
                 silent_mask=np.array(data["silent_mask"], copy=False),
                 hypotheses=hypotheses,
