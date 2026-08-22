@@ -21,6 +21,7 @@ from .autolabel import (
     pc_cluster_examples_path,
 )
 from . import inspection
+from .neuronpedia import NeuronpediaClient
 
 try:
     from fastapi import FastAPI, HTTPException, Query
@@ -261,23 +262,15 @@ class ViewerState:
         self._member_cache_lock: threading.Lock = threading.Lock()
         """Mutex protecting compilation and memory-mapping of dense member matrices."""
 
-        self._np_verify_lock: threading.Lock = threading.Lock()
-        """Mutex protecting Neuronpedia dataset slug verification and HTTP probes."""
-
-        self._inspector_lock: threading.Lock = threading.Lock()
-        """Mutex serializing live Mode A/B GPU forward passes through the shared NeuralInspector."""
+        self.np_client: NeuronpediaClient = NeuronpediaClient(self.run_dir / "viewer_cache" / "neuronpedia")
+        """Self-contained Neuronpedia subsystem: slug verification (own lock), LRU-capped
+        RAM card cache, per-run disk cache, and one shared prewarm thread pool."""
 
         self.inspector = None
         """Lazy-loaded NeuralInspector instance for live GPU model/SAE forward passes."""
 
-        self._np_set: Optional[Tuple[str, str]] = None
-        """Cached tuple of (model_slug, sae_slug) verified against Neuronpedia."""
-
-        self._np_verifying: bool = False
-        """Status flag indicating whether background Neuronpedia slug verification is running."""
-
-        self._np_cards: Dict[int, Dict[str, Any]] = {}
-        """In-memory RAM cache mapping individual SAE feature index f to its Neuronpedia card."""
+        self._inspector_lock: threading.Lock = threading.Lock()
+        """Mutex serializing live Mode A/B GPU forward passes through the shared NeuralInspector."""
 
         # ----------------------------------------------------------------------
         # 8. Checkpoint Artifact & Validation Matrices Caches
@@ -334,6 +327,13 @@ class ViewerState:
 
     def _load_validation_metrics(self) -> Dict[str, Any]:
         """P4 validation metrics, re-read when `p4_r2_metrics.json` updates on disk (empty dict if absent)."""
+        if self._val_metrics_raw is None and not getattr(self, "_val_metrics_warned", False):
+            if not (self.run_dir / "p4_validation" / "p4_r2_metrics.json").exists():
+                self._val_metrics_warned = True
+                logger.warning(
+                    f"No p4_validation/p4_r2_metrics.json under '{self.run_dir}'; "
+                    "R^2 metrics will read as empty until a P4 validation run writes it."
+                )
         raw = self._reload_if_changed(
             self.run_dir / "p4_validation" / "p4_r2_metrics.json", "_val_metrics_raw", "_val_metrics_mtime"
         )
@@ -803,6 +803,9 @@ class ViewerState:
     # SECTION 5: Cluster & Feature Detail Interpretations (B_k, T_m, A_k, R_m, f)
     # ==========================================================================
 
+    _CLUSTER_INFO_CACHE_MAX = 512
+    """FIFO cap on memoized per-cluster UI payloads (bounded RAM across many m/top_n/sort keys)."""
+
     def _cached_info(self, key: str, build_fn) -> Dict[str, Any]:
         """Memoize formatted per-cluster UI payloads in the in-memory info cache."""
         cached = self._cluster_info_cache.get(key)
@@ -810,6 +813,9 @@ class ViewerState:
             return cached
         res = build_fn()
         self._cluster_info_cache[key] = res
+        if len(self._cluster_info_cache) > self._CLUSTER_INFO_CACHE_MAX:
+            # Drop the oldest entry (dict preserves insertion order).
+            self._cluster_info_cache.pop(next(iter(self._cluster_info_cache)))
         return res
 
     def _top_cluster_features(self, m: int, top_n: int = 8) -> List[Dict[str, Any]]:
@@ -1111,184 +1117,34 @@ class ViewerState:
         )
 
     # ==========================================================================
-    # SECTION 7: Neuronpedia Integration & Web Metadata Subsystem
+    # SECTION 7: Neuronpedia Integration (delegates to pdd.neuronpedia.NeuronpediaClient)
     # ==========================================================================
 
-    @staticmethod
-    def _neuronpedia_sae_set(sae_cfg: Dict[str, Any], model_cfg: Optional[Dict[str, Any]] = None) -> Optional[Tuple[str, str]]:
-        """Map run SAE configuration to Neuronpedia (model_slug, sae_slug)."""
-        repo = str(sae_cfg.get("repo", "")).lower()
-        sae_id = str(sae_cfg.get("sae_id", "")).lower()
-        model_path = str((model_cfg or {}).get("path", "")).lower()
-        layer = sae_cfg.get("layer", 14)
-        k = sae_cfg.get("k", 80)
-
-        # 1. Qwen3-1.7B (e.g. 14-resid-batchtopk-65k__l0-80)
-        if "qwen3" in repo or "qwen3" in model_path or "qwen_qwen3" in sae_id:
-            model_id = "qwen3-1.7b"
-            sae_set = f"{layer}-resid-batchtopk-65k__l0-{k}"
-            return model_id, sae_set
-
-        # 2. Gemma-2-2B / Gemma-Scope
-        if "gemma-scope" in repo or "gemma-2-2b" in repo or "canonical" in repo or "gemma" in model_path:
-            model_id = "gemma-2-2b"
-            sae_set = f"{layer}-gemmascope-mlp-16k" if "mlp" in repo else f"{layer}-gemmascope-res-16k"
-            return model_id, sae_set
-
-        return None
-
-    @staticmethod
-    def _neuronpedia_verified(model_id: str, sae_set: str) -> bool:
-        """Probe Neuronpedia API to verify whether the model/SAE slug pair exists."""
-        import urllib.request
-        url = f"https://www.neuronpedia.org/api/feature/{model_id}/{sae_set}/0"
-        req = urllib.request.Request(url, headers={"User-Agent": "PDD-Viewer/1.0"})
-        try:
-            with urllib.request.urlopen(req, timeout=3.0) as resp:
-                return resp.status == 200
-        except Exception as e:
-            logger.debug(f"Neuronpedia slug probe for {model_id}/{sae_set} failed ({e}).")
-            return False
-
-    def _neuronpedia_cache_dir(self) -> Path:
-        """Return path to `<run_dir>/viewer_cache/neuronpedia/`."""
-        d = self.run_dir / "viewer_cache" / "neuronpedia"
-        d.mkdir(parents=True, exist_ok=True)
-        return d
-
-    def _get_neuronpedia_feature(self, feature_index: int, allow_network: bool = True) -> Optional[Dict[str, Any]]:
-        """Fetch feature metadata from Neuronpedia with RAM and local disk caching."""
-        f_idx = int(feature_index)
-        # 1. RAM fast lookup (<0.01ms)
-        if f_idx in self._np_cards:
-            return self._np_cards[f_idx]
-
-        np_set = self._neuronpedia_set()
-        if not np_set:
-            return None
-
-        # 2. Local disk cache lookup (_read_json never raises; falsy data falls through to refetch)
-        cache_file = self._neuronpedia_cache_dir() / f"feat_{f_idx}.json"
-        if cache_file.exists():
-            data = _read_json(cache_file)
-            if data and (data.get("description") or data.get("label")):
-                self._np_cards[f_idx] = data
-                return data
-
-        # 3. Synchronous network fetch (only on-demand when allow_network=True)
-        if not allow_network:
-            return None
-
-        data = self._neuronpedia_feature(np_set[0], np_set[1], f_idx)
-        if data is not None:
-            self._np_cards[f_idx] = data
-            try:
-                _save_json(cache_file, data)
-            except Exception as e:
-                logger.debug(f"Failed to persist Neuronpedia cache for feature {f_idx}: {e}")
-        return data
-
-    def _prewarm_neuronpedia_features(self, feature_indices: List[int]) -> None:
-        """Asynchronously pre-warm Neuronpedia cache in parallel in the background for active features."""
-        np_set = self._neuronpedia_set()
-        if not np_set or not feature_indices:
-            return
-
-        def _worker() -> None:
-            from concurrent.futures import ThreadPoolExecutor
-            uncached = [int(f) for f in feature_indices[:16] if int(f) not in self._np_cards]
-            if not uncached:
-                return
-            with ThreadPoolExecutor(max_workers=min(len(uncached), 8)) as executor:
-                list(executor.map(lambda f: self._get_neuronpedia_feature(f, allow_network=True), uncached))
-
-        threading.Thread(target=_worker, daemon=True, name="PDD-NeuronpediaPrewarmer").start()
-
-    @staticmethod
-    def _neuronpedia_feature(model_id: str, sae_set: str, feature_index: int) -> Optional[Dict[str, Any]]:
-        """Fetch JSON feature card directly from Neuronpedia over HTTPS."""
-        import urllib.request
-        url = f"https://www.neuronpedia.org/api/feature/{model_id}/{sae_set}/{feature_index}"
-        req = urllib.request.Request(url, headers={"User-Agent": "PDD-Viewer/1.0"})
-        try:
-            with urllib.request.urlopen(req, timeout=4.0) as resp:
-                if resp.status == 200:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    exs = data.get("activations", [])[:3]
-                    explanations = data.get("explanations", [])
-                    desc = (explanations[0].get("description") if explanations else "") or data.get("description", "")
-                    label = (explanations[0].get("description") if explanations else "") or data.get("label", "") or desc
-                    model_name = explanations[0].get("explanationModelName", "") if explanations else ""
-
-                    pos_tokens = data.get("pos_str", [])
-                    if not pos_tokens and data.get("top_tokens"):
-                        pos_tokens = [t.get("token") for t in data.get("top_tokens", []) if t.get("token")]
-                    neg_tokens = data.get("neg_str", [])
-
-                    return {
-                        "model": model_id,
-                        "sae": sae_set,
-                        "feature_index": feature_index,
-                        "description": desc,
-                        "label": label,
-                        "explanation_model": model_name,
-                        "pos_tokens": [{"token": str(tok)} for tok in pos_tokens[:8]],
-                        "top_tokens": [str(tok) for tok in pos_tokens[:6]],
-                        "neg_tokens": [{"token": str(tok)} for tok in neg_tokens[:6]],
-                        "max_act_approx": data.get("maxActApprox"),
-                        "correlated_features": data.get("correlated_features_indices", [])[:10],
-                        "examples_count": len(data.get("activations", [])),
-                        "top_examples": [
-                            {"maxValue": ex.get("maxValue"), "tokens": ex.get("tokens", [])[:30]} for ex in exs
-                        ],
-                    }
-        except Exception as e:
-            logger.debug(f"Neuronpedia API fetch failed for feature {feature_index} ({e}).")
-        return None
+    def _summary_np_cfg(self) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+        """(sae_cfg, model_cfg) blocks from run metadata, handed to the client per call."""
+        cfg = self.summary.get("config", {})
+        return cfg.get("sae", {}), cfg.get("model")
 
     def _neuronpedia_set(self) -> Optional[Tuple[str, str]]:
-        """Return verified Neuronpedia (model_slug, sae_slug) pair, verified in the background."""
-        if self._np_set is not None:
-            return self._np_set
-        sae_cfg = self.summary.get("config", {}).get("sae", {})
-        model_cfg = self.summary.get("config", {}).get("model", {})
-        pair = self._neuronpedia_sae_set(sae_cfg, model_cfg)
-        if not pair:
-            return None
-        with self._np_verify_lock:
-            if self._np_set is not None:
-                return self._np_set
-            if not self._np_verifying:
-                self._np_verifying = True
-                threading.Thread(target=self._verify_neuronpedia_slug, daemon=True, name="PDD-NPVerify").start()
-        return pair
-
-    def _verify_neuronpedia_slug(self) -> None:
-        """Background worker verifying Neuronpedia slug resolution."""
-        try:
-            sae_cfg = self.summary.get("config", {}).get("sae", {})
-            model_cfg = self.summary.get("config", {}).get("model", {})
-            pair = self._neuronpedia_sae_set(sae_cfg, model_cfg)
-            if pair and self._neuronpedia_verified(pair[0], pair[1]):
-                self._np_set = pair
-                logger.info(f"Neuronpedia verified for {pair[0]}/{pair[1]}.")
-            else:
-                logger.warning(
-                    "Neuronpedia slug verification failed; integration disabled for this run "
-                    f"(sae_cfg={sae_cfg}, model_cfg={model_cfg})."
-                )
-        except Exception as e:
-            logger.warning(f"Neuronpedia slug verification crashed ({e}); integration disabled for this run.")
-        finally:
-            with self._np_verify_lock:
-                self._np_verifying = False
+        """Verified (model_slug, sae_slug); first call spawns one background verifier."""
+        sae_cfg, model_cfg = self._summary_np_cfg()
+        return self.np_client.resolved_set(sae_cfg, model_cfg)
 
     def _neuronpedia_url(self, feature_index: int) -> Optional[str]:
-        """Generate web browser URL to the feature card on neuronpedia.org."""
-        np_set = self._neuronpedia_set()
-        if not np_set:
-            return None
-        return f"https://www.neuronpedia.org/{np_set[0]}/{np_set[1]}/{feature_index}"
+        """Browser URL for the feature card on neuronpedia.org (None when disabled)."""
+        return self.np_client.url(self._neuronpedia_set(), feature_index)
+
+    def _get_neuronpedia_feature(self, feature_index: int, allow_network: bool = True) -> Optional[Dict[str, Any]]:
+        """Feature card via RAM LRU cache -> disk cache -> optional network fetch."""
+        sae_cfg, model_cfg = self._summary_np_cfg()
+        return self.np_client.get_feature(
+            feature_index, allow_network=allow_network, sae_cfg=sae_cfg, model_cfg=model_cfg
+        )
+
+    def _prewarm_neuronpedia_features(self, feature_indices: List[int]) -> None:
+        """Fire-and-forget background prewarm through the client's shared pool."""
+        sae_cfg, model_cfg = self._summary_np_cfg()
+        self.np_client.prewarm(feature_indices, sae_cfg=sae_cfg, model_cfg=model_cfg)
 
 
 # ==============================================================================
